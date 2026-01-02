@@ -1,0 +1,17 @@
+# R session files
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Exclude specific folders
+/demo/
+/logs/
+/archive/
+/lib/archive/
+
+# Temporary files
+*.tmp
+
+# macOS system junk
+.DS_Store

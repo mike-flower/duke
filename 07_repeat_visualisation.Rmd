@@ -1,0 +1,469 @@
+---
+title: "Duke Pipeline - Module 7: Repeat Visualisation"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: paper
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+---
+
+# Overview
+
+This module provides comprehensive visualisation of repeat length distributions through:
+
+1. **Repeat Histograms**: Frequency distribution plots showing the count of reads at each repeat length
+2. **Scatter/Violin Plots**: Individual read distributions with violin overlays
+
+These plots complement the statistical analyses in Module 6 by showing individual reads and distribution shapes visually.
+
+---
+
+# Setup
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(scales)
+library(DT)
+library(ggnewscale)
+library(data.table)
+
+# Source visualization functions
+source("lib/visualisation.R")
+
+# Create output directory
+plots_dir <- file.path(params$dir_out, file.path("07_repeat_visualisation", "plots"))
+if (!dir.exists(plots_dir)) {
+  dir.create(plots_dir, recursive = TRUE)
+}
+
+message("\n=== Module 7: Repeat Distribution Visualisation ===")
+message("Output directory: ", plots_dir)
+```
+
+---
+
+# Load Data
+
+```{r load_data}
+# Load Module 4 output (clustered data with repeat counts)
+results_dir <- file.path(params$dir_out, "module_data")
+load(file.path(results_dir, "04_allele_calling_results.RData"))
+
+# Load Module 6 output (modal peaks and distribution summary)
+load(file.path(results_dir, "06_range_analysis_results.RData"))
+
+# Extract data from Module 4
+alignment_clustered <- module4_output$alignment_clustered
+
+# Extract data from Module 6
+modal_peaks <- module6_output$modal_peaks
+distribution_summary <- module6_output$distribution_summary
+
+# Get repeat count method
+repeat_method <- params$repeat_count_method
+
+message("\nData loaded:")
+message("  Samples: ", length(unique(alignment_clustered$file_stem)))
+message("  Total reads: ", nrow(alignment_clustered))
+message("  Repeat method: ", repeat_method)
+message("  Modal peaks: ", nrow(modal_peaks))
+message("  Distribution summaries: ", nrow(distribution_summary))
+```
+
+---
+
+# Prepare Data
+
+```{r prepare_data}
+# alignment_clustered is already a single dataframe with all reads from all samples
+alignment_data <- alignment_clustered
+
+# Get analysis ranges from modal_peaks
+analysis_ranges <- modal_peaks %>%
+  select(file_stem, analysis_range_name, range_min, range_max) %>%
+  distinct()
+
+# Note: alignment_data is used as-is from Module 4 (no pre-filtering by ranges)
+# Reads are filtered dynamically in plotting loops by repeat length
+# This allows reads to contribute to multiple overlapping ranges as intended
+
+# Prepare summary metric points based on user selection
+summary_points_list <- list()
+
+# Get selected metrics
+selected_metrics <- params$repeat_distribution_metrics
+
+# Add modal if requested
+if ("modal_length" %in% selected_metrics) {
+  modal_points <- modal_peaks %>%
+    filter(!is.na(modal_length), peak_rank == 1) %>%
+    select(file_stem, analysis_range_name, modal_length, modal_frequency) %>%
+    mutate(name = "modal",
+           x = modal_length,
+           y = modal_frequency) %>%
+    select(file_stem, analysis_range_name, name, x, y)
+  
+  summary_points_list[["modal"]] <- modal_points
+}
+
+# Add mean if requested
+if ("mean_length" %in% selected_metrics) {
+  mean_points <- distribution_summary %>%
+    select(file_stem, analysis_range_name, mean_length) %>%
+    mutate(name = "mean",
+           x = mean_length,
+           y = 0) %>%  # Will be at bottom of histogram
+    select(file_stem, analysis_range_name, name, x, y)
+  
+  summary_points_list[["mean"]] <- mean_points
+}
+
+# Add median if requested
+if ("median_length" %in% selected_metrics) {
+  median_points <- distribution_summary %>%
+    select(file_stem, analysis_range_name, median_length) %>%
+    mutate(name = "median",
+           x = median_length,
+           y = 0) %>%  # Will be at bottom of histogram
+    select(file_stem, analysis_range_name, name, x, y)
+  
+  summary_points_list[["median"]] <- median_points
+}
+
+# Combine all selected points
+if (length(summary_points_list) > 0) {
+  summary_points <- bind_rows(summary_points_list) %>%
+    rename(range = analysis_range_name)  # Rename for plotting function
+} else {
+  # Create empty dataframe with correct structure if no metrics selected
+  summary_points <- data.frame(
+    file_stem = character(),
+    analysis_range_name = character(),
+    name = character(),
+    x = numeric(),
+    y = numeric()
+  )
+}
+
+# Prepare range boxes
+range_boxes <- analysis_ranges %>%
+  mutate(xmin = range_min,
+         xmax = range_max) %>%
+  rename(name = analysis_range_name)
+
+message("\nData prepared:")
+message("  Total reads: ", nrow(alignment_data))
+message("  Analysis ranges: ", length(unique(analysis_ranges$analysis_range_name)))
+message("  Metrics to display: ", paste(selected_metrics, collapse = ", "))
+```
+
+---
+
+# Repeat Histograms
+
+Histograms show the frequency distribution of repeat lengths with modal and mean markers.
+
+```{r setup_range_colors}
+# Define consistent colors for analysis ranges
+range_names <- unique(analysis_ranges$analysis_range_name)
+range_colors <- setNames(
+  scales::hue_pal()(length(range_names)),
+  range_names
+)
+```
+
+## Histograms by Sample
+
+```{r histograms_by_sample, fig.width=10, fig.height=6}
+if (params$repeat_histogram) {
+  
+  # Create directory
+  hist_by_sample_dir <- file.path(plots_dir, "histograms_by_sample")
+  if (!dir.exists(hist_by_sample_dir)) {
+    dir.create(hist_by_sample_dir, recursive = TRUE)
+  }
+  
+  for (my_sample in unique(alignment_clustered$file_stem)) {
+    
+    # Get all data for this sample (full range)
+    sample_data_full <- alignment_clustered %>%
+      filter(file_stem == my_sample)
+    
+    if (nrow(sample_data_full) == 0) next
+    
+    # Get range boxes for this specific sample
+    sample_boxes <- range_boxes %>%
+      filter(file_stem == my_sample) %>%
+      distinct(name, xmin, xmax)
+    
+    # Get points for this sample (all selected metrics already in summary_points)
+    sample_points <- summary_points %>%
+      filter(file_stem == my_sample)
+    
+    # 1. Create full range histogram (all data)
+    p_full <- plot_frequency_histogram(
+      data = sample_data_full,
+      repeat_col = repeat_method,
+      binwidth = params$repeat_histogram_binwidth,
+      manual_points = sample_points,
+      manual_boxes = sample_boxes,
+      range_colors = range_colors,
+      title = paste0("Repeat Distribution - ", my_sample, " (Full Range)"),
+      base_text_size = 14
+    )
+    
+    print(p_full)
+    
+    ggsave(file.path(hist_by_sample_dir, 
+                    paste0(my_sample, "_histogram_full.png")),
+           p_full, width = 10, height = 6, dpi = 300)
+    
+    # 2. Create per-range histograms (only for ranges this sample has)
+    sample_ranges <- analysis_ranges %>%
+      filter(file_stem == my_sample) %>%
+      pull(analysis_range_name) %>%
+      unique()
+    
+    for (my_range in sample_ranges) {
+      
+      # Get range boundaries for this sample and range
+      range_info <- analysis_ranges %>%
+        filter(file_stem == my_sample, analysis_range_name == my_range)
+      
+      if (nrow(range_info) == 0) next
+      
+      range_min <- range_info$range_min[1]
+      range_max <- range_info$range_max[1]
+      
+      # Get data for this sample in this range
+      # Filter by REPEAT LENGTH, not by pre-assigned column
+      sample_range_data <- alignment_data %>%
+        filter(
+          file_stem == my_sample,
+          .data[[repeat_method]] >= range_min,
+          .data[[repeat_method]] <= range_max
+        )
+      
+      if (nrow(sample_range_data) == 0) next
+      
+      # Get range box for this specific range and sample
+      range_box <- range_boxes %>%
+        filter(file_stem == my_sample, name == my_range) %>%
+        distinct(name, xmin, xmax)
+      
+      # Get points for this sample and range
+      # These come from Module 6 and already have analysis_range_name
+      range_points <- sample_points %>%
+        filter(range == my_range)
+      
+      # Create range-specific histogram
+      p_range <- plot_frequency_histogram(
+        data = sample_range_data,
+        repeat_col = repeat_method,
+        binwidth = params$repeat_histogram_binwidth,
+        manual_points = range_points,
+        manual_boxes = range_box,
+        range_colors = range_colors,
+        title = paste0("Repeat Distribution - ", my_sample, " - ", my_range),
+        base_text_size = 14
+      )
+      
+      print(p_range)
+      
+      ggsave(file.path(hist_by_sample_dir, 
+                      paste0(my_sample, "_histogram_", my_range, ".png")),
+             p_range, width = 10, height = 6, dpi = 300)
+    }
+  }
+  
+  message("Histograms by sample created: ", hist_by_sample_dir)
+  message("  - Full range histograms: {sample}_histogram_full.png")
+  message("  - Per-range histograms: {sample}_histogram_{range}.png")
+}
+```
+
+---
+
+# Repeat Scatter/Violin Plots
+
+Scatter plots show individual reads as points with violin overlay showing distribution shape.
+
+## Combined Vertical Scatter
+
+```{r scatter_vertical_combined, fig.width=14, fig.height=10}
+if (params$repeat_scatter) {
+  
+  # Use summary_points which already has the selected metrics
+  # Reshape for scatter plot (needs repeat_method column name)
+  combined_points <- summary_points %>%
+    rename(!!sym(repeat_method) := x)
+  
+  # Create plot
+  p_scatter_combined <- plot_scatter_vertical(
+    data = alignment_data,
+    x_var = "file_stem",
+    y_var = repeat_method,
+    points = combined_points,
+    title = "Repeat Length Distribution - All Samples",
+    base_text_size = 14
+  )
+  
+  print(p_scatter_combined)
+  
+  ggsave(file.path(plots_dir, "scatter_combined.png"),
+         p_scatter_combined, width = 14, height = 8, dpi = 300)
+  
+  message("\nCombined scatter plot created")
+}
+```
+
+## Scatter Plots by Analysis Range
+
+```{r scatter_by_range, fig.width=12, fig.height=10}
+if (params$repeat_scatter) {
+  
+  # Create directory
+  scatter_by_range_dir <- file.path(plots_dir, "scatter_by_range")
+  if (!dir.exists(scatter_by_range_dir)) {
+    dir.create(scatter_by_range_dir, recursive = TRUE)
+  }
+  
+  for (my_range in unique(analysis_ranges$analysis_range_name)) {
+    
+    # Get range boundaries for this range
+    range_info <- analysis_ranges %>%
+      filter(analysis_range_name == my_range) %>%
+      slice(1)  # Take first row if multiple samples have same range name
+    
+    if (nrow(range_info) == 0) next
+    
+    range_min <- range_info$range_min[1]
+    range_max <- range_info$range_max[1]
+    
+    # Filter data by REPEAT LENGTH
+    range_data <- alignment_data %>%
+      filter(
+        .data[[repeat_method]] >= range_min,
+        .data[[repeat_method]] <= range_max
+      )
+    
+    if (nrow(range_data) == 0) next
+    
+    # Get points for this range
+    # These come from Module 6 and already have analysis_range_name
+    range_points <- summary_points %>%
+      filter(range == my_range) %>%
+      rename(!!sym(repeat_method) := x)
+    
+    # Create plot
+    p_range_scatter <- plot_scatter_vertical(
+      data = range_data,
+      x_var = "file_stem",
+      y_var = repeat_method,
+      points = range_points,
+      title = paste0("Repeat Distribution - ", my_range),
+      base_text_size = 14
+    )
+    
+    print(p_range_scatter)
+    
+    ggsave(file.path(scatter_by_range_dir,
+                    paste0("scatter_", my_range, ".png")),
+           p_range_scatter, width = 12, height = 6, dpi = 300)
+  }
+  
+  message("Scatter plots by range created: ", scatter_by_range_dir)
+}
+```
+
+## Horizontal Scatter by Sample
+
+```{r scatter_by_sample, fig.width=12, fig.height=4}
+if (params$repeat_scatter) {
+  
+  # Create directory
+  scatter_by_sample_dir <- file.path(plots_dir, "scatter_by_sample")
+  if (!dir.exists(scatter_by_sample_dir)) {
+    dir.create(scatter_by_sample_dir, recursive = TRUE)
+  }
+  
+  for (my_sample in unique(alignment_data$file_stem)) {
+    
+    # Filter data
+    sample_data <- alignment_data %>%
+      filter(file_stem == my_sample)
+    
+    if (nrow(sample_data) == 0) next
+    
+    # Get range boxes for this specific sample
+    sample_boxes <- range_boxes %>%
+      filter(file_stem == my_sample) %>%
+      distinct(name, xmin, xmax)
+    
+    # Get points for this sample (already filtered in summary_points)
+    sample_points <- summary_points %>%
+      filter(file_stem == my_sample)
+    
+    # Create plot
+    p_sample_scatter <- plot_scatter_horizontal(
+      data = sample_data,
+      x_var = repeat_method,
+      points = sample_points,
+      boxes = sample_boxes,
+      range_colors = range_colors,
+      title = paste0("Repeat Distribution - ", my_sample),
+      base_text_size = 14
+    )
+    
+    print(p_sample_scatter)
+    
+    ggsave(file.path(scatter_by_sample_dir,
+                    paste0(my_sample, "_scatter.png")),
+           p_sample_scatter, width = 12, height = 4, dpi = 300)
+  }
+  
+  message("Scatter plots by sample created: ", scatter_by_sample_dir)
+}
+```
+
+---
+
+# Summary
+
+```{r summary}
+message("\n=== Module 7 Complete ===")
+message("Plots saved to: ", plots_dir)
+
+if (params$repeat_histogram) {
+  message("\nHistogram plots:")
+  message("  - By sample: histograms_by_sample/")
+  message("    - Full range: {sample}_histogram_full.png")
+  message("    - Per range: {sample}_histogram_{range}.png")
+}
+
+if (params$repeat_scatter) {
+  message("\nScatter plots:")
+  message("  - Combined: scatter_combined.png")
+  message("  - By range: scatter_by_range/")
+  message("  - By sample: scatter_by_sample/")
+}
+
+cat("\n")
+```
+
+---
+
+# Session Info
+
+```{r session_info}
+sessionInfo()
+```
