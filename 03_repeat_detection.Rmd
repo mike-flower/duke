@@ -390,13 +390,17 @@ if (params$plot_histograms) {
   nrow_facet <- ceiling(n_samples / ncol_facet)
   
   ggsave(
-    filename = file.path(plots_dir, "repeat_histogram_all_samples.png"),
+    filename = file.path(plots_dir, "repeat_histogram.png"),
     plot = p_histogram_facet,
     width = max(12, ncol_facet * 4),
     height = max(6, nrow_facet * 3),
     dpi = 300,
     bg = "white"
   )
+  
+  # Create subdirectory for per-sample plots
+  histogram_by_sample_dir <- file.path(plots_dir, "repeat_histogram_by_sample")
+  dir.create(histogram_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
   
   # Individual histograms per sample
   for (sample in unique(alignment_counts$file_stem)) {
@@ -412,7 +416,7 @@ if (params$plot_histograms) {
       theme_minimal()
     
     ggsave(
-      filename = file.path(plots_dir, paste0("repeat_histogram_", sample, ".png")),
+      filename = file.path(histogram_by_sample_dir, paste0(sample, "-repeat_histogram.png")),
       plot = p_histogram_sample,
       width = 10,
       height = 6,
@@ -452,7 +456,7 @@ n_samples <- length(unique(alignment_counts$file_stem))
 plot_width <- min(50, max(10, n_samples * 0.8))
 
 ggsave(
-  filename = file.path(plots_dir, "repeat_violin_all_samples.png"),
+  filename = file.path(plots_dir, "repeat_violin.png"),
   plot = p_violin,
   width = plot_width,
   height = 8,
@@ -460,6 +464,10 @@ ggsave(
   bg = "white",
   limitsize = FALSE
 )
+
+# Create subdirectory for per-sample plots
+violin_by_sample_dir <- file.path(plots_dir, "repeat_violin_by_sample")
+dir.create(violin_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Individual violin plots per sample
 for (sample in unique(alignment_counts$file_stem)) {
@@ -479,7 +487,7 @@ for (sample in unique(alignment_counts$file_stem)) {
           axis.ticks.x = element_blank())
   
   ggsave(
-    filename = file.path(plots_dir, paste0("repeat_violin_", sample, ".png")),
+    filename = file.path(violin_by_sample_dir, paste0(sample, "-repeat_violin.png")),
     plot = p_violin_sample,
     width = 6,
     height = 8,
@@ -512,7 +520,7 @@ if (requireNamespace("ggridges", quietly = TRUE)) {
   plot_height <- min(50, max(8, n_samples * 0.6))
   
   ggsave(
-    filename = file.path(plots_dir, "repeat_ridge_all_samples.png"),
+    filename = file.path(plots_dir, "repeat_density.png"),
     plot = p_ridge_all,
     width = 12,
     height = plot_height,
@@ -520,6 +528,10 @@ if (requireNamespace("ggridges", quietly = TRUE)) {
     bg = "white",
     limitsize = FALSE
   )
+  
+  # Create subdirectory for per-sample density plots
+  density_by_sample_dir <- file.path(plots_dir, "repeat_density_by_sample")
+  dir.create(density_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
   
   # Individual density plots per sample
   for (sample in unique(alignment_counts$file_stem)) {
@@ -535,7 +547,7 @@ if (requireNamespace("ggridges", quietly = TRUE)) {
       theme_minimal()
     
     ggsave(
-      filename = file.path(plots_dir, paste0("repeat_density_", sample, ".png")),
+      filename = file.path(density_by_sample_dir, paste0(sample, "-repeat_density.png")),
       plot = p_density_sample,
       width = 10,
       height = 6,

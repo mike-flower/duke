@@ -185,6 +185,10 @@ Generate separate waterfall plots for each cluster within each sample (optional)
 # Only generate if enabled
 if (params$waterfall_per_cluster) {
   
+  # Create subdirectory for cluster plots
+  waterfall_by_cluster_dir <- file.path(plots_dir, "waterfall_by_cluster")
+  dir.create(waterfall_by_cluster_dir, showWarnings = FALSE, recursive = TRUE)
+  
   # Generate per-cluster waterfall plots
   for (sample in unique(waterfall_data$file_stem)) {
     
@@ -237,7 +241,7 @@ if (params$waterfall_per_cluster) {
       
       # Export
       ggsave(
-        filename = file.path(plots_dir, paste0("waterfall_", sample, "_cluster", clust, ".png")),
+        filename = file.path(waterfall_by_cluster_dir, paste0(sample, "_cluster", clust, "-waterfall.png")),
         plot = p_cluster,
         width = 12,
         height = 8,

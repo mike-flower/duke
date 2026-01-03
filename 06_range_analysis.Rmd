@@ -360,9 +360,9 @@ ggsave(file.path(plots_dir, "01_modal_peaks.png"),
 # Generate individual peak plots by sample
 message("\nGenerating individual peak plots by sample...")
 
-peaks_by_sample_dir <- file.path(plots_dir, "peaks_by_sample")
-if (!dir.exists(peaks_by_sample_dir)) {
-  dir.create(peaks_by_sample_dir, recursive = TRUE)
+modal_peaks_by_sample_dir <- file.path(plots_dir, "01_modal_peaks_by_sample")
+if (!dir.exists(modal_peaks_by_sample_dir)) {
+  dir.create(modal_peaks_by_sample_dir, recursive = TRUE)
 }
 
 for (my_sample in unique(modal_peaks$file_stem)) {
@@ -412,13 +412,13 @@ for (my_sample in unique(modal_peaks$file_stem)) {
     theme(legend.position = "right",
           panel.grid.major.y = element_blank())
   
-  ggsave(file.path(peaks_by_sample_dir, 
-                  paste0(my_sample, "_peaks.png")),
+  ggsave(file.path(modal_peaks_by_sample_dir, 
+                  paste0(my_sample, "-modal_peaks.png")),
          p_sample_peaks, width = 12, height = max(4, nrow(sample_boxes) * 1.5), 
          dpi = 300)
 }
 
-message("  Individual peak plots saved to: ", peaks_by_sample_dir)
+message("  Individual peak plots saved to: ", modal_peaks_by_sample_dir)
 ```
 
 ---
@@ -713,17 +713,17 @@ if (nrow(shape_data) > 0) {
          p_shape, width = 10, height = 7, dpi = 300)
 }
 
-# Plot 8: Ridge plots by group and time (full range + per analysis range)
-message("\nGenerating ridge plots by group and time...")
+# Plot 21: Density plots by group and time (full range + per analysis range)
+message("\nGenerating density plots by group and time...")
 
-# Create directory for ridge plots
-ridge_by_time_dir <- file.path(plots_dir, "ridge_by_group_and_time")
-if (!dir.exists(ridge_by_time_dir)) {
-  dir.create(ridge_by_time_dir, recursive = TRUE)
+# Create directory for density plots
+density_by_group_and_time_dir <- file.path(plots_dir, "21_density_by_group_and_time")
+if (!dir.exists(density_by_group_and_time_dir)) {
+  dir.create(density_by_group_and_time_dir, recursive = TRUE)
 }
 
 # Prepare base data: join repeat counts with group/time metadata
-ridge_data_full <- alignment_clustered %>%
+density_data_full <- alignment_clustered %>%
   left_join(
     select(settings, file_stem, group, time),
     by = "file_stem"
@@ -736,7 +736,7 @@ ridge_data_full <- alignment_clustered %>%
     time_order = as.numeric(time)
   )
 
-if (nrow(ridge_data_full) > 0) {
+if (nrow(density_data_full) > 0) {
   
   # Get unique analysis ranges from settings
   all_ranges <- unique(unlist(lapply(settings_parsed$ranges_list, names)))
@@ -772,22 +772,22 @@ if (nrow(ridge_data_full) > 0) {
     
     # Filter data by range
     range_bounds <- range_list[[range_name]]
-    ridge_data_range <- ridge_data_full %>%
+    density_data_range <- density_data_full %>%
       filter(repeat_count >= range_bounds[1] & repeat_count <= range_bounds[2])
     
-    if (nrow(ridge_data_range) == 0) {
+    if (nrow(density_data_range) == 0) {
       message("    No data in this range, skipping")
       next
     }
     
     # Create subdirectory for this range
-    ridge_range_dir <- file.path(ridge_by_time_dir, range_name)
-    if (!dir.exists(ridge_range_dir)) {
-      dir.create(ridge_range_dir, recursive = TRUE)
+    density_range_dir <- file.path(density_by_group_and_time_dir, range_name)
+    if (!dir.exists(density_range_dir)) {
+      dir.create(density_range_dir, recursive = TRUE)
     }
     
     # COMBINED PLOT: All groups in columns for this range
-    p_ridge_combined <- ggplot(ridge_data_range, 
+    p_density_combined <- ggplot(density_data_range, 
                               aes(x = repeat_count, 
                                   y = reorder(sample_label, -time_order),  # Earliest at top
                                   fill = group)) +
@@ -808,17 +808,24 @@ if (nrow(ridge_data_full) > 0) {
         axis.text.y = element_text(size = 8)
       )
     
-    print(p_ridge_combined)
+    print(p_density_combined)
     
     # Calculate dimensions
-    n_samples_range <- length(unique(ridge_data_range$file_stem))
-    n_groups <- length(unique(ridge_data_range$group))
+    n_samples_range <- length(unique(density_data_range$file_stem))
+    n_groups <- length(unique(density_data_range$group))
     plot_height <- max(8, min(50, n_samples_range * 0.4))
     plot_width <- max(10, min(40, n_groups * 8))
     
+    # Determine filename based on range
+    combined_filename <- if (range_name == "Full") {
+      "density.png"
+    } else {
+      paste0("density-", range_name, ".png")
+    }
+    
     ggsave(
-      file.path(ridge_range_dir, "ridge_combined_all_groups.png"),
-      p_ridge_combined,
+      file.path(density_range_dir, combined_filename),
+      p_density_combined,
       width = plot_width,
       height = plot_height,
       dpi = 300,
@@ -826,18 +833,18 @@ if (nrow(ridge_data_full) > 0) {
       limitsize = FALSE
     )
     
-    message("    Combined plot saved: ridge_combined_all_groups.png")
+    message("    Combined plot saved: ", combined_filename)
     
     # INDIVIDUAL PLOTS: One per group for this range
-    for (my_group in unique(ridge_data_range$group)) {
-      group_data <- ridge_data_range %>%
+    for (my_group in unique(density_data_range$group)) {
+      group_data <- density_data_range %>%
         filter(group == my_group) %>%
         arrange(time)
       
       if (nrow(group_data) == 0) next
       
       # Create plot for this group
-      p_ridge_group <- ggplot(group_data, 
+      p_density_group <- ggplot(group_data, 
                              aes(x = repeat_count, 
                                  y = reorder(sample_label, -time_order),  # Earliest at top
                                  fill = group)) +
@@ -860,9 +867,16 @@ if (nrow(ridge_data_full) > 0) {
       n_samples_group <- length(unique(group_data$file_stem))
       group_height <- max(6, min(40, n_samples_group * 0.5))
       
+      # Determine filename based on range
+      group_filename <- if (range_name == "Full") {
+        paste0("density-", my_group, ".png")
+      } else {
+        paste0("density-", my_group, "-", range_name, ".png")
+      }
+      
       ggsave(
-        file.path(ridge_range_dir, paste0("ridge_", my_group, ".png")),
-        p_ridge_group,
+        file.path(density_range_dir, group_filename),
+        p_density_group,
         width = 12,
         height = group_height,
         dpi = 300,
@@ -870,11 +884,11 @@ if (nrow(ridge_data_full) > 0) {
         limitsize = FALSE
       )
       
-      message("    Ridge plot saved for group: ", my_group)
+      message("    Density plot saved for group: ", my_group, " (", group_filename, ")")
     }
   }
   
-  message("\n  All ridge plots saved to: ", ridge_by_time_dir)
+  message("\n  All ridge plots saved to: ", density_by_group_and_time_dir)
   
 } else {
   message("  Warning: No data available for ridge plots (missing group/time metadata)")
@@ -887,6 +901,17 @@ message("\nGenerating individual distribution plots by analysis range...")
 distribution_by_range_dir <- file.path(plots_dir, "distribution_by_range")
 if (!dir.exists(distribution_by_range_dir)) {
   dir.create(distribution_by_range_dir, recursive = TRUE)
+}
+
+# Create subdirectories for specific plot types
+modal_vs_mean_by_range_dir <- file.path(plots_dir, "02_modal_vs_mean_by_range")
+if (!dir.exists(modal_vs_mean_by_range_dir)) {
+  dir.create(modal_vs_mean_by_range_dir, recursive = TRUE)
+}
+
+tail_balance_by_range_dir <- file.path(plots_dir, "05_tail_balance_by_range")
+if (!dir.exists(tail_balance_by_range_dir)) {
+  dir.create(tail_balance_by_range_dir, recursive = TRUE)
 }
 
 for (my_range in unique(distribution_summary$analysis_range_name)) {
@@ -908,8 +933,8 @@ for (my_range in unique(distribution_summary$analysis_range_name)) {
     theme_bw() +
     theme(legend.position = "right")
   
-  ggsave(file.path(distribution_by_range_dir, 
-                  paste0("modal_vs_mean_", my_range, ".png")),
+  ggsave(file.path(modal_vs_mean_by_range_dir, 
+                  paste0("modal_vs_mean-", my_range, ".png")),
          p_modal_mean_range, width = 10, height = 6, dpi = 300)
   
   # Plot 2: Tail balance for this range
@@ -947,8 +972,8 @@ for (my_range in unique(distribution_summary$analysis_range_name)) {
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           legend.position = "bottom")
   
-  ggsave(file.path(distribution_by_range_dir, 
-                  paste0("tail_balance_", my_range, ".png")),
+  ggsave(file.path(tail_balance_by_range_dir, 
+                  paste0("tail_balance-", my_range, ".png")),
          p_tail_range, width = 12, height = 6, dpi = 300)
   
   # Plot 3: Key metrics for this range
@@ -1113,7 +1138,7 @@ for (my_sample in unique(distribution_summary$file_stem)) {
                                 rel_heights = c(0.05, 1))
   
   ggsave(file.path(distribution_by_sample_dir, 
-                  paste0(my_sample, "_distribution.png")),
+                  paste0(my_sample, "-distribution.png")),
          p_final, width = 14, height = 10, dpi = 300)
 }
 
@@ -1796,7 +1821,7 @@ if (params$group_control && any(instability_metrics$setpoint_type == "control_re
           legend.position = "bottom")
   
   print(p_read_proportions)
-  ggsave(file.path(plots_dir, "18b_read_proportions_by_region.png"),
+  ggsave(file.path(plots_dir, "19_read_proportions_by_region.png"),
          p_read_proportions, width = 14, height = 10, dpi = 300)
   
   # Plot 8: Expansion vs Contraction Balance (scatter)
@@ -1820,7 +1845,7 @@ if (params$group_control && any(instability_metrics$setpoint_type == "control_re
       theme(legend.position = "right")
     
     print(p_balance_scatter)
-    ggsave(file.path(plots_dir, "19_expansion_contraction_balance.png"),
+    ggsave(file.path(plots_dir, "20_expansion_contraction_balance.png"),
            p_balance_scatter, width = 14, height = 7, dpi = 300)
   }
   
@@ -1857,7 +1882,7 @@ if (params$group_control && any(instability_metrics$setpoint_type == "control_re
             legend.position = "bottom")
     
     ggsave(file.path(instability_by_range_dir, 
-                    paste0("instability_index_", my_range, ".png")),
+                    paste0("instability_index-", my_range, ".png")),
            p_range, width = 12, height = 6, dpi = 300)
     
     # Plot: Read counts by region for this range
@@ -1892,7 +1917,7 @@ if (params$group_control && any(instability_metrics$setpoint_type == "control_re
             legend.position = "bottom")
     
     ggsave(file.path(instability_by_range_dir, 
-                    paste0("read_counts_", my_range, ".png")),
+                    paste0("read_counts-", my_range, ".png")),
            p_counts_range, width = 12, height = 8, dpi = 300)
   }
   
@@ -1980,7 +2005,7 @@ if (params$group_control && any(instability_metrics$setpoint_type == "control_re
                                   rel_heights = c(0.05, 1))
     
     ggsave(file.path(instability_by_sample_dir, 
-                    paste0(my_sample, "_instability.png")),
+                    paste0(my_sample, "-instability.png")),
            p_final, width = 14, height = 10, dpi = 300)
   }
   

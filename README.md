@@ -378,50 +378,126 @@ dir_out/
 ├── 01_import_and_qc.html
 ├── 01_import_qc/
 │   ├── plots/
+│   │   ├── quality_vs_length.png                      # Combined plot
+│   │   └── quality_vs_length_by_sample/               # Individual plots
+│   │       └── {sample}-quality_vs_length.png
 │   └── qc/
 │       └── qc.xlsx
+│
 ├── 02_alignment.html
 ├── 02_alignment/
 │   ├── plots/
+│   │   ├── alignment_length_by_flank.png              # Combined plots
+│   │   ├── mapq_distribution.png
+│   │   ├── repeat_segment_length.png
+│   │   ├── alignment_length_by_flank_by_sample/       # Individual plots
+│   │   │   └── {sample}-alignment_length_by_flank.png
+│   │   ├── mapq_distribution_by_sample/
+│   │   │   └── {sample}-mapq_distribution.png
+│   │   ├── coverage_by_sample/
+│   │   │   └── {sample}-coverage.png
+│   │   └── repeat_segment_length_by_sample/
+│   │       └── {sample}-repeat_segment_length.png
 │   └── alignment/
 │       └── alignment_qc.xlsx
+│
 ├── 03_repeat_detection.html
 ├── 03_repeat_detection/
 │   ├── plots/
+│   │   ├── repeat_histogram.png                       # Combined plots
+│   │   ├── repeat_violin.png
+│   │   ├── repeat_density.png
+│   │   ├── repeat_histogram_by_sample/                # Individual plots
+│   │   │   └── {sample}-repeat_histogram.png
+│   │   ├── repeat_violin_by_sample/
+│   │   │   └── {sample}-repeat_violin.png
+│   │   └── repeat_density_by_sample/
+│   │       └── {sample}-repeat_density.png
 │   └── repeat_detection/
 │       └── repeat_summaries.xlsx
+│
 ├── 04_allele_calling.html
 ├── 04_allele_calling/
 │   ├── plots/
+│   │   ├── scatter.png                                # Combined plots
+│   │   ├── violin.png
+│   │   ├── scatter_by_sample/                         # Individual plots
+│   │   │   └── {sample}-scatter.png
+│   │   └── violin_by_sample/
+│   │       └── {sample}-violin.png
 │   ├── consensus/
 │   │   ├── consensus_sequences.fasta
 │   │   └── consensus_summary.xlsx
 │   └── variants/
-│       ├── *.vcf
-│       └── variant_summary.xlsx
+│       ├── all_samples_variants.vcf
+│       ├── variant_summary.xlsx
+│       └── vcf_by_sample/
+│           └── {sample}_variants.vcf
+│
 ├── 05_waterfall.html
 ├── 05_waterfall/
 │   └── plots/
+│       ├── waterfall_{sample}.png
+│       └── waterfall_by_cluster/
+│           └── {sample}_cluster{N}-waterfall.png
+│
 ├── 06_range_analysis.html
 ├── 06_range_analysis/
 │   ├── plots/
-│   │   ├── distribution_by_sample/
+│   │   ├── 01_modal_peaks.png                         # 20 main plots (01-20)
+│   │   ├── 02_modal_vs_mean.png
+│   │   ├── ...
+│   │   ├── 19_read_proportions_by_region.png
+│   │   ├── 20_expansion_contraction_balance.png
+│   │   ├── 01_modal_peaks_by_sample/                  # By-sample plots
+│   │   │   └── {sample}-modal_peaks.png
+│   │   ├── 02_modal_vs_mean_by_range/                 # By-range plots
+│   │   │   └── modal_vs_mean-{range}.png
+│   │   ├── 05_tail_balance_by_range/
+│   │   │   └── tail_balance-{range}.png
+│   │   ├── 21_density_by_group_and_time/              # Density plots
+│   │   │   ├── Full/
+│   │   │   │   ├── density.png
+│   │   │   │   └── density-{group}.png
+│   │   │   └── {range}/
+│   │   │       ├── density-{range}.png
+│   │   │       └── density-{group}-{range}.png
 │   │   ├── distribution_by_range/
-│   │   ├── instability_by_sample/
-│   │   └── peaks_by_sample/
+│   │   │   └── metrics-{range}.png
+│   │   ├── distribution_by_sample/
+│   │   │   └── {sample}-distribution.png
+│   │   ├── instability_by_range/
+│   │   │   ├── instability_index-{range}.png
+│   │   │   └── read_counts-{range}.png
+│   │   └── instability_by_sample/
+│   │       └── {sample}-instability.png
 │   └── range_analysis/
 │       └── range_analysis_results.xlsx
+│
 ├── 07_repeat_visualisation.html
 ├── 07_repeat_visualisation/
 │   └── plots/
-│       ├── scatter_combined.png
+│       ├── scatter.png                                # Combined scatter plot
 │       ├── histograms_by_sample/
+│       │   ├── {sample}-histogram-full.png            # Full range
+│       │   └── {sample}-histogram-{range}.png         # Per range
+│       ├── scatter_by_range/
+│       │   └── scatter-{range}.png
 │       └── scatter_by_sample/
+│           └── {sample}-scatter.png
+│
 ├── module_data/
 │   └── *.RData (for resume functionality)
 └── temp/
     └── (intermediate files, removed if cleanup_temp = TRUE)
 ```
+
+**Plot Organization Notes:**
+- Combined plots are in the root `plots/` directory
+- Individual sample plots are in `*_by_sample/` subdirectories
+- Individual range plots are in `*_by_range/` subdirectories
+- Filenames follow pattern: `{identifier}-{plot_type}.png`
+- Module 6 has 21 numbered plot groups (01-21)
 
 ---
 

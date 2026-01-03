@@ -590,13 +590,17 @@ print(p_qc_scatter)
 
 # Export combined plot
 ggsave(
-  filename = file.path(plots_dir, "quality_vs_length_all_samples.png"),
+  filename = file.path(plots_dir, "quality_vs_length.png"),
   plot = p_qc_scatter,
   width = 12,
   height = 6,
   dpi = 300,
   bg = "white"
 )
+
+# Create subdirectory for per-sample plots
+quality_by_sample_dir <- file.path(plots_dir, "quality_vs_length_by_sample")
+dir.create(quality_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Individual per-sample plots
 for (sample in unique(filtered_read_summary$file_stem)) {
@@ -615,7 +619,7 @@ for (sample in unique(filtered_read_summary$file_stem)) {
     theme_minimal()
   
   ggsave(
-    filename = file.path(plots_dir, paste0("quality_vs_length_", sample, ".png")),
+    filename = file.path(quality_by_sample_dir, paste0(sample, "-quality_vs_length.png")),
     plot = p_sample,
     width = 8,
     height = 6,

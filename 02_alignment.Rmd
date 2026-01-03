@@ -698,7 +698,7 @@ if (n_samples <= 30) {
   plot_width <- min(30, max(10, n_samples * 3))
   
   ggsave(
-    filename = file.path(plots_dir, "alignment_length_by_flank_all_samples.png"),
+    filename = file.path(plots_dir, "alignment_length_by_flank.png"),
     plot = p_alignment_length,
     width = plot_width,
     height = 6,
@@ -710,6 +710,10 @@ if (n_samples <= 30) {
   message("Skipping combined alignment length plot (", n_samples, " samples > 30)")
   message("  Individual per-sample plots will be generated below")
 }
+
+# Create subdirectory for per-sample plots
+alignment_length_by_sample_dir <- file.path(plots_dir, "alignment_length_by_flank_by_sample")
+dir.create(alignment_length_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Individual per-sample plots
 for (sample in unique(alignment_final$file_stem)) {
@@ -726,7 +730,7 @@ for (sample in unique(alignment_final$file_stem)) {
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
   
   ggsave(
-    filename = file.path(plots_dir, paste0("alignment_length_", sample, ".png")),
+    filename = file.path(alignment_length_by_sample_dir, paste0(sample, "-alignment_length_by_flank.png")),
     plot = p_alignment_sample,
     width = 8,
     height = 6,
@@ -759,7 +763,7 @@ if (n_samples <= 30) {
   plot_width <- min(30, max(10, n_samples * 3))
   
   ggsave(
-    filename = file.path(plots_dir, "mapq_distribution_all_samples.png"),
+    filename = file.path(plots_dir, "mapq_distribution.png"),
     plot = p_mapq,
     width = plot_width,
     height = 6,
@@ -771,6 +775,10 @@ if (n_samples <= 30) {
   message("Skipping combined MAPQ plot (", n_samples, " samples > 30)")
   message("  Individual per-sample plots will be generated below")
 }
+
+# Create subdirectory for per-sample plots
+mapq_by_sample_dir <- file.path(plots_dir, "mapq_distribution_by_sample")
+dir.create(mapq_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Individual per-sample plots
 for (sample in unique(alignment_final$file_stem)) {
@@ -788,7 +796,7 @@ for (sample in unique(alignment_final$file_stem)) {
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
   
   ggsave(
-    filename = file.path(plots_dir, paste0("mapq_distribution_", sample, ".png")),
+    filename = file.path(mapq_by_sample_dir, paste0(sample, "-mapq_distribution.png")),
     plot = p_mapq_sample,
     width = 8,
     height = 6,
@@ -862,6 +870,10 @@ visualise_sample_alignments <- function(sample_data, sample_name,
 if (params$visualise_alignment) {
   message("Generating alignment visualisations...")
   
+  # Create subdirectory for coverage plots
+  coverage_by_sample_dir <- file.path(plots_dir, "coverage_by_sample")
+  dir.create(coverage_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
+  
   # Split alignments by sample
   alignment_by_sample <- split(alignment_final, alignment_final$file_stem)
   
@@ -880,7 +892,7 @@ if (params$visualise_alignment) {
       
       # Export coverage plot
       ggsave(
-        filename = file.path(plots_dir, paste0("coverage_", sample_name, ".png")),
+        filename = file.path(coverage_by_sample_dir, paste0(sample_name, "-coverage.png")),
         plot = p,
         width = 12,
         height = 8,
@@ -1023,7 +1035,7 @@ n_samples <- length(unique(alignment_split$file_stem))
 plot_width <- min(50, max(8, n_samples * 0.8))
 
 ggsave(
-  filename = file.path(plots_dir, "repeat_segment_length_all_samples.png"),
+  filename = file.path(plots_dir, "repeat_segment_length.png"),
   plot = p_mid_length,
   width = plot_width,
   height = 6,
@@ -1031,6 +1043,10 @@ ggsave(
   bg = "white",
   limitsize = FALSE
 )
+
+# Create subdirectory for per-sample plots
+repeat_segment_by_sample_dir <- file.path(plots_dir, "repeat_segment_length_by_sample")
+dir.create(repeat_segment_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Individual per-sample plots (horizontal orientation to match Module 7)
 for (sample in unique(alignment_split$file_stem)) {
@@ -1049,7 +1065,7 @@ for (sample in unique(alignment_split$file_stem)) {
           axis.ticks.y = element_blank())
   
   ggsave(
-    filename = file.path(plots_dir, paste0("repeat_segment_length_", sample, ".png")),
+    filename = file.path(repeat_segment_by_sample_dir, paste0(sample, "-repeat_segment_length.png")),
     plot = p_mid_sample,
     width = 8,
     height = 6,

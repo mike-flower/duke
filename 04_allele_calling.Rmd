@@ -509,7 +509,7 @@ print(p_violin_combined)
 
 # Save combined violin plot
 ggsave(
-  filename = file.path(plots_dir, "violin_all_samples.png"),
+  filename = file.path(plots_dir, "violin.png"),
   plot = p_violin_combined,
   width = violin_width,
   height = violin_height,
@@ -520,6 +520,10 @@ ggsave(
 } else {
   message("Skipped combined violin plot (>200 samples)")
 }
+
+# Create subdirectory for per-sample plots
+violin_by_sample_dir <- file.path(plots_dir, "violin_by_sample")
+dir.create(violin_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Create and save individual violin plots per sample
 # Skip if >200 samples (too many files)
@@ -553,7 +557,7 @@ if (plot_strategy != "summary_only") {
             legend.position = "right")
     
     ggsave(
-      filename = file.path(plots_dir, paste0("violin_", sample, ".png")),
+      filename = file.path(violin_by_sample_dir, paste0(sample, "-violin.png")),
       plot = p_violin_sample,
       width = 10,
       height = 6,
@@ -562,7 +566,7 @@ if (plot_strategy != "summary_only") {
     )
   }
   
-  message("Violin plots exported to: ", plots_dir)
+  message("Violin plots exported to: ", violin_by_sample_dir)
   
 } else {
   message("Skipped individual violin plots (>200 samples - would generate ", n_samples, " files)")
@@ -609,13 +613,17 @@ print(p_scatter_combined)
 
 # Save combined scatter plot with dynamic width
 ggsave(
-  filename = file.path(plots_dir, "scatter_all_samples.png"),
+  filename = file.path(plots_dir, "scatter.png"),
   plot = p_scatter_combined,
   width = scatter_width,
   height = scatter_height,
   dpi = 300,
   bg = "white"
 )
+
+# Create subdirectory for per-sample plots
+scatter_by_sample_dir <- file.path(plots_dir, "scatter_by_sample")
+dir.create(scatter_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Create and save individual scatter plots per sample
 for (sample in unique(cluster_summary$file_stem)) {
@@ -639,7 +647,7 @@ for (sample in unique(cluster_summary$file_stem)) {
           legend.position = "right")
   
   ggsave(
-    filename = file.path(plots_dir, paste0("scatter_", sample, ".png")),
+    filename = file.path(scatter_by_sample_dir, paste0(sample, "-scatter.png")),
     plot = p_scatter_sample,
     width = max(8, nrow(sample_data) * 0.6),
     height = 6,
@@ -1126,6 +1134,11 @@ if (exists("variant_results") && !is.null(variant_results) && nrow(variant_resul
   
   # Individual VCFs: one column per cluster
   message("Exporting individual VCF files...")
+  
+  # Create subdirectory for individual sample VCF files
+  vcf_by_sample_dir <- file.path(variants_dir, "vcf_by_sample")
+  dir.create(vcf_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
+  
   vcf_export_count <- 0
   vcf_total_variants <- 0
   
@@ -1134,7 +1147,7 @@ if (exists("variant_results") && !is.null(variant_results) && nrow(variant_resul
       filter(file_stem == sample)
     
     if (nrow(sample_variants) > 0) {
-      vcf_path <- file.path(variants_dir, paste0(sample, "_variants.vcf"))
+      vcf_path <- file.path(vcf_by_sample_dir, paste0(sample, "_variants.vcf"))
       
       # Get all clusters for this sample
       clusters <- sort(unique(sample_variants$cluster_number))

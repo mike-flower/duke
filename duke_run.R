@@ -46,11 +46,11 @@ params <- list(
   # dir_data = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.17_jhd_reanalyse/data",
   # dir_out = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.17_jhd_reanalyse/result_duke",
   
-  # dir_data = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.12.17_pb_test/data",
-  # dir_out = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.12.17_pb_test/result_duke",
+  dir_data = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.12.17_pb_test/data",
+  dir_out = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.12.17_pb_test/result_duke",
   
-  dir_data = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.22-pacbio_amplicon-jasmine/data",
-  dir_out = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.22-pacbio_amplicon-jasmine/result_duke",
+  # dir_data = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.22-pacbio_amplicon-jasmine/data",
+  # dir_out = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.22-pacbio_amplicon-jasmine/result_duke",
   
   path_ref = "/Users/michaelflower/refs/rep/HTT/HTTset20/HTTset20.fasta",  # Reference with NNNNN separator
   
@@ -278,8 +278,8 @@ params <- list(
   #   Required for Module 6
   #   Should contain: analysis_ranges, floor, max_peaks, group, group_control_sample
   # path_settings = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.17_jhd_reanalyse/settings/settings_duke.xlsx",
-  # path_settings = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.12.17_pb_test/settings/settings_duke.xlsx",
-  path_settings = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.22-pacbio_amplicon-jasmine/settings/settings_duke.xlsx",
+  path_settings = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.12.17_pb_test/settings/settings_duke.xlsx",
+  # path_settings = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2025.09.22-pacbio_amplicon-jasmine/settings/settings_duke.xlsx",
   
   # range_peak_span: Peak detection smoothing window (odd number)
   #   - 3 = sharp peaks (default)
@@ -329,7 +329,7 @@ params <- list(
   # -----------------------------------------------------------------------------
   # Runtime settings
   # -----------------------------------------------------------------------------
-  threads = 4,
+  threads = 2,
   resume = TRUE,
   
   # -----------------------------------------------------------------------------

@@ -224,7 +224,7 @@ if (params$repeat_histogram) {
     print(p_full)
     
     ggsave(file.path(hist_by_sample_dir, 
-                    paste0(my_sample, "_histogram_full.png")),
+                    paste0(my_sample, "-histogram-full.png")),
            p_full, width = 10, height = 6, dpi = 300)
     
     # 2. Create per-range histograms (only for ranges this sample has)
@@ -280,14 +280,14 @@ if (params$repeat_histogram) {
       print(p_range)
       
       ggsave(file.path(hist_by_sample_dir, 
-                      paste0(my_sample, "_histogram_", my_range, ".png")),
+                      paste0(my_sample, "-histogram-", my_range, ".png")),
              p_range, width = 10, height = 6, dpi = 300)
     }
   }
   
   message("Histograms by sample created: ", hist_by_sample_dir)
-  message("  - Full range histograms: {sample}_histogram_full.png")
-  message("  - Per-range histograms: {sample}_histogram_{range}.png")
+  message("  - Full range histograms: {sample}-histogram-full.png")
+  message("  - Per-range histograms: {sample}-histogram-{range}.png")
 }
 ```
 
@@ -319,7 +319,7 @@ if (params$repeat_scatter) {
   
   print(p_scatter_combined)
   
-  ggsave(file.path(plots_dir, "scatter_combined.png"),
+  ggsave(file.path(plots_dir, "scatter.png"),
          p_scatter_combined, width = 14, height = 8, dpi = 300)
   
   message("\nCombined scatter plot created")
@@ -377,7 +377,7 @@ if (params$repeat_scatter) {
     print(p_range_scatter)
     
     ggsave(file.path(scatter_by_range_dir,
-                    paste0("scatter_", my_range, ".png")),
+                    paste0("scatter-", my_range, ".png")),
            p_range_scatter, width = 12, height = 6, dpi = 300)
   }
   
@@ -427,7 +427,7 @@ if (params$repeat_scatter) {
     print(p_sample_scatter)
     
     ggsave(file.path(scatter_by_sample_dir,
-                    paste0(my_sample, "_scatter.png")),
+                    paste0(my_sample, "-scatter.png")),
            p_sample_scatter, width = 12, height = 4, dpi = 300)
   }
   
@@ -446,15 +446,15 @@ message("Plots saved to: ", plots_dir)
 if (params$repeat_histogram) {
   message("\nHistogram plots:")
   message("  - By sample: histograms_by_sample/")
-  message("    - Full range: {sample}_histogram_full.png")
-  message("    - Per range: {sample}_histogram_{range}.png")
+  message("    - Full range: {sample}-histogram-full.png")
+  message("    - Per range: {sample}-histogram-{range}.png")
 }
 
 if (params$repeat_scatter) {
   message("\nScatter plots:")
-  message("  - Combined: scatter_combined.png")
-  message("  - By range: scatter_by_range/")
-  message("  - By sample: scatter_by_sample/")
+  message("  - Combined: scatter.png")
+  message("  - By range: scatter_by_range/{range}-scatter.png")
+  message("  - By sample: scatter_by_sample/{sample}-scatter.png")
 }
 
 cat("\n")
