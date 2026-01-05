@@ -54,14 +54,14 @@ Query coordinates from minimap2 CIGAR strings are unreliable for antisense reads
 
 ```{r load_packages, message=FALSE, warning=FALSE, echo=FALSE}
 # Set working directory
-if (interactive()) {
-  setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
-} else {
-  rmd_path <- knitr::current_input(dir = TRUE)
-  if (!is.null(rmd_path) && rmd_path != "") {
-    setwd(rmd_path)
-  }
-}
+# if (interactive()) {
+#   setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+# } else {
+#   rmd_path <- knitr::current_input(dir = TRUE)
+#   if (!is.null(rmd_path) && rmd_path != "") {
+#     setwd(rmd_path)
+#   }
+# }
 
 # Required packages
 required_packages <- c("Biostrings", "Rsamtools", "GenomicAlignments",

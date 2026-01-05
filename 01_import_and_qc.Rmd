@@ -38,17 +38,17 @@ This module handles:
 ```{r load_packages, message=FALSE, warning=FALSE, echo=FALSE}
 # Set working directory to where this Rmd is located
 # This needs to happen BEFORE sourcing lib/load_all.R
-if (interactive()) {
-  setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
-} else {
-  # When rendering via rmarkdown::render()
-  # The working directory should already be set by duke_run.R
-  # But we can also try to detect the Rmd location
-  rmd_path <- knitr::current_input(dir = TRUE)
-  if (!is.null(rmd_path) && rmd_path != "") {
-    setwd(rmd_path)
-  }
-}
+# if (interactive()) {
+#   setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+# } else {
+#   # When rendering via rmarkdown::render()
+#   # The working directory should already be set by duke_run.R
+#   # But we can also try to detect the Rmd location
+#   rmd_path <- knitr::current_input(dir = TRUE)
+#   if (!is.null(rmd_path) && rmd_path != "") {
+#     setwd(rmd_path)
+#   }
+# }
 
 # Required packages
 required_packages <- c("ShortRead", "Biostrings", "Rsamtools", "pbapply", 
