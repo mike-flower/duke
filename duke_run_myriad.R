@@ -362,8 +362,8 @@ if (!dir.exists(run_log_dir)) {
 }
 
 # Log files in subdirectory WITH timestamp in filename
-log_file <- file.path(run_log_dir, paste0(log_timestamp, "_duke_run.log"))
-params_file <- file.path(run_log_dir, paste0(log_timestamp, "_params.R"))
+log_file <- file.path(run_log_dir, paste0("duke_run-", log_timestamp, ".log"))
+params_file <- file.path(run_log_dir, paste0("params-", log_timestamp, ".R"))
 
 # Save parameters to file for reproducibility
 cat("# Duke Pipeline Run Parameters\n", file = params_file)
