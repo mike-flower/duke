@@ -27,7 +27,7 @@ consensus_function <- function(dna_stringset, threads = 1, consensus_threshold =
                                    threshold = consensus_threshold, 
                                    ambiguity = FALSE,
                                    noConsensusChar = "N",
-                                   includeNonLetters = FALSE,
+                                   # includeNonLetters = FALSE, # Removed as errored on Myriad
                                    includeTerminalGaps = FALSE)) 
     # threshold sets how much disagreement is allowed at each position.
     # - threshold = 0.05 → strict: ≥95% of reads must agree to call a base.
