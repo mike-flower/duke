@@ -203,7 +203,7 @@ Duke requires a settings file (Excel or CSV) defining sample-specific parameters
 |--------|-------------|---------|
 | `file_name` | **Complete** FASTQ filename (Duke extracts stem automatically) | `sample_001.fastq.gz` |
 | `analysis_ranges` | Range definitions using square brackets | `[0-35]` or `[0-35][36-200]` |
-| `floor` | Peak detection threshold(s), one per range | `[14]` or `[14][100]` |
+| `floor` | Peak detection frequency threshold(s), one per range | `[3]` or `[3][10]` |
 | `max_peaks` | Maximum peaks per range | `[3]` or `[3][2]` |
 
 ### Optional Columns
@@ -215,6 +215,43 @@ Duke requires a settings file (Excel or CSV) defining sample-specific parameters
 | `time` | Timepoint for temporal analysis | `0`, `6`, `12` |
 | `manual_control_repeat_length` | Manual control setpoint(s), one per range | `[24][120]` or blank |
 | `exclude` | Any non-blank value = exclude from analysis | `1`, `TRUE`, or blank |
+
+### Understanding the `floor` Parameter
+
+The `floor` parameter controls **frequency filtering** for peak detection. It determines the minimum number of times a repeat length must appear to be considered for analysis.
+
+**How it works:**
+
+- **If `floor >= 1`** (e.g., 1, 3, 10): Treated as an **absolute count** (minimum number of reads)
+  - `floor = 3` means "keep only repeat lengths appearing ≥3 times"
+  - Removes low-frequency noise (singletons, doubletons)
+  
+- **If `floor < 1`** (e.g., 0.05, 0.1): Treated as a **proportion** of maximum frequency
+  - `floor = 0.05` means "keep only repeat lengths appearing ≥5% as often as the most common length"
+  - Automatically scales with sequencing depth
+
+**Common values:**
+
+| Value | Effect | Use Case |
+|-------|--------|----------|
+| `[0]` | No filtering, keep all data | Maximum sensitivity, noisy |
+| `[1]` | Keep all (functionally same as 0) | Minimal filtering |
+| `[3]` | **Recommended default** | Removes technical noise, good balance |
+| `[5]` or `[10]` | Higher stringency | Deep sequencing, focus on major peaks |
+| `[0.05]` | Keep ≥5% of max frequency | Adaptive filtering, scales with depth |
+
+**Example for diploid Huntington's disease:**
+```
+analysis_ranges: [0-35][36-200]
+floor:           [3][10]
+```
+- Normal range (0-35): Lower threshold (3) to detect both alleles
+- Expanded range (36-200): Higher threshold (10) as expanded alleles may be less frequent
+
+**What gets filtered:**
+- If you have a repeat length appearing only 1-2 times (likely sequencing errors)
+- With `floor = [3]`, these low-frequency lengths are excluded from peak detection and statistics
+- The `n_reads_total` vs `n_reads_used` columns in output show how many reads were filtered
 
 ### Analysis Ranges Syntax
 
@@ -242,7 +279,7 @@ When you define **multiple analysis ranges**, these parameters must have **match
 | Parameter | Format | Example for 2 ranges |
 |-----------|--------|---------------------|
 | `analysis_ranges` | `[min-max][min-max]` | `[0-35][36-200]` |
-| `floor` | `[val1][val2]` | `[14][100]` |
+| `floor` | `[val1][val2]` | `[3][10]` |
 | `max_peaks` | `[val1][val2]` | `[3][2]` |
 | `manual_control_repeat_length` | `[val1][val2]` or blank | `[24][120]` |
 
@@ -250,7 +287,7 @@ When you define **multiple analysis ranges**, these parameters must have **match
 ```
 file_name: sample_001.fastq.gz
 analysis_ranges: [0-35][36-200]
-floor: [14][100]
+floor: [3][10]
 max_peaks: [3][2]
 group: patient1
 group_control_sample: 
