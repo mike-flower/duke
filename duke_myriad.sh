@@ -1,12 +1,15 @@
 #!/bin/bash -l
-#$ -N duke_pipeline
+#$ -S /bin/bash
+#$ -N duke_pb_HTT_6c_24h
 #$ -wd /home/skgtmdf/Scratch/bin/duke
 #$ -o logs/duke_job_$JOB_ID.out
 #$ -e logs/duke_job_$JOB_ID.err
 #$ -l h_rt=24:00:00
-#$ -pe smp 4
+#$ -pe smp 3
 #$ -l mem=8G
 #$ -l tmpfs=50G
+#$ -M michael.flower@ucl.ac.uk
+#$ -m bea
 
 # ============================================================================
 # Duke Pipeline - Myriad HPC Job Script
