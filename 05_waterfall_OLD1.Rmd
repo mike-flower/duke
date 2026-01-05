@@ -19,7 +19,7 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
 ```{r load_packages, echo=FALSE, message=FALSE}
 # Required packages
 required_packages <- c("dplyr", "tidyr", "ggplot2", "data.table", "stringr", 
-                      "knitr", "DT", "scales", "pbapply")
+                      "knitr", "kableExtra", "DT", "scales", "pbapply")
 
 # Load packages
 invisible(lapply(required_packages, library, character.only = TRUE))

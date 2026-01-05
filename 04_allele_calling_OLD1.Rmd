@@ -20,7 +20,7 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
 # Required packages
 required_packages <- c("Biostrings", "DECIPHER", "mclust", "cluster", 
                       "pbapply", "dplyr", "tidyr", "data.table", 
-                      "stringr", "ggplot2", "openxlsx", "DT",
+                      "stringr", "ggplot2", "kableExtra", "openxlsx", "DT",
                       "pbmcapply")
 
 # Load packages

@@ -19,7 +19,7 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
 ```{r load_packages, echo=FALSE, message=FALSE}
 # Required packages
 required_packages <- c("dplyr", "tidyr", "ggplot2", "ggridges", "stringr", "readxl",
-                      "knitr", "DT", "pbapply", "moments",
+                      "knitr", "kableExtra", "DT", "pbapply", "moments",
                       "writexl", "pracma", "scales", "pbmcapply")
 
 # Load packages
@@ -1260,20 +1260,10 @@ if (params$group_control) {
   caption_text <- paste0("Group control setpoints per analysis range (using ", 
                         params$control_setpoint_metric, ")")
   
-  DT::datatable(
-    group_controls,
-    caption = caption_text,
-    options = list(
-      pageLength = 25,
-      scrollX = TRUE,
-      dom = 'Bfrtip',
-      buttons = c('copy', 'csv', 'excel')
-    ),
-    rownames = FALSE,
-    filter = 'top',
-    class = 'cell-border stripe compact'
-  ) %>%
-    DT::formatRound(columns = colnames(group_controls)[sapply(group_controls, is.numeric)], digits = 2)
+  kbl(group_controls,
+      caption = caption_text,
+      digits = 2) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
   
 } else {
   message("\nGroup controls disabled (group_control = FALSE)")

@@ -53,7 +53,7 @@ This module handles:
 # Required packages
 required_packages <- c("ShortRead", "Biostrings", "Rsamtools", "pbapply", 
                       "dplyr", "tidyr", "data.table", "stringr", "ggplot2",
-                      "scales", "DT", "openxlsx", "parallel",
+                      "scales", "kableExtra", "DT", "openxlsx", "parallel",
                       "pbmcapply", "tibble")
 
 # Load packages
@@ -128,12 +128,8 @@ file_details <- data.frame(file_name = file_names,
 data.frame(table(file_formats)) %>%
   dplyr::rename(file_format = file_formats,
                 count = Freq) %>%
-  DT::datatable(
-    caption = "File format",
-    options = list(pageLength = 10, scrollX = TRUE, dom = 't'),
-    rownames = FALSE,
-    class = 'cell-border stripe compact'
-  )
+  kbl(caption = "File format") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 ```
 
 ## Paired-end detection
@@ -143,12 +139,8 @@ file_details %>%
   distinct(sample_stem, paired) %>%
   group_by(paired) %>%
   dplyr::summarise(count = n(), .groups = "drop") %>%
-  DT::datatable(
-    caption = "Count single and paired end sequencing files",
-    options = list(pageLength = 10, scrollX = TRUE, dom = 't'),
-    rownames = FALSE,
-    class = 'cell-border stripe compact'
-  )
+  kbl(caption = "Count single and paired end sequencing files") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 ```
 
 ## File details
@@ -750,14 +742,8 @@ combined_trim_sequences <- c(trim_sequences, trim_sequences_rc)
 
 # Display table
 trim_df <- enframe(combined_trim_sequences, name = "adapter_name", value = "adapter_sequence")
-DT::datatable(
-  trim_df,
-  caption = "Trim sequences",
-  options = list(pageLength = 25, scrollX = TRUE, scrollY = "400px"),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact'
-)
+kbl(trim_df, caption = "Trim sequences") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
 # Export table
 write_excel_function(named_list = list("trim_sequences" = trim_df),
@@ -938,22 +924,11 @@ trim_by_adapter <- trim_by_adapter %>%
   arrange(desc(n_trimmed))
 
 # Display table
-DT::datatable(
-  trim_by_adapter,
-  caption = "Trimming summary by adapter (across all samples)",
-  options = list(
-    pageLength = 25,
-    scrollX = TRUE,
-    scrollY = "500px",
-    dom = 'Bfrtip',
-    buttons = c('copy', 'csv', 'excel')
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact'
-) %>%
-  DT::formatStyle(columns = colnames(trim_by_adapter), fontSize = '85%') %>%
-  DT::formatRound(columns = c('median_trim_length', 'mean_trim_length', 'sd_trim_length', 'proportion'), digits = 2)
+kbl(trim_by_adapter, 
+    caption = "Trimming summary by adapter (across all samples)",
+    digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                font_size = 10)
 ```
 
 ### Summary by sample
