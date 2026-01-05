@@ -4,7 +4,7 @@
 #$ -o logs/duke_job_$JOB_ID.out
 #$ -e logs/duke_job_$JOB_ID.err
 #$ -l h_rt=24:00:00
-#$ -pe smp 6
+#$ -pe smp 4
 #$ -l mem=8G
 #$ -l tmpfs=50G
 
@@ -17,13 +17,13 @@
 # 1. Configure duke_run_myriad.R with your data paths and parameters
 #
 # 2. Make this script executable:
-#    chmod +x duke_myriad_job.sh
+#    chmod +x duke_myriad.sh
 #
 # 3. Create logs directory (if it doesn't exist):
 #    mkdir -p logs
 #
 # 4. Submit the job:
-#    qsub duke_myriad_job.sh
+#    qsub duke_myriad.sh
 #
 # 5. Monitor the job:
 #    qstat                                    # Check job status
