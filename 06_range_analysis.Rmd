@@ -20,7 +20,7 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
 # Required packages
 required_packages <- c("dplyr", "tidyr", "ggplot2", "ggridges", "stringr", "readxl",
                       "knitr", "DT", "pbapply", "moments",
-                      "writexl", "pracma", "scales", "pbmcapply")
+                      "openxlsx", "pracma", "scales", "pbmcapply")
 
 # Load packages
 invisible(lapply(required_packages, library, character.only = TRUE))
@@ -2048,8 +2048,8 @@ if (nrow(instability_metrics) > 0) {
 }
 
 # Export to Excel
-excel_path <- file.path(range_dir, "range_analysis_results.xlsx")
-write_xlsx(excel_export, path = excel_path)
+excel_path <- file.path(range_dir, "range_analysis.xlsx")
+openxlsx::write.xlsx(excel_export, file = excel_path)
 
 message("\nResults exported to Excel: ", excel_path)
 message("  Sheets: ", paste(names(excel_export), collapse = ", "))
