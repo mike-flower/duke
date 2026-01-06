@@ -87,7 +87,9 @@ BiocManager::install(c("Biostrings", "ShortRead", "GenomicAlignments",
 
 ```
 duke_pipeline/
-├── duke_run.R                    # Main runner script
+├── duke_run.R                    # Main runner script (for HPC)
+├── duke_run_local.R              # Local development version
+├── duke_myriad.sh                # HPC job submission script
 ├── 01_import_and_qc.Rmd          # Module 1
 ├── 02_alignment.Rmd              # Module 2
 ├── 03_repeat_detection.Rmd       # Module 3
@@ -110,30 +112,41 @@ duke_pipeline/
     └── visualisation.R
 ```
 
+**Note:** `duke_run.R` is configured for HPC paths, while `duke_run_local.R` contains local development paths. Keep `duke_run_local.R` in your `.gitignore` to avoid committing personal paths.
+
 ### Run Analysis
 
-**From R/RStudio:**
+**Local Development (R/RStudio):**
 ```r
-# Edit duke_run.R with your paths
+# Edit duke_run_local.R with your local paths
 params$dir_data <- "/path/to/your/fastq/files"
 params$dir_out <- "/path/to/output/directory"
 params$path_ref <- "/path/to/reference.fasta"
 params$path_settings <- "/path/to/settings.xlsx"  # Required for Module 6
 
 # Run the pipeline
-source("duke_run.R")
+source("duke_run_local.R")
 ```
 
-**From command line:**
+**Local Command Line:**
 ```bash
 # Navigate to pipeline directory
 cd /path/to/duke_pipeline
 
 # Run the pipeline
-Rscript duke_run.R
+Rscript duke_run_local.R
 
 # For long runs (background)
-nohup Rscript duke_run.R &
+nohup Rscript duke_run_local.R &
+```
+
+**On HPC (Myriad):**
+```bash
+# Edit duke_run.R with HPC paths
+# Submit job to cluster
+qsub duke_myriad.sh
+
+# See HPC Deployment section below for full setup instructions
 ```
 
 All runs are automatically logged to `logs/TIMESTAMP/` directories.
@@ -194,7 +207,7 @@ exit  # Exit interactive session
 
 # 7. Configure Duke for your data
 cd ~/Scratch/bin/duke
-nano duke_run_myriad.R  # Edit paths to your data
+nano duke_run.R  # Edit paths to your HPC data
 
 # 8. Submit job
 qsub duke_myriad.sh
@@ -292,7 +305,7 @@ cd ~/Scratch/bin/duke
 git pull origin main
 ```
 
-**If you have local modifications (e.g., edited duke_run_myriad.R):**
+**If you have local modifications (e.g., edited duke_run.R):**
 ```bash
 cd ~/Scratch/bin/duke
 
@@ -318,13 +331,13 @@ Keep your configuration separate from the Duke codebase:
 cd ~/Scratch/bin/duke
 
 # Make a copy of your configuration
-cp duke_run_myriad.R ~/duke_run_myriad_MY_CONFIG.R
+cp duke_run.R ~/duke_run_MY_CONFIG.R
 
 # Now you can safely pull updates without stashing
 git pull origin main
 
 # After updates, copy your config back
-cp ~/duke_run_myriad_MY_CONFIG.R duke_run_myriad.R
+cp ~/duke_run_MY_CONFIG.R duke_run.R
 ```
 
 **Check what version you have:**
@@ -342,7 +355,7 @@ cd ~/Scratch/bin/duke
 git status
 
 # If you have uncommitted changes to config files only:
-git stash push duke_run_myriad.R -m "My config"
+git stash push duke_run.R -m "My config"
 
 # Pull the bug fixes
 git pull origin main
@@ -425,33 +438,37 @@ quit(save = "no")
 
 ### Configure Duke for HPC
 
-**1. Create/edit `duke_run_myriad.R`:**
+**1. Edit `duke_run.R` with your HPC paths:**
 ```r
-# Copy and modify duke_run.R for Myriad paths
+# duke_run.R is configured for HPC - edit with your Myriad paths
 params$dir_data <- "~/Scratch/data/your_project/fastq_files"
 params$dir_out <- "~/Scratch/data/your_project/result_duke"
 params$path_ref <- "~/Scratch/data/your_project/reference.fasta"
 params$path_settings <- "~/Scratch/data/your_project/settings.xlsx"
 
 # Match threads to job script
-params$threads <- 3
+params$threads <- 6
 
 # Enable for large datasets
 params$remove_intermediate <- TRUE
 params$cleanup_temp <- FALSE  # Keep for debugging, enable later
 ```
 
-**2. Create job submission script (`duke_myriad.sh`):**
+**Note:** Keep your local development paths in `duke_run_local.R` (add to `.gitignore`). This way `duke_run.R` always has HPC paths and won't conflict with git updates.
 
-See included `duke_myriad.sh` template. Key parameters:
+**2. Verify job submission script (`duke_myriad.sh`):**
+
+The included `duke_myriad.sh` template should work as-is. Key parameters to check:
 ```bash
-#$ -N duke_pipeline          # Job name
+#$ -N duke_pipeline          # Job name (customize per run)
 #$ -wd ~/Scratch/bin/duke    # Working directory
 #$ -l h_rt=24:00:00          # 24 hour walltime
-#$ -pe smp 3                 # 3 CPU cores (match params$threads)
-#$ -l mem=8G                 # 8GB per CPU (24GB total)
+#$ -pe smp 6                 # 6 CPU cores (MUST match params$threads)
+#$ -l mem=8G                 # 8GB per CPU (48GB total)
 #$ -l tmpfs=50G              # Temp space for BAM files
 ```
+
+**IMPORTANT:** The `-pe smp` value MUST match `params$threads` in `duke_run.R`!
 
 **3. Create logs directory:**
 ```bash
@@ -607,7 +624,7 @@ ls -lh ~/Scratch/data/your_project/result_duke/module_data/
 
 **Resume from failure:**
 ```r
-# Set in duke_run_myriad.R
+# Set in duke_run.R
 params$resume <- TRUE
 
 # Delete problematic cache files
