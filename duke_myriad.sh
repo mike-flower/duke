@@ -1,11 +1,11 @@
 #!/bin/bash -l
 #$ -S /bin/bash
-#$ -N duke_01_6c_16G_2h
+#$ -N duke_01_12c_16G_24h
 #$ -wd /home/skgtmdf/Scratch/bin/duke
 #$ -o logs/duke_job_$JOB_ID.out
 #$ -e logs/duke_job_$JOB_ID.err
-#$ -l h_rt=02:00:00
-#$ -pe smp 6
+#$ -l h_rt=24:00:00
+#$ -pe smp 12
 #$ -l mem=16G
 #$ -l tmpfs=50G
 #$ -M michael.flower@ucl.ac.uk
