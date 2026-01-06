@@ -4,6 +4,9 @@
 .RData
 .Ruserdata
 
+# Exclude specific files
+duke_run_local.R
+
 # Exclude specific folders
 /demo/
 /logs/

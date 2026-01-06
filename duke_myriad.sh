@@ -17,7 +17,7 @@
 #
 # SUBMISSION INSTRUCTIONS:
 #
-# 1. Configure duke_run_myriad.R with your data paths and parameters
+# 1. Configure duke_run.R with your data paths and parameters
 #
 # 2. Make this script executable:
 #    chmod +x duke_myriad.sh
@@ -29,8 +29,8 @@
 #    qsub duke_myriad.sh
 #
 # 5. Monitor the job:
-#    qstat                                    # Check job status
-#    qstat -j <JOB_ID>                        # Detailed job info
+#    qstat                                   # Check job status
+#    qstat -j <JOB_ID>                       # Detailed job info
 #    tail -f logs/duke_job_<JOB_ID>.out      # Watch output log
 #    tail -f logs/duke_job_<JOB_ID>.err      # Watch error log
 #
@@ -68,7 +68,7 @@
 # Very large dataset (50+ samples, >1M reads/sample):
 #   -l h_rt=72:00:00 -pe smp 16 -l mem=32G -l tmpfs=200G
 #
-# IMPORTANT: Match -pe smp value to threads parameter in duke_run_myriad.R!
+# IMPORTANT: Match -pe smp value to threads parameter in duke_run.R!
 #
 # ============================================================================
 
@@ -113,7 +113,7 @@ echo ""
 # Run Duke Pipeline
 # ============================================================================
 cd ~/Scratch/bin/duke
-Rscript duke_run_myriad.R
+Rscript duke_run.R
 
 # ============================================================================
 # Print Completion Message
@@ -125,7 +125,7 @@ echo "Date: $(date)"
 echo "========================================"
 echo ""
 echo "Output location:"
-echo "  Check duke_run_myriad.R for dir_out parameter"
+echo "  Check duke_run.R for dir_out parameter"
 echo ""
 echo "Logs:"
 echo "  Job output: logs/duke_job_$JOB_ID.out"
@@ -147,13 +147,13 @@ echo "========================================"
 #
 # Out of memory:
 #   Increase: -l mem=16G
-#   Enable: remove_intermediate = TRUE in duke_run_myriad.R
+#   Enable: remove_intermediate = TRUE in duke_run.R
 #
 # Out of temp space:
 #   Increase: -l tmpfs=100G
 #
 # Resume from failure:
-#   Set resume = TRUE in duke_run_myriad.R
+#   Set resume = TRUE in duke_run.R
 #   Delete broken cache: rm result_duke/temp/*.RData
 #   Resubmit: qsub duke_myriad_job.sh
 #
