@@ -755,11 +755,13 @@ if (file.exists(consensus_cache_path) && params$resume) {
       dna_stringset <- DNAStringSet(valid_seqs)
       
       # Generate consensus (suppress DECIPHER progress bars)
+      # IMPORTANT: Use threads = 1 inside parallel workers to avoid nested parallelisation
+      # The outer apply_fn() already parallelizes across clusters
       sink(tempfile())  # Redirect output
       consensus_result <- tryCatch({
         consensus_function(
           dna_stringset = dna_stringset,
-          threads = params$threads,
+          threads = 1,  # Force single-threaded (outer loop is parallelised)
           consensus_threshold = params$consensus_threshold,
           sample_size = params$consensus_downsample
         )
@@ -774,7 +776,8 @@ if (file.exists(consensus_cache_path) && params$resume) {
           left_seqs <- cluster_data$left[!is.na(cluster_data$left) & cluster_data$left != ""]
           if (length(left_seqs) > 0) {
             consensus_function(DNAStringSet(left_seqs), 
-                             threads = params$threads,
+                             threads = 1,  # Single-threaded (inside parallel worker)
+                             consensus_threshold = params$consensus_threshold,
                              sample_size = params$consensus_downsample)$consensus
           } else NA_character_
         } else NA_character_
@@ -785,7 +788,8 @@ if (file.exists(consensus_cache_path) && params$resume) {
           mid_seqs <- cluster_data$mid[!is.na(cluster_data$mid) & cluster_data$mid != ""]
           if (length(mid_seqs) > 0) {
             consensus_function(DNAStringSet(mid_seqs),
-                             threads = params$threads,
+                             threads = 1,  # Single-threaded (inside parallel worker)
+                             consensus_threshold = params$consensus_threshold,
                              sample_size = params$consensus_downsample)$consensus
           } else NA_character_
         } else NA_character_
@@ -796,7 +800,8 @@ if (file.exists(consensus_cache_path) && params$resume) {
           right_seqs <- cluster_data$right[!is.na(cluster_data$right) & cluster_data$right != ""]
           if (length(right_seqs) > 0) {
             consensus_function(DNAStringSet(right_seqs),
-                             threads = params$threads,
+                             threads = 1,  # Single-threaded (inside parallel worker)
+                             consensus_threshold = params$consensus_threshold,
                              sample_size = params$consensus_downsample)$consensus
           } else NA_character_
         } else NA_character_
