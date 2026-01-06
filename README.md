@@ -297,84 +297,184 @@ minimap2 --version
 
 ### Updating Duke from GitHub
 
-When bug fixes or new features are released, update your Duke installation:
+When bug fixes or new features are released, update your Duke installation.
 
-**If you have NO local modifications:**
+**🚨 TL;DR - Do This First:**
 ```bash
 cd ~/Scratch/bin/duke
-git pull origin main
+git status  # ALWAYS check this first!
+
+# If clean → git pull origin main
+# If modified files → see strategies below
 ```
 
-**If you have local modifications (e.g., edited duke_run.R):**
+---
+
+**⚠️ IMPORTANT: Always check for local changes before pulling!**
+
 ```bash
 cd ~/Scratch/bin/duke
 
-# Save your local changes temporarily
-git stash
-
-# Pull latest updates
-git pull origin main
-
-# Restore your local changes
-git stash pop
-
-# If there are conflicts, git will notify you
-# Edit the conflicting files to resolve, then:
-git add <conflicting_file>
-git stash drop
-```
-
-**Recommended workflow to avoid conflicts:**
-
-Keep your configuration separate from the Duke codebase:
-```bash
-cd ~/Scratch/bin/duke
-
-# Make a copy of your configuration
-cp duke_run.R ~/duke_run_MY_CONFIG.R
-
-# Now you can safely pull updates without stashing
-git pull origin main
-
-# After updates, copy your config back
-cp ~/duke_run_MY_CONFIG.R duke_run.R
-```
-
-**Check what version you have:**
-```bash
-cd ~/Scratch/bin/duke
-git log --oneline -5  # Show last 5 commits
-head -20 README.md | grep "Version"  # Check version in README
-```
-
-**Updating after bug fixes (e.g., v2.0.1):**
-```bash
-cd ~/Scratch/bin/duke
-
-# Check current status
+# Check if you have uncommitted changes
 git status
 
-# If you have uncommitted changes to config files only:
-git stash push duke_run.R -m "My config"
+# You'll see something like:
+# Changes not staged for commit:
+#   modified:   duke_myriad.sh
+#   modified:   duke_run.R
+```
 
-# Pull the bug fixes
+**Choose your strategy based on what `git status` shows:**
+
+---
+
+#### Strategy 1: You have NO local modifications (clean status)
+
+```bash
+cd ~/Scratch/bin/duke
+git status
+# Should show: "nothing to commit, working tree clean"
+
+# Safe to pull directly
 git pull origin main
+```
 
-# The following files should update automatically:
-# - lib/consensus.R (Module 4 fix)
-# - 06_range_analysis.Rmd (Module 6 fix)  
-# - README.md (updated documentation)
+---
 
-# Restore your config
+#### Strategy 2: You have local modifications you want to KEEP
+
+**Example:** You edited `duke_run.R` with your specific paths or changed job name in `duke_myriad.sh`
+
+```bash
+cd ~/Scratch/bin/duke
+git status
+# Shows: modified: duke_run.R, duke_myriad.sh
+
+# Option A: Stash (save temporarily)
+git stash save "My HPC configuration"
+git pull origin main
 git stash pop
 
-# Verify you have the fixes
-grep -n "includeNonLetters" lib/consensus.R
-# Should NOT appear (bug was removed)
-
-grep -n "openxlsx" 06_range_analysis.Rmd  
-# Should appear on line 23 (replaced writexl)
+# Option B: Backup manually (safer for important configs)
+cp duke_run.R ~/duke_run_BACKUP.R
+cp duke_myriad.sh ~/duke_myriad_BACKUP.sh
+git reset --hard HEAD
+git pull origin main
+cp ~/duke_run_BACKUP.R duke_run.R
+cp ~/duke_myriad_BACKUP.sh duke_myriad.sh
 ```
+
+---
+
+#### Strategy 3: You want to DISCARD local modifications
+
+**Example:** You made experimental changes and want a fresh start
+
+```bash
+cd ~/Scratch/bin/duke
+git status
+# Shows: modified: duke_myriad.sh
+
+# Discard ALL local changes (DESTRUCTIVE!)
+git reset --hard HEAD
+
+# Pull latest
+git pull origin main
+```
+
+---
+
+#### What to do if git pull fails with conflicts
+
+If you see:
+```
+error: Your local changes to the following files would be overwritten by merge:
+        duke_myriad.sh
+Please commit your changes or stash them before you merge.
+```
+
+**Solution:**
+```bash
+# See exactly what changed
+git diff duke_myriad.sh
+
+# If you want to keep your changes:
+git stash
+git pull origin main
+git stash pop
+# Manually resolve any conflicts
+
+# If you want to discard your changes:
+git checkout -- duke_myriad.sh
+git pull origin main
+```
+
+---
+
+**Common files you might have modified:**
+- `duke_run.R` - Your HPC data paths and parameters
+- `duke_myriad.sh` - Job name (`-N`), resources (`-pe smp`, `-l mem`)
+- `.gitignore` - Your personal exclusions
+
+**Recommended practice:** Keep a backup of your config outside the repo:
+```bash
+# Before any git operations
+cp duke_run.R ~/duke_config_backup.R
+cp duke_myriad.sh ~/duke_job_backup.sh
+
+# After pulling updates
+cp ~/duke_config_backup.R duke_run.R
+cp ~/duke_job_backup.sh duke_myriad.sh
+```
+
+---
+
+#### Quick Reference: Git Commands
+
+```bash
+# Check status
+git status
+
+# See what changed
+git diff
+
+# Discard changes to specific file
+git checkout -- duke_myriad.sh
+
+# Discard ALL changes (DESTRUCTIVE!)
+git reset --hard HEAD
+
+# Save changes temporarily
+git stash
+git stash pop
+
+# View stashed changes
+git stash list
+
+# Check version
+git log --oneline -5
+head -20 README.md | grep "Version"
+```
+
+#### Verifying Updates After Pull
+
+**Check you have the bug fixes (v2.0.1):**
+```bash
+cd ~/Scratch/bin/duke
+
+# Verify Module 4 fix (consensus bug)
+grep -n "includeNonLetters" lib/consensus.R
+# Should return nothing (bug was removed)
+
+# Verify Module 6 fix (openxlsx replacement)
+grep -n "openxlsx" 06_range_analysis.Rmd  
+# Should show line 23 (replaced writexl)
+
+# Check version
+head -30 README.md | grep "Version 2.0"
+```
+
+---
 
 ### Installing R Dependencies on HPC
 
