@@ -6,6 +6,7 @@
 
 # Exclude specific files
 duke_run_local.R
+duke_run_local-fs.R
 
 # Exclude specific folders
 /demo/
