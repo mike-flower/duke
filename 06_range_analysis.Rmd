@@ -1551,6 +1551,26 @@ instability_metrics_list <- lapply(analysis_range_names, function(my_range_name)
 instability_metrics <- bind_rows(instability_metrics_list) %>%
   relocate(file_stem, analysis_range_name, group, setpoint_type, setpoint_metric)
 
+# Add relative distribution statistics (modal, median, mean differences from setpoint)
+instability_metrics <- instability_metrics %>%
+  left_join(
+    distribution_summary %>% 
+      select(file_stem, analysis_range_name, 
+             modal_length, median_length, mean_length),
+    by = c("file_stem", "analysis_range_name")
+  ) %>%
+  mutate(
+    # Calculate differences from setpoint
+    modal_diff = modal_length - setpoint_repeat_length,
+    median_diff = median_length - setpoint_repeat_length,
+    mean_diff = mean_length - setpoint_repeat_length
+  ) %>%
+  # Reorder columns logically
+  relocate(file_stem, analysis_range_name, group, setpoint_type, setpoint_metric,
+           setpoint_repeat_length, 
+           modal_length, median_length, mean_length,
+           modal_diff, median_diff, mean_diff)
+
 message("\nInstability metrics calculated:")
 message("  Samples: ", length(unique(instability_metrics$file_stem)))
 message("  Ranges: ", length(unique(instability_metrics$analysis_range_name)))
@@ -1559,28 +1579,35 @@ message("  Setpoint metric: ", params$control_setpoint_metric)
 if (params$group_control) {
   message("  Control aggregation: ", params$control_aggregation_method)
 }
+message("  Includes relative distribution statistics: modal_diff, median_diff, mean_diff")
 ```
 
 ```{r instability_display, echo=FALSE}
 if (nrow(instability_metrics) > 0) {
   
-  # Display key columns
+  # Display key columns including new relative distribution statistics
   display_cols <- c("file_stem", "analysis_range_name", "setpoint_type", 
-                   "setpoint_repeat_length", "instability_index", "expansion_index", 
+                   "setpoint_repeat_length",
+                   "modal_diff", "median_diff", "mean_diff",
+                   "instability_index", "expansion_index", 
                    "contraction_index", "expansion_ratio", "z_score")
   
   caption_text <- if (params$group_control) {
-    paste0("Instability metrics (using ", params$control_setpoint_metric, 
+    paste0("Instability metrics with relative distribution statistics (using ", 
+           params$control_setpoint_metric, 
            " with ", params$control_aggregation_method, " of controls)")
   } else {
-    paste0("Instability metrics relative to sample (using ", params$control_setpoint_metric, ")")
+    paste0("Instability metrics with relative distribution statistics (using ", 
+           params$control_setpoint_metric, ")")
   }
   
   datatable(instability_metrics[, display_cols],
             options = list(pageLength = 15, scrollX = TRUE),
             caption = caption_text,
             rownames = FALSE) %>%
-    formatRound(columns = c('setpoint_repeat_length', 'instability_index', 'expansion_index',
+    formatRound(columns = c('setpoint_repeat_length', 
+                           'modal_diff', 'median_diff', 'mean_diff',
+                           'instability_index', 'expansion_index',
                            'contraction_index', 'expansion_ratio', 'z_score'),
                 digits = 2) %>%
     formatStyle(columns = display_cols, fontSize = '10px')
@@ -1589,14 +1616,28 @@ if (nrow(instability_metrics) > 0) {
 
 **Metrics explanation:**
 
-- **setpoint_type**: "sample" (sample's own metric value) or "control" (group control)
+**Relative Distribution Statistics** (new):
+
+- **modal_diff**: Difference between sample's modal_length and setpoint (modal - setpoint)
+- **median_diff**: Difference between sample's median_length and setpoint (median - setpoint)
+- **mean_diff**: Difference between sample's mean_length and setpoint (mean - setpoint)
+
+Positive values indicate expansion relative to setpoint, negative values indicate contraction.
+
+**Instability Metrics** (existing):
+
+- **setpoint_type**: "sample_relative" (sample's own metric value) or "control_relative" (group control)
 - **instability_index**: Mean absolute deviation from setpoint (weighted by read frequency)
 - **expansion_index**: Mean deviation for reads above setpoint
 - **contraction_index**: Mean deviation for reads below setpoint  
 - **expansion_ratio**: (reads above) / (reads at setpoint)
-- **z_score**: Standard deviations from control (control type only)
+- **z_score**: Standard deviations from control (control_relative only)
 
-All metrics calculated from actual read distribution, not summary statistics.
+**Key distinction:**
+- Relative distribution statistics measure the *shift* of the distribution from setpoint
+- Instability metrics measure the *spread* of the distribution around setpoint
+
+All metrics calculated from actual read distribution, not just summary statistics.
 
 ---
 

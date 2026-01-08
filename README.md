@@ -8,13 +8,13 @@ A modular pipeline for amplicon sequencing analysis with comprehensive repeat le
 - [Installation](#installation)
 - [File Structure](#file-structure)
 - [Run Analysis](#run-analysis)
-- [HPC Deployment](#hpc-deployment-eg-ucl-myriad)
-  - [Quick Start for First-Time Users](#quick-start-for-first-time-hpc-users)
-  - [Initial Setup](#initial-setup-on-myriad)
-  - [Updating Duke from GitHub](#updating-duke-from-github)
-  - [Installing R Dependencies](#installing-r-dependencies-on-hpc)
-  - [Configure Duke for HPC](#configure-duke-for-hpc)
-  - [Submit and Monitor Jobs](#submit-and-monitor-jobs)
+- [HPC Deployment](#hpc-deployment-myriad-kathleen-and-similar-clusters)
+  - [Choosing Your Cluster](#choosing-your-cluster)
+  - [Complete Setup Guide](#complete-setup-guide)
+  - [Critical Differences: Kathleen vs Myriad](#critical-differences-kathleen-vs-myriad)
+  - [Quick Reference](#quick-reference)
+  - [Expected Performance](#expected-performance)
+  - [Troubleshooting](#troubleshooting)
 - [Review Results](#review-results)
 
 **Configuration:**
@@ -153,599 +153,567 @@ All runs are automatically logged to `logs/TIMESTAMP/` directories.
 
 ---
 
-## HPC Deployment (e.g. UCL Myriad)
+---
 
-Duke can be deployed on HPC clusters for large datasets. This section covers setup, dependency installation, and job submission.
+## HPC Deployment (Myriad, Kathleen, and Similar Clusters)
 
-### Quick Start for First-Time HPC Users
+Duke Pipeline can be deployed on HPC clusters for large-scale analysis. This guide covers setup for UCL's Myriad and Kathleen clusters, but the principles apply to any HPC system using Grid Engine (SGE) or similar job schedulers.
 
-**Complete workflow from scratch to running job:**
+### Choosing Your Cluster
+
+| Cluster | Best For | Max Cores | Notes |
+|---------|----------|-----------|-------|
+| **Myriad** | Serial/threaded jobs, ≤500 samples | 36 | Shared nodes, TMPDIR available |
+| **Kathleen** | Parallel jobs, 1000+ samples | 40-120 | Exclusive nodes, **3-4× faster** for large datasets |
+
+**For 1000+ samples:** Use Kathleen with 80 cores (~15 hours vs ~52 hours on Myriad)
+
+---
+
+### Complete Setup Guide
+
+This guide walks through setting up Duke on an HPC cluster from scratch. Follow these steps in order.
+
+#### Step 1: Connect and Check Prerequisites
 
 ```bash
-# 1. Connect to Myriad
-ssh your_username@myriad.rc.ucl.ac.uk
+# Connect to your cluster
+ssh your_username@kathleen.rc.ucl.ac.uk  # or myriad.rc.ucl.ac.uk
 
-# 2. Verify prerequisites are available
+# Check current directory
+pwd  # Should be /home/your_username
+
+# Check prerequisites
 module purge
 module load r/recommended
 R --version  # Should show R 4.2.0+
+
 module load samtools/1.11/gnu-4.9.2
 samtools --version  # Should show samtools 1.11
-
-# 3. Set up directories and Duke pipeline
-cd ~/Scratch/bin
-git clone https://github.com/your_repo/duke_pipeline.git duke
-cd duke
-chmod +x duke_myriad.sh
-mkdir -p logs
-
-# To update Duke later (if already cloned):
-# git stash                 # Save local changes
-# git pull origin main      # Get updates
-# git stash pop             # Restore local changes
-
-# 4. Set up R environment
-echo 'export R_LIBS_USER=~/R/library' >> ~/.bashrc
-mkdir -p ~/R/library
-source ~/.bashrc
-
-# 5. Install minimap2
-cd ~/Scratch/bin
-git clone https://github.com/lh3/minimap2
-cd minimap2 && make
-echo 'export PATH=$HOME/Scratch/bin/minimap2:$PATH' >> ~/.bashrc
-source ~/.bashrc
-minimap2 --version  # Test it works
-
-# 6. Install R packages (see Installing R Dependencies section below)
-qrsh -l h_rt=2:00:00,mem=8G
-module load r/recommended
-R
-# ... follow R installation instructions ...
-quit(save = "no")
-exit  # Exit interactive session
-
-# 7. Configure Duke for your data
-cd ~/Scratch/bin/duke
-nano duke_run.R  # Edit paths to your HPC data
-
-# 8. Submit job
-qsub duke_myriad.sh
-
-# 9. Monitor progress
-qstat -u $USER  # Check if job is running
-tail -f logs/duke_job_<JOB_ID>.out  # Watch live output
 ```
 
-That's it! For detailed explanations of each step, see sections below.
+**Expected:** Both R and samtools load successfully
 
 ---
 
-### Initial Setup on Myriad
+#### Step 2: Create Directory Structure
 
-**1. Connect to Myriad and verify prerequisites:**
 ```bash
-# SSH to Myriad
-ssh your_username@myriad.rc.ucl.ac.uk
+# Create bin directory in Scratch (not backed up, but writable from compute nodes)
+mkdir -p ~/Scratch/bin
+cd ~/Scratch/bin
 
-# Verify R is available
-module purge
-module load r/recommended
-R --version
-# Should show R version 4.2.0 or higher
+# Create directory for Duke
+mkdir -p duke
+cd duke
 
-# Verify samtools is available
-module load samtools/1.11/gnu-4.9.2
-samtools --version
-# Should show samtools 1.11
+# Create subdirectories
+mkdir -p lib
+mkdir -p logs
+mkdir -p refs
+mkdir -p refs/adapters
 
-# Exit R if you started it
-# (press Ctrl+D or type q())
+# Verify structure
+ls -la
 ```
 
-**2. Transfer Duke to HPC:**
-```bash
-# Option A: Transfer from local machine
-# (run this from your LOCAL machine, not Myriad)
-scp -r duke_pipeline/ your_username@myriad.rc.ucl.ac.uk:~/Scratch/bin/
+**Result:** You now have `~/Scratch/bin/duke/` with subdirectories ready
 
-# Option B: Clone from GitHub repository
-# (run this ON Myriad after SSH)
+---
+
+#### Step 3: Transfer Duke Files
+
+**Option A: Clone from GitHub (if available)**
+
+```bash
 cd ~/Scratch/bin
 git clone https://github.com/your_repo/duke_pipeline.git duke
 cd duke
 ```
 
-**3. Make job script executable:**
+**Option B: Copy from Another Cluster (e.g., from Myriad to Kathleen)**
+
 ```bash
-cd ~/Scratch/bin/duke
-chmod +x duke_myriad.sh
-
-# Verify it's executable
-ls -lh duke_myriad.sh
-# Should show -rwxr-xr-x (note the 'x' for executable)
-```
-
-**4. Set up R library path:**
-```bash
-# Add to ~/.bashrc for persistence
-echo 'export R_LIBS_USER=~/R/library' >> ~/.bashrc
-source ~/.bashrc
-
-# Create R library directory
-mkdir -p ~/R/library
-```
-
-**5. Install minimap2 (not available as module on Myriad):**
-```bash
-# Navigate to bin directory
+# While logged into Kathleen
 cd ~/Scratch/bin
 
-# Download and compile minimap2
+# Copy entire duke directory from Myriad
+rsync -avz --progress your_username@myriad.rc.ucl.ac.uk:~/Scratch/bin/duke/ ./duke/
+
+# Enter password when prompted
+```
+
+**Option C: Upload from Local Machine**
+
+```bash
+# From your LOCAL machine (new terminal)
+cd /path/to/your/duke/files
+
+# Upload to cluster
+scp -r ./* your_username@kathleen.rc.ucl.ac.uk:~/Scratch/bin/duke/
+```
+
+**Verify files transferred:**
+
+```bash
+cd ~/Scratch/bin/duke
+ls -la
+
+# Should see:
+# - duke_run.R
+# - 01_import_and_qc.Rmd through 07_repeat_visualisation.Rmd
+# - lib/ directory
+# - duke_myriad.sh or duke_kathleen.sh (job script)
+```
+
+---
+
+#### Step 4: Install minimap2
+
+```bash
+cd ~/Scratch/bin
+
+# Clone minimap2 from GitHub
 git clone https://github.com/lh3/minimap2
+
+# Compile (takes 2-3 minutes)
 cd minimap2
 make
 
-# Add to PATH (add to ~/.bashrc for persistence)
+# Test it compiled successfully
+./minimap2 --version
+# Should show: 2.28-r1209 (or similar)
+
+# Add to PATH for this session
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+
+# Test PATH
+which minimap2
+# Should show: /scratch/scratch/your_username/bin/minimap2/minimap2
+
+# Make PATH permanent (add to .bashrc)
 echo 'export PATH=$HOME/Scratch/bin/minimap2:$PATH' >> ~/.bashrc
 source ~/.bashrc
-
-# Test installation
-minimap2 --version
-# Should show: 2.xx-rxxx
 ```
 
-### Updating Duke from GitHub
-
-When bug fixes or new features are released, update your Duke installation.
-
-**🚨 TL;DR - Do This First:**
-```bash
-cd ~/Scratch/bin/duke
-git status  # ALWAYS check this first!
-
-# If clean → git pull origin main
-# If modified files → see strategies below
-```
+**Result:** minimap2 is compiled and available
 
 ---
 
-**⚠️ IMPORTANT: Always check for local changes before pulling!**
+#### Step 5: Set Up R Package Library
 
 ```bash
-cd ~/Scratch/bin/duke
+# Create R library directory
+mkdir -p ~/R/library
 
-# Check if you have uncommitted changes
-git status
+# Set R library path (add to .bashrc)
+echo 'export R_LIBS_USER=~/R/library' >> ~/.bashrc
+source ~/.bashrc
 
-# You'll see something like:
-# Changes not staged for commit:
-#   modified:   duke_myriad.sh
-#   modified:   duke_run.R
+# Also create .Renviron file for R sessions
+echo 'R_LIBS_USER=~/R/library' > ~/.Renviron
 ```
 
-**Choose your strategy based on what `git status` shows:**
+**Result:** R will use your personal library in `~/R/library`
 
 ---
 
-#### Strategy 1: You have NO local modifications (clean status)
+#### Step 6: Install R Packages
+
+**Important:** This takes 15-20 minutes. Do it in an interactive session for reliability.
 
 ```bash
-cd ~/Scratch/bin/duke
-git status
-# Should show: "nothing to commit, working tree clean"
-
-# Safe to pull directly
-git pull origin main
-```
-
----
-
-#### Strategy 2: You have local modifications you want to KEEP
-
-**Example:** You edited `duke_run.R` with your specific paths or changed job name in `duke_myriad.sh`
-
-```bash
-cd ~/Scratch/bin/duke
-git status
-# Shows: modified: duke_run.R, duke_myriad.sh
-
-# Option A: Stash (save temporarily)
-git stash save "My HPC configuration"
-git pull origin main
-git stash pop
-
-# Option B: Backup manually (safer for important configs)
-cp duke_run.R ~/duke_run_BACKUP.R
-cp duke_myriad.sh ~/duke_myriad_BACKUP.sh
-git reset --hard HEAD
-git pull origin main
-cp ~/duke_run_BACKUP.R duke_run.R
-cp ~/duke_myriad_BACKUP.sh duke_myriad.sh
-```
-
----
-
-#### Strategy 3: You want to DISCARD local modifications
-
-**Example:** You made experimental changes and want a fresh start
-
-```bash
-cd ~/Scratch/bin/duke
-git status
-# Shows: modified: duke_myriad.sh
-
-# Discard ALL local changes (DESTRUCTIVE!)
-git reset --hard HEAD
-
-# Pull latest
-git pull origin main
-```
-
----
-
-#### What to do if git pull fails with conflicts
-
-If you see:
-```
-error: Your local changes to the following files would be overwritten by merge:
-        duke_myriad.sh
-Please commit your changes or stash them before you merge.
-```
-
-**Solution:**
-```bash
-# See exactly what changed
-git diff duke_myriad.sh
-
-# If you want to keep your changes:
-git stash
-git pull origin main
-git stash pop
-# Manually resolve any conflicts
-
-# If you want to discard your changes:
-git checkout -- duke_myriad.sh
-git pull origin main
-```
-
----
-
-**Common files you might have modified:**
-- `duke_run.R` - Your HPC data paths and parameters
-- `duke_myriad.sh` - Job name (`-N`), resources (`-pe smp`, `-l mem`)
-- `.gitignore` - Your personal exclusions
-
-**Recommended practice:** Keep a backup of your config outside the repo:
-```bash
-# Before any git operations
-cp duke_run.R ~/duke_config_backup.R
-cp duke_myriad.sh ~/duke_job_backup.sh
-
-# After pulling updates
-cp ~/duke_config_backup.R duke_run.R
-cp ~/duke_job_backup.sh duke_myriad.sh
-```
-
----
-
-#### Quick Reference: Git Commands
-
-```bash
-# Check status
-git status
-
-# See what changed
-git diff
-
-# Discard changes to specific file
-git checkout -- duke_myriad.sh
-
-# Discard ALL changes (DESTRUCTIVE!)
-git reset --hard HEAD
-
-# Save changes temporarily
-git stash
-git stash pop
-
-# View stashed changes
-git stash list
-
-# Check version
-git log --oneline -5
-head -20 README.md | grep "Version"
-```
-
-#### Verifying Updates After Pull
-
-**Check you have the bug fixes (v2.0.1):**
-```bash
-cd ~/Scratch/bin/duke
-
-# Verify Module 4 fix (consensus bug)
-grep -n "includeNonLetters" lib/consensus.R
-# Should return nothing (bug was removed)
-
-# Verify Module 6 fix (openxlsx replacement)
-grep -n "openxlsx" 06_range_analysis.Rmd  
-# Should show line 23 (replaced writexl)
-
-# Check version
-head -30 README.md | grep "Version 2.0"
-```
-
----
-
-### Installing R Dependencies on HPC
-
-Load R and install packages in an interactive session:
-
-```bash
-# Request interactive node with more resources for installation
+# Request interactive session with more resources
 qrsh -l h_rt=2:00:00,mem=8G
 
-# Load R
+# Once in interactive session, load R
+module purge
 module load r/recommended
+
+# Start R
 R
 ```
 
-Then in R:
+**In R, run:**
+
 ```r
-# Set library path
-.libPaths("~/R/library")
+# Verify library path
+.libPaths()
+# Should show ~/R/library first
 
 # Install CRAN packages
-install.packages(c("tidyverse", "data.table", "dplyr", "tidyr", "stringr", 
-                   "tibble", "readxl", "plyr", "ggplot2", "ggrepel", 
-                   "ggridges", "ggnewscale", "scales", "RColorBrewer", 
-                   "viridisLite", "cowplot", "rmarkdown", "knitr", 
-                   "kableExtra", "DT", "htmltools", "openxlsx", "mclust", 
-                   "cluster", "ineq", "moments", "pracma", "pbapply", 
-                   "pbmcapply"),
-                repos = "https://cloud.r-project.org")
+packages <- c(
+  "rmarkdown", "knitr", "dplyr", "tidyr", "ggplot2", "readr", 
+  "stringr", "purrr", "DT", "plotly", "scales", "RColorBrewer", 
+  "viridis", "ggridges", "writexl", "openxlsx"
+)
+
+install.packages(packages, lib = "~/R/library", repos = "https://cloud.r-project.org")
+
+# Install BiocManager
+install.packages("BiocManager", lib = "~/R/library", repos = "https://cloud.r-project.org")
 
 # Install Bioconductor packages
-if (!require("BiocManager", quietly = TRUE))
-    install.packages("BiocManager", repos = "https://cloud.r-project.org")
+BiocManager::install(c("Biostrings", "GenomicAlignments", "GenomicRanges", 
+                       "IRanges", "Rsamtools", "ShortRead"),
+                     lib = "~/R/library", update = FALSE, ask = FALSE)
 
-BiocManager::install(c("Biostrings", "ShortRead", "GenomicAlignments", 
-                       "Rsamtools", "DECIPHER"))
+# Verify all packages load
+test_packages <- c("rmarkdown", "dplyr", "Biostrings", "GenomicAlignments", "Rsamtools")
 
-# Verify installation
-required_cran <- c("tidyverse", "data.table", "dplyr", "tidyr", "stringr", 
-                   "tibble", "readxl", "plyr", "ggplot2", "ggrepel", 
-                   "ggridges", "ggnewscale", "scales", "RColorBrewer", 
-                   "viridisLite", "cowplot", "rmarkdown", "knitr", 
-                   "kableExtra", "DT", "htmltools", "openxlsx", "mclust", 
-                   "cluster", "ineq", "moments", "pracma", "pbapply", 
-                   "pbmcapply")
-
-required_bioc <- c("Biostrings", "ShortRead", "GenomicAlignments", 
-                   "Rsamtools", "DECIPHER")
-
-missing_cran <- required_cran[!sapply(required_cran, requireNamespace, quietly = TRUE)]
-missing_bioc <- required_bioc[!sapply(required_bioc, requireNamespace, quietly = TRUE)]
-
-if (length(missing_cran) == 0 && length(missing_bioc) == 0) {
-  cat("✓ All packages installed successfully!\n")
-} else {
-  cat("Missing packages:\n")
-  print(c(missing_cran, missing_bioc))
+for (pkg in test_packages) {
+  tryCatch({
+    library(pkg, character.only = TRUE)
+    cat("✅", pkg, "\n")
+  }, error = function(e) {
+    cat("❌", pkg, "FAILED\n")
+  })
 }
 
-quit(save = "no")
+# If all show ✅, you're ready!
+q()  # Quit R (save workspace: n)
 ```
 
-### Configure Duke for HPC
+**Exit interactive session:**
 
-**1. Edit `duke_run.R` with your HPC paths:**
+```bash
+exit  # Returns to login node
+```
+
+**Result:** All R packages installed and working
+
+---
+
+#### Step 7: Configure Duke for Your Data
+
+```bash
+cd ~/Scratch/bin/duke
+
+# Edit duke_run.R
+nano duke_run.R
+```
+
+**Key parameters to set:**
+
 ```r
-# duke_run.R is configured for HPC - edit with your Myriad paths
-params$dir_data <- "~/Scratch/data/your_project/fastq_files"
-params$dir_out <- "~/Scratch/data/your_project/result_duke"
-params$path_ref <- "~/Scratch/data/your_project/reference.fasta"
-params$path_settings <- "~/Scratch/data/your_project/settings.xlsx"
+# Find these lines and update:
 
-# Match threads to job script
-params$threads <- 6
+# Line ~46: Data directory
+dir_data = "/home/your_username/Scratch/data/your_project/data",
 
-# Enable for large datasets
-params$remove_intermediate <- TRUE
-params$cleanup_temp <- FALSE  # Keep for debugging, enable later
+# Line ~47: Output directory  
+dir_out = "/home/your_username/Scratch/data/your_project/result_duke",
+
+# Line ~49: Reference sequence
+path_ref = "/home/your_username/Scratch/refs/HTTset20/HTTset20.fasta",
+
+# Line ~324: Thread count (MUST match job script!)
+threads = 80,  # For Kathleen 80-core job
+# OR
+threads = 36,  # For Myriad 36-core job
 ```
 
-**Note:** Keep your local development paths in `duke_run_local.R` (add to `.gitignore`). This way `duke_run.R` always has HPC paths and won't conflict with git updates.
+**Save:** Ctrl+O, Enter, Ctrl+X
 
-**2. Verify job submission script (`duke_myriad.sh`):**
+---
 
-The included `duke_myriad.sh` template should work as-is. Key parameters to check:
-```bash
-#$ -N duke_pipeline          # Job name (customize per run)
-#$ -wd ~/Scratch/bin/duke    # Working directory
-#$ -l h_rt=24:00:00          # 24 hour walltime
-#$ -pe smp 6                 # 6 CPU cores (MUST match params$threads)
-#$ -l mem=8G                 # 8GB per CPU (48GB total)
-#$ -l tmpfs=50G              # Temp space for BAM files
-```
+#### Step 8: Upload/Create Job Script
 
-**IMPORTANT:** The `-pe smp` value MUST match `params$threads` in `duke_run.R`!
+**For Kathleen (80 cores, recommended for 1000+ samples):**
 
-**3. Create logs directory:**
 ```bash
 cd ~/Scratch/bin/duke
-mkdir -p logs
+
+# Create job script
+nano duke_kathleen.sh
 ```
 
-**4. Verify setup is complete:**
-
-Before submitting your first job, check that everything is ready:
+**Paste this content:**
 
 ```bash
-# Checklist - run these commands and verify output
+#!/bin/bash -l
+#$ -S /bin/bash
+#$ -N duke_kathleen
+#$ -wd /home/your_username/Scratch/bin/duke
+#$ -o logs/kathleen_$JOB_ID.out
+#$ -e logs/kathleen_$JOB_ID.err
+#$ -l h_rt=48:00:00
+#$ -pe smp 80
+#$ -l mem=2G
+#$ -M your.email@ucl.ac.uk
+#$ -m bea
+
 module purge
-module load r/recommended && R --version          # ✓ R 4.2.0+
-module load samtools/1.11/gnu-4.9.2 && samtools --version  # ✓ samtools 1.11
-minimap2 --version                                 # ✓ minimap2 2.xx
-ls -lh ~/Scratch/bin/duke/duke_myriad.sh          # ✓ -rwxr-xr-x (executable)
-ls -d ~/Scratch/bin/duke/logs                     # ✓ Directory exists
-ls ~/R/library | head -5                          # ✓ R packages installed
+module load r/recommended
+module load samtools/1.11/gnu-4.9.2
 
-# Test R package installation
-R --quiet --no-save << 'EOF'
-.libPaths("~/R/library")
-required <- c("Biostrings", "DECIPHER", "dplyr", "ggplot2", "openxlsx")
-missing <- required[!sapply(required, requireNamespace, quietly = TRUE)]
-if (length(missing) == 0) {
-  cat("✓ All key packages available\n")
-} else {
-  cat("✗ Missing packages:", paste(missing, collapse = ", "), "\n")
-}
-EOF
+export R_LIBS_USER=~/R/library
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+
+cd ~/Scratch/bin/duke
+Rscript duke_run.R
 ```
 
-If all checks pass (✓), you're ready to submit jobs!
+**For Myriad (36 cores, for ≤500 samples):**
 
-### Submit and Monitor Jobs
+```bash
+#!/bin/bash -l
+#$ -S /bin/bash
+#$ -N duke_myriad
+#$ -wd /home/your_username/Scratch/bin/duke
+#$ -o logs/myriad_$JOB_ID.out
+#$ -e logs/myriad_$JOB_ID.err
+#$ -l h_rt=72:00:00
+#$ -pe smp 36
+#$ -l mem=8G
+#$ -l tmpfs=150G
+#$ -M your.email@ucl.ac.uk
+#$ -m bea
 
-**Submit job:**
+module purge
+module load r/recommended
+module load samtools/1.11/gnu-4.9.2
+
+export R_LIBS_USER=~/R/library
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+
+cd ~/Scratch/bin/duke
+Rscript duke_run.R
+```
+
+**Make executable:**
+
+```bash
+chmod +x duke_kathleen.sh  # or duke_myriad.sh
+```
+
+---
+
+#### Step 9: Submit Job
+
 ```bash
 cd ~/Scratch/bin/duke
-qsub duke_myriad.sh
+
+# Submit to queue
+qsub duke_kathleen.sh  # or qsub duke_myriad.sh
+
+# Note the job ID
+# Your job 123456 ("duke_kathleen") has been submitted
 ```
 
-You'll see output like:
-```
-Your job 1234567 ("duke_pb_HTT_6c_24h") has been submitted
-```
+---
 
-Note the **job ID** (1234567 in this example) - you'll need it for monitoring.
+#### Step 10: Monitor Job
 
-**Monitor job status:**
 ```bash
-# Check if job is running/queued
+# Check job status
 qstat -u $USER
 
-# Example output:
-# job-ID  prior   name       user   state  submit/start at     queue
-# 1234567 0.50500 duke_pb_HT skgtmd r      01/06/2026 10:30:00 main.q@node-x-y-z
-
-# State codes:
+# States:
 # qw = queued, waiting
 # r  = running
-# Eqw = error state
-# (empty) = completed
+# Eqw = error
 
-# Get detailed job information
-qstat -j 1234567
+# Watch live output
+tail -f logs/kathleen_123456.out  # Replace with your job ID
 
-# Watch output in real-time (replace 1234567 with your job ID)
-tail -f logs/duke_job_1234567.out
+# Check progress
+ls result_duke/module_data/*.RData | wc -l  # Count completed modules
 
-# Check for errors
-tail -f logs/duke_job_1234567.err
-
-# Check how long job has been running
-qstat -u $USER | grep duke
-```
-
-**While job is running:**
-```bash
-# Duke also creates its own log with timestamps
-# Find the latest log directory
-ls -lt ~/Scratch/data/your_project/result_duke/logs/
-
-# Watch Duke's internal log
-tail -f ~/Scratch/data/your_project/result_duke/logs/20260106_103000/20260106_103000_duke_run.log
-```
-
-**After job completes (disappears from qstat):**
-```bash
-# Check exit status in job output
-tail logs/duke_job_1234567.out
-# Look for "Duke Pipeline Job Completed" message
-
-# Check for errors
-cat logs/duke_job_1234567.err
-
-# Verify results exist
-ls -lh ~/Scratch/data/your_project/result_duke/
-
-# Check module completion (should see 7 .RData files if all modules ran)
-ls -lh ~/Scratch/data/your_project/result_duke/module_data/*.RData
-
-# Check HTML reports (7 files)
-ls -lh ~/Scratch/data/your_project/result_duke/*.html
-
-# Download results to local machine (run from LOCAL machine):
-scp -r your_username@myriad.rc.ucl.ac.uk:~/Scratch/data/your_project/result_duke ./
-```
-
-**Cancel job if needed:**
-```bash
-qdel 1234567  # Replace with your job ID
-```
-
-### HPC Resource Guidelines
-
-Match resources to your dataset size:
-
-| Dataset | Samples | Reads/Sample | Walltime | CPUs | Memory | Temp |
-|---------|---------|--------------|----------|------|--------|------|
-| Small | 1-5 | <50K | 12h | 2 | 4GB | 20GB |
-| Medium | 5-20 | 50-200K | 24h | 4 | 8GB | 50GB |
-| Large | 20-50 | 200K-1M | 48h | 8 | 16GB | 100GB |
-| Very Large | 50+ | >1M | 72h | 16 | 32GB | 200GB |
-
-**Important:** Match `-pe smp N` in job script to `params$threads = N` in R script!
-
-### HPC Troubleshooting
-
-**Job fails immediately:**
-```bash
-cat logs/duke_job_<JOB_ID>.err
-# Check module loading and file paths
-```
-
-**Job runs but Duke fails:**
-```bash
-# Check Duke log
-cat logs/<TIMESTAMP>/<TIMESTAMP>_duke_run.log
-
-# Check intermediate files
-ls -lh ~/Scratch/data/your_project/result_duke/module_data/
-```
-
-**Out of memory:**
-- Increase: `-l mem=16G` in job script
-- Enable: `remove_intermediate = TRUE` in R script
-
-**Out of temp space:**
-- Increase: `-l tmpfs=100G` in job script
-
-**Resume from failure:**
-```r
-# Set in duke_run.R
-params$resume <- TRUE
-
-# Delete problematic cache files
-rm ~/Scratch/data/your_project/result_duke/temp/*.RData
-
-# Resubmit
-qsub duke_myriad.sh
+# Check errors (if any)
+tail logs/kathleen_123456.err
 ```
 
 ---
 
-### Review Results
+### Critical Differences: Kathleen vs Myriad
 
-Check `dir_out` for:
-- **HTML reports**: `01_import_and_qc.html` through `07_repeat_visualisation.html`
-- **Module directories**: Organised by analysis type
-- **Excel files**: QC metrics, alignments, variants, range analysis
-- **VCF files**: `04_allele_calling/variants/`
+| Feature | Myriad | Kathleen | Important! |
+|---------|--------|----------|------------|
+| **Cores** | Up to 36 | **40, 80, 120** | Use multiples of 40 on Kathleen |
+| **TMPDIR** | `-l tmpfs=150G` ✅ | **NOT SUPPORTED** ❌ | Remove tmpfs line for Kathleen! |
+| **Node sharing** | Shared | Exclusive (no sharing) | - |
+| **Hostname** | myriad.rc.ucl.ac.uk | kathleen.rc.ucl.ac.uk | Different login |
+| **Performance (1000 samples)** | ~18 hrs (36 cores) | **~15 hrs (80 cores)** | 20% faster |
+
+**⚠️ Critical for Kathleen:**
+1. Remove `-l tmpfs=` from job script (will error otherwise!)
+2. Use multiples of 40 cores (40, 80, 120, etc.)
+3. Match `threads` in duke_run.R to cores in job script
 
 ---
 
+### Quick Reference
+
+**Essential Commands:**
+
+```bash
+# Submit job
+qsub duke_kathleen.sh
+
+# Check status
+qstat -u $USER
+
+# Watch output
+tail -f logs/kathleen_*.out
+
+# Delete job
+qdel 123456
+
+# Job details
+qstat -j 123456
+
+# After completion
+qacct -j 123456
+```
+
+**File Locations:**
+
+```bash
+# Duke installation
+~/Scratch/bin/duke/
+
+# Results (not backed up!)
+~/Scratch/bin/duke/result_duke/
+
+# Backed up storage (Kathleen only)
+~/ACFS/
+
+# Job logs
+~/Scratch/bin/duke/logs/
+```
+
+**Important Parameters:**
+
+```bash
+# In job script:
+#$ -pe smp 80           # Cores (40, 80, 120 for Kathleen; up to 36 for Myriad)
+#$ -l mem=2G            # Memory per core (2-8G typical)
+#$ -l h_rt=48:00:00     # Walltime (format: hours:minutes:seconds)
+
+# In duke_run.R:
+threads = 80            # MUST match job script cores!
+```
+
+---
+
+### Expected Performance
+
+**For 1000 samples:**
+
+| Module | Myriad (36c) | Kathleen (80c) | Notes |
+|--------|--------------|----------------|-------|
+| Module 1 | ~1.5 hrs | ~1 hr | Import & QC |
+| Module 2 | ~10 hrs | ~8 hrs | Alignment (minimap2) |
+| **Module 3** | **~15 min** | **~5 min** | Repeat detection (highly parallel!) |
+| Module 4 | ~7 hrs | ~6 hrs | Allele calling |
+| Modules 5-7 | ~30 min | ~30 min | Visualisation |
+| **Total** | **~18 hrs** | **~15 hrs** | **20% faster on Kathleen** |
+
+---
+
+### Troubleshooting
+
+**Problem:** Job stays in `qw` (queued) state
+- **Normal:** Queue times vary (15 min - 2 hours typical)
+- **Check:** `qstat -j 123456` for error messages
+- **Solution:** Wait, or reduce cores if urgent
+
+**Problem:** Job fails immediately (`Eqw` state)
+- **Check:** `cat logs/kathleen_*.err` for error message
+- **Common causes:**
+  - tmpfs requested on Kathleen (remove `-l tmpfs=` line)
+  - Module not found (check `module purge` then `module load` in job script)
+  - R packages missing (re-run R package installation)
+
+**Problem:** "Package 'XXX' not found"
+- **Solution:** Re-install R packages (see Step 6)
+- **Check:** `R -e "library(XXX)"` loads successfully
+
+**Problem:** "minimap2: command not found"
+- **Check:** `which minimap2` shows path
+- **Solution:** Add to PATH in job script: `export PATH=$HOME/Scratch/bin/minimap2:$PATH`
+
+**Problem:** Job exceeds walltime
+- **Solution:** Increase `-l h_rt=` in job script, or use resume (Duke automatically resumes from completed modules)
+
+**Problem:** Out of memory
+- **Solution:** Increase `-l mem=` per core in job script (e.g., 2G → 4G)
+
+---
+
+### Updating Duke from GitHub
+
+If Duke is already installed and you want to update:
+
+```bash
+cd ~/Scratch/bin/duke
+
+# Save local changes
+git stash
+
+# Get updates
+git pull origin main
+
+# Restore local changes
+git stash pop
+
+# Resolve any conflicts if needed
+```
+
+---
+
+### Backup Results
+
+**Kathleen has ACFS (backed up storage):**
+
+```bash
+# After job completes, backup to ACFS
+mkdir -p ~/ACFS/duke_results_$(date +%Y%m%d)
+
+# Copy key results
+cp -r result_duke/module_data ~/ACFS/duke_results_$(date +%Y%m%d)/
+cp -r result_duke/*.html ~/ACFS/duke_results_$(date +%Y%m%d)/
+cp result_duke/06_range_analysis/range_analysis.xlsx ~/ACFS/duke_results_$(date +%Y%m%d)/
+```
+
+**Myriad - manually download important results:**
+
+```bash
+# From your local machine
+scp -r your_username@myriad.rc.ucl.ac.uk:~/Scratch/bin/duke/result_duke ./
+```
+
+---
+
+### Summary Checklist
+
+**Before first job submission:**
+- [ ] Connected to cluster (SSH)
+- [ ] Created `~/Scratch/bin/duke/` directory structure
+- [ ] Transferred Duke files
+- [ ] Compiled minimap2 and added to PATH
+- [ ] Created `~/R/library` and installed all packages
+- [ ] Updated `duke_run.R` with correct paths
+- [ ] Updated `threads` in duke_run.R to match job script
+- [ ] Created job script (duke_kathleen.sh or duke_myriad.sh)
+- [ ] Removed `-l tmpfs=` from Kathleen job script
+- [ ] Made job script executable (`chmod +x`)
+- [ ] Created `logs/` directory
+
+**After submission:**
+- [ ] Job ID noted
+- [ ] Monitoring with `qstat -u $USER`
+- [ ] Watching logs with `tail -f logs/*.out`
+
+**After completion:**
+- [ ] All 7 modules completed successfully
+- [ ] Results backed up (ACFS or local download)
+- [ ] Large intermediate files cleaned up (optional)
+
+**You're ready to run Duke on HPC!** 🚀
+
+---
 ## Essential Parameters
 
 Duke has **55 configurable parameters**. Here are the most important:

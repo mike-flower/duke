@@ -161,7 +161,9 @@ for (sample in unique(waterfall_data$file_stem)) {
     total_reads = sample_total
   )
   
-  print(p)
+  # Don't print to HTML (would make file huge with many samples)
+  # Just save to file and show message
+  message("  → Saved waterfall plot")
   
   # Export
   ggsave(
@@ -237,7 +239,9 @@ if (params$waterfall_per_cluster) {
                              cluster_total, "in cluster", clust, 
                              paste0("(", sample_total, " total in sample)")))
       
-      print(p_cluster)
+      # Don't print to HTML (would make file huge)
+      # Just save to file
+      message("    → Saved cluster waterfall plot")
       
       # Export
       ggsave(

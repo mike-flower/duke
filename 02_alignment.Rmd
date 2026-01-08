@@ -893,7 +893,8 @@ if (params$visualise_alignment) {
     )
     
     if (!is.null(p)) {
-      print(p)
+      # Don't print to HTML (would make file huge with many samples)
+      # Just save to file
       
       # Export coverage plot
       ggsave(
@@ -907,7 +908,7 @@ if (params$visualise_alignment) {
     }
   }
   
-  message("Coverage plots exported to: ", plots_dir)
+  message("Coverage plots exported to: ", coverage_by_sample_dir)
 }
 ```
 

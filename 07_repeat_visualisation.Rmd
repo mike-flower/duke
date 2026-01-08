@@ -221,7 +221,8 @@ if (params$repeat_histogram) {
       base_text_size = 14
     )
     
-    print(p_full)
+    # Don't print to HTML (would make file huge with many samples)
+    # Just save to file
     
     ggsave(file.path(hist_by_sample_dir, 
                     paste0(my_sample, "-histogram-full.png")),
@@ -277,7 +278,8 @@ if (params$repeat_histogram) {
         base_text_size = 14
       )
       
-      print(p_range)
+      # Don't print to HTML (would make file huge)
+      # Just save to file
       
       ggsave(file.path(hist_by_sample_dir, 
                       paste0(my_sample, "-histogram-", my_range, ".png")),
@@ -424,7 +426,8 @@ if (params$repeat_scatter) {
       base_text_size = 14
     )
     
-    print(p_sample_scatter)
+    # Don't print to HTML (would make file huge with many samples)
+    # Just save to file
     
     ggsave(file.path(scatter_by_sample_dir,
                     paste0(my_sample, "-scatter.png")),

@@ -108,30 +108,37 @@ Search for repeat tracts in the mid sequence (between left and right flanks).
 | Max gap between repeats | `r params$rpt_max_gap` |
 | Return option | `r params$rpt_return_option` |
 
-```{r find_repeat_tracts, echo=FALSE}
-message("Finding repeat tracts in mid sequences...")
+```{r repeat_detection, echo=FALSE}
+message("Processing per sample: find tracts → reposition → count")
+message("")
 
-# Check for overall cached results first
-tract_cache_path <- file.path(temp_dir, "03_repeat_tracts.RData")
+# Check for cached alignment_counts (combined from all samples)
+alignment_counts_cache <- file.path(temp_dir, "03_alignment_counts.RData")
 
-if (params$resume && file.exists(tract_cache_path)) {
-  message("Loading cached repeat tract results...")
-  load(tract_cache_path)
+if (params$resume && file.exists(alignment_counts_cache)) {
+  message("✓ Loading cached alignment counts...")
+  load(alignment_counts_cache)  # Loads 'alignment_counts'
+  message("  Loaded ", format(nrow(alignment_counts), big.mark = ","), " reads from ", 
+          length(unique(alignment_counts$file_stem)), " samples")
   
 } else {
-  # No overall cache - process with apply_fn (parallelisation + per-sample caching)
-  message("Processing repeat tracts with parallelisation...")
+  message("Processing all samples with full parallelisation...")
   
   # Get sample names
   samples <- unique(alignment_split$file_stem)
-  file_stem_vector <- setNames(samples, samples)
+  n_samples <- length(samples)
+  message("  Samples: ", n_samples)
+  message("  Threads: ", params$threads)
+  message("")
   
-  # Apply find_repeat_tracts_sample to each sample using apply_fn
-  repeat_tracts_list <- apply_fn(
-    file_stem_vector,
-    find_repeat_tracts_sample,
+  # Process each sample through ALL three steps (parallelised)
+  # - Find repeat tracts
+  # - Reposition segments
+  # - Count repeats
+  alignment_counts_list <- apply_fn(
+    samples,
+    process_sample_repeat_detection,
     alignment_split = alignment_split,
-    sequence_column = "mid",
     pattern = params$rpt_pattern,
     min_repeats = params$rpt_min_repeats,
     max_mismatch = params$rpt_max_mismatch,
@@ -140,42 +147,77 @@ if (params$resume && file.exists(tract_cache_path)) {
     max_gap = params$rpt_max_gap,
     max_tract_gap = params$rpt_max_tract_gap,
     return_option = params$rpt_return_option,
+    repeat_count_method = params$repeat_count_method,
+    round_digits = params$repeat_count_round_digits,
     out_dir = temp_dir,
     resume = params$resume
   )
   
   # Extract results
-  repeat_tracts_list <- extract_apply_fn_result(repeat_tracts_list)
+  alignment_counts_list <- extract_apply_fn_result(alignment_counts_list)
   
   # Combine all samples
-  alignment_repeats <- bind_rows(repeat_tracts_list)
+  message("Combining results from all samples...")
+  alignment_counts <- bind_rows(alignment_counts_list)
   
-  # Save overall cache
-  save(alignment_repeats, file = tract_cache_path)
-  message("Saved overall cache: ", tract_cache_path)
+  # Save cache for alignment_counts
+  save(alignment_counts, file = alignment_counts_cache)
+  message("✓ Saved cache: ", basename(alignment_counts_cache))
 }
 
-message("Repeat tract detection complete!")
-message("  Total reads processed: ", format(nrow(alignment_repeats), big.mark = ","))
+message("")
+message("Processing complete. Generating summaries and visualisations...")
+message("")
+
+# Handle reads where no repeat tract was found
+n_na <- sum(is.na(alignment_counts$repeat_count))
+
+if (n_na > 0) {
+  na_rate <- n_na / nrow(alignment_counts)
+  message("  Reads without detectable repeats: ", format(n_na, big.mark = ","), 
+          " (", round(100 * na_rate, 1), "%)")
+  
+  # Handle based on params$na_repeat_handling
+  if (!is.null(params$na_repeat_handling)) {
+    if (params$na_repeat_handling == "convert_to_zero") {
+      alignment_counts <- alignment_counts %>%
+        mutate(
+          repeat_count = tidyr::replace_na(repeat_count, 0),
+          repeat_count_full = tidyr::replace_na(repeat_count_full, 0),
+          repeat_count_match = tidyr::replace_na(repeat_count_match, 0)
+        )
+      message("  → Converted NA to 0 (na_repeat_handling = 'convert_to_zero')")
+    } else if (params$na_repeat_handling == "filter") {
+      n_before <- nrow(alignment_counts)
+      alignment_counts <- alignment_counts %>%
+        filter(!is.na(repeat_count))
+      n_after <- nrow(alignment_counts)
+      message("  → Filtered out ", format(n_before - n_after, big.mark = ","), 
+              " reads (na_repeat_handling = 'filter')")
+    }
+  }
+}
 ```
 
-## Detection rates
+## Detection Summary
 
-```{r repeat_tract_summary, echo=FALSE}
-# Summarise repeat tract detection
-tract_summary <- alignment_repeats %>%
+```{r repeat_detection_summary, echo=FALSE}
+# Summary statistics by sample
+tract_summary <- alignment_counts %>%
   group_by(file_stem) %>%
-  dplyr::summarise(
+  summarise(
     total_reads = n(),
-    reads_with_tract = sum(!is.na(mid_pattern_start)),
-    reads_without_tract = sum(is.na(mid_pattern_start)),
-    detection_rate = mean(!is.na(mid_pattern_start)),
+    reads_with_repeat = sum(!is.na(repeat_count) & repeat_count > 0),
+    reads_without_repeat = sum(is.na(repeat_count) | repeat_count == 0),
+    detection_rate = mean(!is.na(repeat_count) & repeat_count > 0),
+    mean_repeat = mean(repeat_count, na.rm = TRUE),
+    median_repeat = median(repeat_count, na.rm = TRUE),
     .groups = "drop"
   )
 
 DT::datatable(
   tract_summary,
-  caption = "Repeat tract detection by sample",
+  caption = "Repeat detection summary by sample",
   options = list(
     pageLength = 25,
     scrollX = TRUE,
@@ -191,7 +233,7 @@ DT::datatable(
   fillContainer = FALSE
 ) %>%
   DT::formatStyle(columns = colnames(tract_summary), fontSize = '85%') %>%
-  DT::formatRound(columns = 'detection_rate', digits = 3)
+  DT::formatRound(columns = c('detection_rate', 'mean_repeat', 'median_repeat'), digits = 2)
 ```
 
 ```{r plot_detection_rate, echo=FALSE, fig.height=6, fig.width=10, eval=params$plot_detection_rate}
@@ -229,44 +271,11 @@ if (params$plot_detection_rate) {
 
 ---
 
-# Reposition segments
-
-After finding the repeat tract, reposition segments around it:
-
-- **left** = left + mid.1 (sequence before tract)
-- **mid** = mid.2 (the tract itself)  
-- **right** = mid.3 + right (sequence after tract)
-
-This isolates the repeat-containing region for accurate counting.
-
-```{r reposition_segments, echo=FALSE}
-# Reposition segments around the identified repeat tract
-# Following original duke.Rmd logic
-alignment_repositioned <- alignment_repeats %>%
-  dplyr::mutate(
-    # Append mid.1 (pre-tract sequence) to left flank
-    left = paste0(na_to_blank(left), na_to_blank(mid.1)),
-    
-    # Prepend mid.3 (post-tract sequence) to right flank
-    right = paste0(na_to_blank(mid.3), na_to_blank(right))
-  ) %>%
-  # Remove mid.1 and mid.3 (now incorporated into flanks)
-  dplyr::select(-mid.1, -mid.3) %>%
-  # Rename mid.2 to mid (this is now just the repeat tract)
-  dplyr::rename(mid = mid.2) %>%
-  # Remove pattern position columns (keep in final output if needed for QC)
-  dplyr::select(-mid_pattern_start, -mid_pattern_end, -mid_pattern_count)
-
-message("Segments repositioned around repeat tracts")
-```
-
 ---
 
-# Count repeats
+# Counting Methods
 
-Calculate repeat counts using multiple methods. The pipeline provides three counting approaches, with the primary method selected via the `repeat_count_method` parameter.
-
-## Counting Methods
+The pipeline calculates three counting methods for all reads:
 
 **1. repeat_count_full** (Default - Most robust)
 - Formula: Tract length ÷ pattern length (rounded to nearest integer)
@@ -280,88 +289,16 @@ Calculate repeat counts using multiple methods. The pipeline provides three coun
 
 **3. repeat_count_tracts** (Structural analysis)
 - Formula: Reports tract structure as "3,2,2" (sizes separated by gaps)
-- Use: QC visualization and interruption analysis
+- Use: QC visualisation and interruption analysis
 - Note: Returns string, not used as primary count
 
-## Current Method
+**Current method:** `r params$repeat_count_method`
 
-This analysis uses: **`r params$repeat_count_method`**
-
-All three methods are calculated and available in the output data for comparison and quality control.
-
-```{r count_repeats, echo=FALSE}
-message("Counting repeats...")
-
-# Apply repeat counting (vectorised for speed)
-alignment_counts <- apply_count_repeats(
-  alignment_info = alignment_repositioned,
-  string_column = "mid",
-  pattern = params$rpt_pattern,
-  round_digits = params$repeat_count_round_digits
-)
-
-# Use the selected counting method as primary
-# (Options: "repeat_count_full", "repeat_count_match")
-alignment_counts <- alignment_counts %>%
-  dplyr::mutate(repeat_count = !!sym(params$repeat_count_method))
-
-message("Repeat counting complete! Using method: ", params$repeat_count_method)
-
-# Handle reads where no repeat tract was found (repeat_count = NA)
-# These could be: sequencing artifacts, genuine deletions (CRISPR), or off-target reads
-n_na <- sum(is.na(alignment_counts$repeat_count))
-
-if (n_na > 0) {
-  na_rate <- n_na / nrow(alignment_counts)
-  message("Found ", format(n_na, big.mark = ","), 
-          " reads where no repeat tract was detected (", 
-          round(100 * na_rate, 1), "%)")
-  
-  # Add QC flag for tracking (always useful)
-  alignment_counts <- alignment_counts %>%
-    dplyr::mutate(no_tract_found = is.na(repeat_count))
-  
-  # Handle based on user parameter
-  if (params$na_repeat_handling == "convert_to_zero") {
-    # OPTION 1: Convert NA to 0 (for CRISPR deletion detection)
-    alignment_counts <- alignment_counts %>%
-      dplyr::mutate(
-        repeat_count_full = tidyr::replace_na(repeat_count_full, 0),
-        repeat_count_match = tidyr::replace_na(repeat_count_match, 0),
-        repeat_count = tidyr::replace_na(repeat_count, 0)
-      )
-    message("→ Converted NA to 0 (treating as: no repeat tract present)")
-    message("  Note: Includes sequencing artifacts AND genuine deletions")
-    
-  } else if (params$na_repeat_handling == "filter") {
-    # OPTION 2: Remove reads with NA (conservative, removes artifacts)
-    n_before <- nrow(alignment_counts)
-    alignment_counts <- alignment_counts %>%
-      dplyr::filter(!no_tract_found)
-    n_after <- nrow(alignment_counts)
-    message("→ Filtered out ", format(n_before - n_after, big.mark = ","), 
-            " reads with NA repeat counts")
-    message("  Note: Removes artifacts but also genuine deletions")
-    
-  } else if (params$na_repeat_handling == "flag_only") {
-    # OPTION 3: Keep NA as-is, just flag for awareness
-    message("→ Keeping NA repeat counts as-is (flagged with 'no_tract_found' column)")
-    message("  Note: Downstream analyses will need to handle NAs")
-    message("  You can filter using: alignment_counts %>% filter(!no_tract_found)")
-  }
-} else {
-  # No NA values found - still add flag column for consistency
-  alignment_counts <- alignment_counts %>%
-    dplyr::mutate(no_tract_found = FALSE)
-  message("All reads have valid repeat tracts detected")
-}
-
-message("Final read count: ", format(nrow(alignment_counts), big.mark = ","))
-```
+All three methods are calculated and available in the output data.
 
 ---
 
-# Visualisation
+# Visualise distributions
 
 Basic visualisations of repeat count distributions.
 
@@ -369,46 +306,62 @@ Basic visualisations of repeat count distributions.
 
 ```{r plot_histograms, echo=FALSE, fig.height=6, fig.width=12, eval=params$plot_histograms}
 if (params$plot_histograms) {
-  # Combined faceted histogram
-  p_histogram_facet <- ggplot(alignment_counts, aes(x = repeat_count)) +
-    geom_histogram(binwidth = params$histogram_binwidth, 
-                   fill = "#619CFF", color = "black", alpha = 0.7) +
-    facet_wrap(~ file_stem, scales = "free_y") +
-    scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
-    labs(title = "Repeat count distribution per sample",
-         subtitle = "Length-based counting method (tract length ÷ pattern length)",
-         x = "Repeat count",
-         y = "Number of reads") +
-    theme_minimal() +
-    theme(strip.text = element_text(face = "bold"))
-  
-  print(p_histogram_facet)
-  
-  # Save faceted plot
+  # Get sample count
   n_samples <- length(unique(alignment_counts$file_stem))
-  ncol_facet <- ceiling(sqrt(n_samples))
-  nrow_facet <- ceiling(n_samples / ncol_facet)
   
-  ggsave(
-    filename = file.path(plots_dir, "repeat_histogram.png"),
-    plot = p_histogram_facet,
-    width = max(12, ncol_facet * 4),
-    height = max(6, nrow_facet * 3),
-    dpi = 300,
-    bg = "white"
-  )
+  # Only create combined faceted plot for reasonable numbers of samples
+  if (n_samples <= 100) {
+    # Combined faceted histogram
+    p_histogram_facet <- ggplot(alignment_counts, aes(x = repeat_count)) +
+      geom_histogram(binwidth = params$histogram_binwidth, 
+                     fill = "#619CFF", colour = "black", alpha = 0.7) +
+      facet_wrap(~ file_stem, scales = "free_y") +
+      scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+      labs(title = "Repeat count distribution per sample",
+           subtitle = "Length-based counting method (tract length ÷ pattern length)",
+           x = "Repeat count",
+           y = "Number of reads") +
+      theme_minimal() +
+      theme(strip.text = element_text(face = "bold"))
+    
+    print(p_histogram_facet)
+    
+    # Save faceted plot
+    ncol_facet <- ceiling(sqrt(n_samples))
+    nrow_facet <- ceiling(n_samples / ncol_facet)
+    
+    # Cap dimensions at 48 inches (safety margin below ggplot2's 50" limit)
+    plot_width <- min(48, max(12, ncol_facet * 4))
+    plot_height <- min(48, max(6, nrow_facet * 3))
+    
+    ggsave(
+      filename = file.path(plots_dir, "repeat_histogram.png"),
+      plot = p_histogram_facet,
+      width = plot_width,
+      height = plot_height,
+      dpi = 300,
+      bg = "white"
+    )
+    
+  } else {
+    # Too many samples for combined plot
+    message("Note: ", n_samples, " samples detected (>100).")
+    message("  Skipping combined histogram (would be too large and unreadable).")
+    message("  Generating individual plots per sample instead.")
+  }
   
   # Create subdirectory for per-sample plots
   histogram_by_sample_dir <- file.path(plots_dir, "repeat_histogram_by_sample")
   dir.create(histogram_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
   
-  # Individual histograms per sample
+  # Individual histograms per sample (always generated)
+  message("Generating individual histograms for ", n_samples, " samples...")
   for (sample in unique(alignment_counts$file_stem)) {
     sample_data <- alignment_counts %>% filter(file_stem == sample)
     
     p_histogram_sample <- ggplot(sample_data, aes(x = repeat_count)) +
       geom_histogram(binwidth = params$histogram_binwidth,
-                     fill = "#619CFF", color = "black", alpha = 0.7) +
+                     fill = "#619CFF", colour = "black", alpha = 0.7) +
       scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
       labs(title = paste("Repeat count distribution -", sample),
            x = "Repeat count",
@@ -439,7 +392,7 @@ Mean ± SD is misleading for bimodal distributions - it falls between the peaks 
 p_violin <- ggplot(alignment_counts, aes(x = file_stem, y = repeat_count)) +
   geom_violin(fill = "#619CFF", alpha = 0.6, scale = "width") +
   geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.8) +
-  stat_summary(fun = median, geom = "point", size = 3, color = "red") +
+  stat_summary(fun = median, geom = "point", size = 3, colour = "red") +
   scale_x_discrete(guide = guide_axis(angle = 45)) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 15)) +
   labs(title = "Repeat count distribution per sample",
@@ -476,7 +429,7 @@ for (sample in unique(alignment_counts$file_stem)) {
   p_violin_sample <- ggplot(sample_data, aes(x = 1, y = repeat_count)) +
     geom_violin(fill = "#619CFF", alpha = 0.6, scale = "width", width = 0.8) +
     geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.8, fill = "white") +
-    stat_summary(fun = median, geom = "point", size = 4, color = "red") +
+    stat_summary(fun = median, geom = "point", size = 4, colour = "red") +
     scale_y_continuous(breaks = scales::pretty_breaks(n = 15)) +
     labs(title = paste("Repeat count distribution -", sample),
          subtitle = "Violin shows distribution shape (bimodal for diploid), boxplot shows quartiles, red dot = median",
@@ -538,7 +491,7 @@ if (requireNamespace("ggridges", quietly = TRUE)) {
     sample_data <- alignment_counts %>% filter(file_stem == sample)
     
     p_density_sample <- ggplot(sample_data, aes(x = repeat_count)) +
-      geom_density(fill = "#619CFF", alpha = 0.7, color = "black", linewidth = 1) +
+      geom_density(fill = "#619CFF", alpha = 0.7, colour = "black", linewidth = 1) +
       scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
       labs(title = paste("Repeat count density -", sample),
            subtitle = "Peaks indicate alleles",
@@ -613,6 +566,18 @@ Use the **violin/ridge plots** to visually identify alleles. Formal allele calli
 Save processed data for downstream modules.
 
 ```{r save_outputs, echo=FALSE}
+message("")
+message("================================================================================")
+message("Module 3 Complete!")
+message("================================================================================")
+message("  Total reads: ", format(nrow(alignment_counts), big.mark = ","))
+message("  Samples: ", n_distinct(alignment_counts$file_stem))
+message("  Reads with repeats: ", 
+        format(sum(!is.na(alignment_counts$repeat_count) & alignment_counts$repeat_count > 0), big.mark = ","))
+message("  Counting method: ", params$repeat_count_method)
+message("================================================================================")
+message("")
+
 # Compile module output
 module3_output <- list(
   alignment_counts = alignment_counts,
@@ -660,7 +625,7 @@ Results saved to: `r output_path`
 **Next Steps:**
 
 - **Module 4:** Cluster reads by repeat length to identify alleles
-- **Module 5:** Analyze distributions and calculate instability metrics
+- **Module 5:** Analyse distributions and calculate instability metrics
 - **Module 6 (Optional):** Generate waterfall visualisations
 
 ---

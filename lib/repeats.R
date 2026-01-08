@@ -406,3 +406,105 @@ find_repeat_tracts_sample <- function(file_stem,
   
   return(sample_repeats)
 }
+
+# ==============================================================================
+# OPTIMIZED: Complete Module 3 processing per sample
+# ==============================================================================
+# Processes a single sample through ALL Module 3 steps:
+#   1. Find repeat tracts
+#   2. Reposition segments
+#   3. Count repeats
+# Result is cached for efficient resume
+# ==============================================================================
+
+process_sample_repeat_detection <- function(file_stem,
+                                     alignment_split,
+                                     pattern,
+                                     min_repeats = 3,
+                                     max_mismatch = 0,
+                                     start_perfect_repeats = 1,
+                                     end_perfect_repeats = 1,
+                                     max_gap = 3,
+                                     max_tract_gap = NULL,
+                                     return_option = "all",
+                                     repeat_count_method = "repeat_count_full",
+                                     round_digits = 0,
+                                     out_dir = NULL,
+                                     resume = FALSE) {
+  
+  # Check for cached counts (all three steps: find → reposition → count)
+  if (!is.null(out_dir) && resume) {
+    cache_file <- file.path(out_dir, paste0("count_", file_stem, ".RData"))
+    if (file.exists(cache_file)) {
+      load(cache_file)  # Loads 'sample_result'
+      return(sample_result)
+    }
+  }
+  
+  # Get data for this sample
+  sample_data <- alignment_split[alignment_split$file_stem == file_stem, ]
+  
+  if (nrow(sample_data) == 0) {
+    warning("No data for sample: ", file_stem)
+    return(NULL)
+  }
+  
+  # =============================================================================
+  # STEP 1: Find repeat tracts
+  # =============================================================================
+  sample_data <- apply_find_repeat_tracts(
+    alignment_info = sample_data,
+    sequence_column = "mid",
+    pattern = pattern,
+    min_repeats = min_repeats,
+    max_mismatch = max_mismatch,
+    start_perfect_repeats = start_perfect_repeats,
+    end_perfect_repeats = end_perfect_repeats,
+    max_gap = max_gap,
+    max_tract_gap = max_tract_gap,
+    return_option = return_option
+  )
+  
+  # =============================================================================
+  # STEP 2: Reposition segments around repeat tract
+  # =============================================================================
+  sample_data <- sample_data %>%
+    dplyr::mutate(
+      # Append mid.1 (pre-tract sequence) to left flank
+      left = paste0(na_to_blank(left), na_to_blank(mid.1)),
+      # Prepend mid.3 (post-tract sequence) to right flank
+      right = paste0(na_to_blank(mid.3), na_to_blank(right))
+    ) %>%
+    # Remove mid.1 and mid.3 (now incorporated into flanks)
+    dplyr::select(-mid.1, -mid.3) %>%
+    # Rename mid.2 to mid (this is now just the repeat tract)
+    dplyr::rename(mid = mid.2) %>%
+    # Remove pattern position columns
+    dplyr::select(-mid_pattern_start, -mid_pattern_end, -mid_pattern_count)
+  
+  # =============================================================================
+  # STEP 3: Count repeats (all three methods)
+  # =============================================================================
+  sample_data <- apply_count_repeats(
+    alignment_info = sample_data,
+    string_column = "mid",
+    pattern = pattern,
+    round_digits = round_digits
+  )
+  
+  # Add selected method as primary 'repeat_count' column
+  sample_data <- sample_data %>%
+    dplyr::mutate(repeat_count = !!sym(repeat_count_method))
+  
+  # =============================================================================
+  # Cache the counts (all three steps: find → reposition → count)
+  # =============================================================================
+  if (!is.null(out_dir)) {
+    sample_result <- sample_data
+    cache_file <- file.path(out_dir, paste0("count_", file_stem, ".RData"))
+    save(sample_result, file = cache_file)
+  }
+  
+  return(sample_data)
+}
+
