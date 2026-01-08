@@ -161,14 +161,18 @@ Duke Pipeline can be deployed on HPC clusters for large-scale analysis. This gui
 
 ### Choosing Your Cluster
 
-| Cluster | Best For | Cores | Parallel Env | Notes |
-|---------|----------|-------|--------------|-------|
-| **Myriad** | Serial/threaded jobs, ≤500 samples | 1-36 | `-pe smp` | Shared nodes, TMPDIR available |
-| **Kathleen** | Parallel jobs, 1000+ samples | **80+ (min)** | **`-pe mpi`** | Exclusive 2+ nodes, **3-4× faster** |
+| Cluster | Best For | Cores | Scheduler | Notes |
+|---------|----------|-------|-----------|-------|
+| **Myriad** | Serial/threaded jobs, ≤500 samples | 1-36 | SGE (`-pe smp`) | Shared nodes, TMPDIR available |
+| **Old Kathleen** | Parallel jobs, 1000+ samples | **80+ (min)** | SGE (`-pe mpi`) | Exclusive 2+ nodes, being phased out |
+| **New Kathleen** | **Parallel jobs, 1000+ samples** | **80+ (min)** | **Slurm** | **RECOMMENDED: Modern, less crowded** ✅ |
 
-**For 1000+ samples:** Use Kathleen with 80 cores (~15 hours vs ~52 hours on Myriad)
+**For 1000+ samples:** Use **New Kathleen** with 80 cores (~15 hours vs ~52 hours on Myriad)
 
-**⚠️ CRITICAL: Kathleen requires `-pe mpi` not `-pe smp` for multi-node jobs!**
+**⚠️ CRITICAL Differences:**
+- **Old Kathleen:** Uses SGE scheduler, requires `-pe mpi` not `-pe smp`
+- **New Kathleen:** Uses Slurm scheduler, different job script syntax
+- **Hostnames:** `kathleen.rc.ucl.ac.uk` (old) vs `kathleen-ng.rc.ucl.ac.uk` (new)
 
 ---
 
@@ -425,16 +429,46 @@ threads = 36,  # For Myriad 36-core job
 
 #### Step 8: Upload/Create Job Script
 
-**For Kathleen (80 cores, recommended for 1000+ samples):**
+**For New Kathleen - Slurm (RECOMMENDED for 1000+ samples):**
 
 ```bash
 cd ~/Scratch/bin/duke
 
 # Create job script
-nano duke_kathleen.sh
+nano duke_kathleen_slurm.sh
 ```
 
 **Paste this content:**
+
+```bash
+#!/bin/bash -l
+#SBATCH --job-name=duke_kathleen
+#SBATCH --nodes=2
+#SBATCH --ntasks=80
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=2G
+#SBATCH --time=48:00:00
+#SBATCH --output=logs/duke_%j.out
+#SBATCH --error=logs/duke_%j.err
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=your.email@ucl.ac.uk
+
+module purge
+module load r/recommended
+module load samtools/1.11/gnu-4.9.2
+
+export R_LIBS_USER=~/R/library
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+
+cd ~/Scratch/bin/duke
+Rscript duke_run.R
+```
+
+**Submit with:** `sbatch duke_kathleen_slurm.sh`
+
+---
+
+**For Old Kathleen - SGE (if New Kathleen unavailable):**
 
 ```bash
 #!/bin/bash -l
@@ -459,6 +493,10 @@ export PATH=$HOME/Scratch/bin/minimap2:$PATH
 cd ~/Scratch/bin/duke
 Rscript duke_run.R
 ```
+
+**Submit with:** `qsub duke_kathleen.sh`
+
+---
 
 **For Myriad (36 cores, for ≤500 samples):**
 
@@ -487,16 +525,33 @@ cd ~/Scratch/bin/duke
 Rscript duke_run.R
 ```
 
-**Make executable:**
+**Submit with:** `qsub duke_myriad.sh`
+
+---
+
+**Make executable (SGE scripts only):**
 
 ```bash
 chmod +x duke_kathleen.sh  # or duke_myriad.sh
+# Slurm scripts don't need chmod +x
 ```
 
 ---
 
 #### Step 9: Submit Job
 
+**New Kathleen (Slurm):**
+```bash
+cd ~/Scratch/bin/duke
+
+# Submit to queue
+sbatch duke_kathleen_slurm.sh
+
+# Note the job ID
+# Submitted batch job 123456
+```
+
+**Old Kathleen or Myriad (SGE):**
 ```bash
 cd ~/Scratch/bin/duke
 
@@ -511,6 +566,22 @@ qsub duke_kathleen.sh  # or qsub duke_myriad.sh
 
 #### Step 10: Monitor Job
 
+**New Kathleen (Slurm):**
+```bash
+# Check job status
+squeue -u $USER
+
+# Job details
+scontrol show job JOB_ID
+
+# Watch live output
+tail -f logs/duke_JOB_ID.out
+
+# Cancel if needed
+scancel JOB_ID
+```
+
+**Old Kathleen or Myriad (SGE):**
 ```bash
 # Check job status
 qstat -u $USER
@@ -521,7 +592,10 @@ qstat -u $USER
 # Eqw = error
 
 # Watch live output
-tail -f logs/kathleen_123456.out  # Replace with your job ID
+tail -f logs/kathleen_JOB_ID.out
+
+# Cancel if needed
+qdel JOB_ID
 
 # Check progress
 ls result_duke/module_data/*.RData | wc -l  # Count completed modules
@@ -555,6 +629,28 @@ tail logs/kathleen_123456.err
 
 **Essential Commands:**
 
+**New Kathleen (Slurm):**
+```bash
+# Submit job
+sbatch duke_kathleen_slurm.sh
+
+# Check status
+squeue -u $USER
+
+# Watch output
+tail -f logs/duke_*.out
+
+# Cancel job
+scancel JOB_ID
+
+# Job details
+scontrol show job JOB_ID
+
+# After completion
+sacct -j JOB_ID --format=JobID,JobName,State,Elapsed
+```
+
+**Old Kathleen / Myriad (SGE):**
 ```bash
 # Submit job
 qsub duke_kathleen.sh
@@ -565,14 +661,14 @@ qstat -u $USER
 # Watch output
 tail -f logs/kathleen_*.out
 
-# Delete job
-qdel 123456
+# Cancel job
+qdel JOB_ID
 
 # Job details
-qstat -j 123456
+qstat -j JOB_ID
 
 # After completion
-qacct -j 123456
+qacct -j JOB_ID
 ```
 
 **File Locations:**
@@ -593,15 +689,37 @@ qacct -j 123456
 
 **Important Parameters:**
 
+**New Kathleen (Slurm):**
 ```bash
 # In job script:
-#$ -pe mpi 80           # Kathleen: Use mpi (multi-node), min 80 cores
-#$ -pe smp 36           # Myriad: Use smp (single-node), up to 36 cores
-#$ -l mem=2G            # Memory per core (2-8G typical)
-#$ -l h_rt=48:00:00     # Walltime (format: hours:minutes:seconds)
+#SBATCH --ntasks=80         # Number of cores (80, 120, 160, ...)
+#SBATCH --mem-per-cpu=2G    # Memory per core
+#SBATCH --time=48:00:00     # Walltime (HH:MM:SS)
 
 # In duke_run.R:
-threads = 80            # MUST match job script cores!
+threads = 80                 # MUST match --ntasks!
+```
+
+**Old Kathleen (SGE):**
+```bash
+# In job script:
+#$ -pe mpi 80                # Kathleen: Use mpi, min 80 cores
+#$ -l mem=2G                 # Memory per core
+#$ -l h_rt=48:00:00          # Walltime
+
+# In duke_run.R:
+threads = 80                 # MUST match -pe cores!
+```
+
+**Myriad (SGE):**
+```bash
+# In job script:
+#$ -pe smp 36                # Myriad: Use smp, up to 36 cores
+#$ -l mem=8G                 # Memory per core
+#$ -l tmpfs=150G             # Temp space (Myriad only)
+
+# In duke_run.R:
+threads = 36                 # MUST match -pe cores!
 ```
 
 ---
