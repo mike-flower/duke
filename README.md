@@ -227,7 +227,11 @@ ls -la
 
 ```bash
 cd ~/Scratch/bin
-git clone https://github.com/your_repo/duke_pipeline.git duke
+
+# Clone Duke repository
+git clone https://github.com/mike-flower/duke.git
+
+# Enter Duke directory (created by Git)
 cd duke
 ```
 
