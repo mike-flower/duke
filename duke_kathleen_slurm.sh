@@ -25,6 +25,8 @@
 # 3. Submit the job:
 #    sbatch duke_kathleen_slurm.sh
 #
+#    Note: Slurm scripts do NOT need chmod +x (unlike SGE scripts)
+#
 # 4. Monitor the job:
 #    squeue -u $USER                         # Check job status
 #    scontrol show job <JOB_ID>              # Detailed job info
@@ -59,16 +61,22 @@
 #    - Submit: sbatch (not qsub)
 #    - Check: squeue (not qstat)
 #    - Cancel: scancel (not qdel)
+#    - NO chmod needed: Slurm scripts don't need to be executable
 #
-# 2. Minimum 80 cores (2 nodes × 40 cores each)
+# 2. Script permissions:
+#    - SGE: Requires chmod +x script.sh before qsub
+#    - Slurm: NO chmod needed, sbatch works on any .sh file
+#
+# 3. Minimum 80 cores (2 nodes × 40 cores each)
+# 3. Minimum 80 cores (2 nodes × 40 cores each)
 #    - Valid: 80, 120, 160 (multiples of 40)
 #    - Invalid: 12, 36, 40, 72
 #
-# 3. NO tmpfs support (diskless nodes)
+# 4. NO tmpfs support (diskless nodes)
 #    - DO NOT USE: tmpfs or local storage
 #    - Duke uses Scratch for temp files automatically
 #
-# 4. Exclusive nodes (no sharing)
+# 5. Exclusive nodes (no sharing)
 #    - You get entire nodes
 #    - More predictable performance
 #
@@ -325,6 +333,7 @@ exit $DUKE_EXIT_CODE
 #
 # | Action         | SGE (Old Kathleen) | Slurm (New Kathleen)        |
 # |----------------|--------------------|-----------------------------|
+# | Make executable| chmod +x script.sh | NOT NEEDED                  |
 # | Submit job     | qsub script.sh     | sbatch script.sh            |
 # | Check jobs     | qstat -u $USER     | squeue -u $USER             |
 # | Job details    | qstat -j JOB_ID    | scontrol show job JOB_ID    |
