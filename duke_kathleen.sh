@@ -1,11 +1,11 @@
 #!/bin/bash -l
 #$ -S /bin/bash
-#$ -N duke_01_80c_2G_24h
+#$ -N duke_01_80c_2G_1h
 #$ -wd /home/skgtmdf/Scratch/bin/duke
 #$ -o logs/duke_job_$JOB_ID.out
 #$ -e logs/duke_job_$JOB_ID.err
-#$ -l h_rt=24:00:00
-#$ -pe smp 80
+#$ -l h_rt=01:00:00
+#$ -pe mpi 80
 #$ -l mem=2G
 #$ -M michael.flower@ucl.ac.uk
 #$ -m bea

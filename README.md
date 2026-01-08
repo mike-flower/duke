@@ -161,12 +161,14 @@ Duke Pipeline can be deployed on HPC clusters for large-scale analysis. This gui
 
 ### Choosing Your Cluster
 
-| Cluster | Best For | Max Cores | Notes |
-|---------|----------|-----------|-------|
-| **Myriad** | Serial/threaded jobs, ≤500 samples | 36 | Shared nodes, TMPDIR available |
-| **Kathleen** | Parallel jobs, 1000+ samples | 40-120 | Exclusive nodes, **3-4× faster** for large datasets |
+| Cluster | Best For | Cores | Parallel Env | Notes |
+|---------|----------|-------|--------------|-------|
+| **Myriad** | Serial/threaded jobs, ≤500 samples | 1-36 | `-pe smp` | Shared nodes, TMPDIR available |
+| **Kathleen** | Parallel jobs, 1000+ samples | **80+ (min)** | **`-pe mpi`** | Exclusive 2+ nodes, **3-4× faster** |
 
 **For 1000+ samples:** Use Kathleen with 80 cores (~15 hours vs ~52 hours on Myriad)
+
+**⚠️ CRITICAL: Kathleen requires `-pe mpi` not `-pe smp` for multi-node jobs!**
 
 ---
 
@@ -442,7 +444,7 @@ nano duke_kathleen.sh
 #$ -o logs/kathleen_$JOB_ID.out
 #$ -e logs/kathleen_$JOB_ID.err
 #$ -l h_rt=48:00:00
-#$ -pe smp 80
+#$ -pe mpi 80
 #$ -l mem=2G
 #$ -M your.email@ucl.ac.uk
 #$ -m bea
@@ -534,16 +536,18 @@ tail logs/kathleen_123456.err
 
 | Feature | Myriad | Kathleen | Important! |
 |---------|--------|----------|------------|
-| **Cores** | Up to 36 | **40, 80, 120** | Use multiples of 40 on Kathleen |
+| **Parallel Env** | `-pe smp` ✅ | **`-pe mpi`** ✅ | CRITICAL: Use mpi not smp! |
+| **Cores** | Up to 36 | **80, 120, 160** (min 80) | Must be multiples of 40, minimum 2 nodes |
 | **TMPDIR** | `-l tmpfs=150G` ✅ | **NOT SUPPORTED** ❌ | Remove tmpfs line for Kathleen! |
 | **Node sharing** | Shared | Exclusive (no sharing) | - |
 | **Hostname** | myriad.rc.ucl.ac.uk | kathleen.rc.ucl.ac.uk | Different login |
 | **Performance (1000 samples)** | ~18 hrs (36 cores) | **~15 hrs (80 cores)** | 20% faster |
 
 **⚠️ Critical for Kathleen:**
-1. Remove `-l tmpfs=` from job script (will error otherwise!)
-2. Use multiples of 40 cores (40, 80, 120, etc.)
-3. Match `threads` in duke_run.R to cores in job script
+1. **Use `-pe mpi` not `-pe smp`** (multi-node requirement!)
+2. **Minimum 80 cores** (2 nodes × 40 cores)
+3. Remove `-l tmpfs=` from job script (will error otherwise!)
+4. Match `threads` in duke_run.R to cores in job script
 
 ---
 
@@ -591,7 +595,8 @@ qacct -j 123456
 
 ```bash
 # In job script:
-#$ -pe smp 80           # Cores (40, 80, 120 for Kathleen; up to 36 for Myriad)
+#$ -pe mpi 80           # Kathleen: Use mpi (multi-node), min 80 cores
+#$ -pe smp 36           # Myriad: Use smp (single-node), up to 36 cores
 #$ -l mem=2G            # Memory per core (2-8G typical)
 #$ -l h_rt=48:00:00     # Walltime (format: hours:minutes:seconds)
 
@@ -618,6 +623,12 @@ threads = 80            # MUST match job script cores!
 
 ### Troubleshooting
 
+**Problem:** "Unable to find a place to run this job" on Kathleen
+- **Most common cause:** Using `-pe smp` instead of `-pe mpi`
+- **Solution:** Change job script line to `#$ -pe mpi 80` (or 120, 160, etc.)
+- **Why:** Kathleen requires minimum 2 nodes (80 cores), which needs MPI not SMP
+- **Verification:** `grep "pe mpi" duke_kathleen.sh` should show the mpi setting
+
 **Problem:** Job stays in `qw` (queued) state
 - **Normal:** Queue times vary (15 min - 2 hours typical)
 - **Check:** `qstat -j 123456` for error messages
@@ -626,7 +637,9 @@ threads = 80            # MUST match job script cores!
 **Problem:** Job fails immediately (`Eqw` state)
 - **Check:** `cat logs/kathleen_*.err` for error message
 - **Common causes:**
+  - Using `-pe smp` on Kathleen (must use `-pe mpi`)
   - tmpfs requested on Kathleen (remove `-l tmpfs=` line)
+  - Requesting less than 80 cores on Kathleen (minimum is 80)
   - Module not found (check `module purge` then `module load` in job script)
   - R packages missing (re-run R package installation)
 
