@@ -478,7 +478,7 @@ start_time <- Sys.time()
 
 cat("\n")
 cat("=================================================================\n")
-cat("                    DUKE PIPELINE 2.0                            \n")
+cat("                    DUKE PIPELINE                                \n")
 cat("=================================================================\n")
 cat("\n")
 cat("Run started:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")

@@ -79,7 +79,7 @@ cd ~/Scratch/bin/duke
   --cleanup_temp FALSE
 
 # ==============================================================================
-# COMMON CUSTOMIZATIONS
+# COMMON CUSTOMISATIONS
 # ==============================================================================
 
 # Without adapter trimming:

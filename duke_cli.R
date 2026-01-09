@@ -497,7 +497,7 @@ sink(log_con, type = "message")
 start_time <- Sys.time()
 
 cat("\n=================================================================\n")
-cat("                    DUKE PIPELINE 2.0                            \n")
+cat("                    DUKE PIPELINE                                \n")
 cat("=================================================================\n\n")
 cat("Run started:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
 cat("Log file:", log_file, "\n")

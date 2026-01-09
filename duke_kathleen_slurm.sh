@@ -191,7 +191,7 @@ cd ~/Scratch/bin/duke
 DUKE_EXIT_CODE=$?
 
 # ==============================================================================
-# COMMON CUSTOMIZATIONS
+# COMMON CUSTOMISATIONS
 # ==============================================================================
 
 # Without adapter trimming:
