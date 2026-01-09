@@ -31,6 +31,24 @@
 # For larger datasets (1000+ samples), use Kathleen with 80+ cores
 #
 # ==============================================================================
+# SUBMISSION INSTRUCTIONS:
+# ==============================================================================
+#
+# 1. Make this script executable (one-time):
+#    chmod +x duke_myriad.sh
+#
+# 2. Edit parameters in the ./duke command below
+#
+# 3. Submit the job:
+#    qsub duke_myriad.sh
+#
+# 4. Monitor the job:
+#    qstat -u $USER
+#
+# 5. Cancel job if needed:
+#    qdel <JOB_ID>
+#
+# ==============================================================================
 
 # Load required modules
 module purge

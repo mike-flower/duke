@@ -36,6 +36,24 @@
 #   duke_kathleen_160c_80t_cli.sh (requests 160 cores, uses 80 threads)
 #
 # ==============================================================================
+# SUBMISSION INSTRUCTIONS:
+# ==============================================================================
+#
+# 1. Make this script executable (one-time):
+#    chmod +x duke_kathleen.sh
+#
+# 2. Edit parameters in the ./duke command below
+#
+# 3. Submit the job:
+#    qsub duke_kathleen.sh
+#
+# 4. Monitor the job:
+#    qstat -u $USER
+#
+# 5. Cancel job if needed:
+#    qdel <JOB_ID>
+#
+# ==============================================================================
 
 # Load required modules
 module purge
