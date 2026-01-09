@@ -6,7 +6,7 @@ A modular pipeline for amplicon sequencing analysis with comprehensive repeat le
 - ✨ **New Command-Line Interface** - Run Duke without editing files
 - ✅ **Optional Trimming** - Enable/disable adapter trimming with `--trim` flag
 - 🔧 **Enhanced Documentation** - Comprehensive parameter explanations with examples
-- 📦 **Organized Library Files** - Clear module number prefixes (00-07)
+- 📦 **Organised Library Files** - Clear module number prefixes (00-07)
 - 🐛 **Bug Fixes** - Resume detection, parameter naming consistency
 
 ---
@@ -57,7 +57,7 @@ source("duke_run_local.R")
 # Core packages
 install.packages(c("tidyverse", "data.table", "rmarkdown", "knitr"))
 
-# Visualization
+# Visualisation
 install.packages(c("ggplot2", "ggrepel", "ggridges", "RColorBrewer", "cowplot"))
 
 # Tables and reports
@@ -130,12 +130,6 @@ duke_pipeline/
 
 #### Local Test Run Example
 ```bash
-# Load required modules (HPC) or ensure R is in PATH (local)
-module load r/recommended
-module load samtools/1.11/gnu-4.9.2
-export PATH=$HOME/Scratch/bin/minimap2:$PATH
-export R_LIBS_USER=~/R/library
-
 # Navigate to Duke directory
 cd /home/skgtmdf/Scratch/bin/duke
 
@@ -181,13 +175,22 @@ cd /home/skgtmdf/Scratch/bin/duke
 - ✅ Comprehensive help with examples
 - ✅ No file editing required
 
-**⚠️ Important:** Don't run Duke directly on login nodes for production datasets. Use job scripts via `qsub` or `sbatch`.
-
 ---
 
 #### HPC Cluster Test Run (Myriad/Kathleen)
 
+**⚠️ Important:** Don't run Duke directly on login nodes for production datasets. Use job scripts via `qsub` or `sbatch`.
+
 **For running test data on compute nodes via job scripts:**
+
+First, load required modules and set paths:
+```bash
+# Load modules (HPC)
+module load r/recommended
+module load samtools/1.11/gnu-4.9.2
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+export R_LIBS_USER=~/R/library
+```
 
 Edit `duke_myriad.sh` or `duke_kathleen.sh` and update the `./duke` command:
 
@@ -323,7 +326,7 @@ qsub duke_myriad.sh
 #$ -l h_rt=48:00:00
 ```
 
-**Memory-Optimized for Very Large Datasets (Kathleen):**
+**Memory-Optimised for Very Large Datasets (Kathleen):**
 ```bash
 #$ -pe mpi 160      # Request 160 cores
 #$ -l mem=2G        # 320GB total
@@ -396,24 +399,6 @@ qsub duke_kathleen.sh
 # No chmod needed
 sbatch duke_kathleen_slurm.sh
 ```
-
----
-
-### Performance Expectations
-
-#### Myriad (3 cores, 3 samples)
-- 2GB/core: >4 hours (AVOID!)
-- 4GB/core: ~52 minutes
-- 8GB/core: ~28 minutes ← **RECOMMENDED**
-
-#### Myriad (36 cores, production)
-- 100 samples: 2-3 hours
-- 300 samples: 8-12 hours  
-- 500 samples: 15-20 hours
-
-#### Kathleen (80 cores, production)
-- 1000 samples: 15-18 hours
-- 2000 samples: 30-36 hours
 
 ---
 
@@ -516,7 +501,7 @@ All parameters have comprehensive documentation with examples in `duke_run.R` or
 ### Module 2: Alignment
 - minimap2 alignment to reference
 - Strand correction
-- Coverage visualization
+- Coverage visualisation
 
 ### Module 3: Repeat Detection
 - Identifies repeat tracts
@@ -540,7 +525,7 @@ All parameters have comprehensive documentation with examples in `duke_run.R` or
 - Control comparisons
 - Excel export
 
-### Module 7: Repeat Visualization
+### Module 7: Repeat Visualisation
 - Frequency histograms
 - Scatter/violin plots
 - Publication-ready figures
@@ -673,7 +658,7 @@ mkdir -p logs
 - 🐛 **FIXED:** CLI resume detection
 - 🐛 **FIXED:** Resume default now TRUE (consistent)
 - 📚 **ENHANCED:** Comprehensive repeat parameter documentation
-- 📦 **ORGANIZED:** Library files with module prefixes (00-07)
+- 📦 **ORGANISED:** Library files with module prefixes (00-07)
 - 🔧 **UPDATED:** Conditional trimming in Module 1
 - 📊 **DOCUMENTED:** Memory requirements from empirical testing
 - ❌ **REMOVED:** `visualise_alignment_corrected` (didn't exist)
@@ -687,15 +672,21 @@ mkdir -p logs
 
 ## Citation
 
-[Citation information to be added]
+If you use Duke Pipeline in your research, please cite:
+
+[Citation to be added]
 
 ---
 
 ## Contact
 
+**Michael Flower**  
+Email: michael.flower@ucl.ac.uk  
+GitHub: https://github.com/mike-flower/duke
+
 For issues or questions:
-- GitHub Issues: [repository URL]
-- Email: [contact email]
+- GitHub Issues: https://github.com/mike-flower/duke/issues
+- Email: michael.flower@ucl.ac.uk
 
 ---
 
