@@ -1,0 +1,26 @@
+#!/bin/bash
+#
+# Duke Pipeline - Shell Wrapper
+#
+# This script provides a convenient command-line interface to the Duke Pipeline
+#
+# Usage:
+#   ./duke --dir_data /path/to/data --dir_out /path/to/results [options]
+#
+# Examples:
+#   ./duke --dir_data ~/data/sample1 --dir_out ~/results/sample1
+#   ./duke --dir_data ~/data/batch1 --dir_out ~/results/batch1 --threads 80
+#   ./duke --help
+#
+
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Check if duke_cli.R exists
+if [ ! -f "$SCRIPT_DIR/duke_cli.R" ]; then
+    echo "Error: duke_cli.R not found in $SCRIPT_DIR"
+    exit 1
+fi
+
+# Run the Duke CLI
+Rscript "$SCRIPT_DIR/duke_cli.R" "$@"

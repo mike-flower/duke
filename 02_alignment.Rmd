@@ -889,7 +889,7 @@ if (params$visualise_alignment) {
     p <- visualise_sample_alignments(
       sample_data, 
       sample_name,
-      max_reads = params$visualise_alignment_n_reads
+      max_reads = params$visualise_alignment_downsample
     )
     
     if (!is.null(p)) {

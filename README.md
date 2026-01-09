@@ -1,79 +1,76 @@
-# Duke Pipeline 2.0
+# Duke Pipeline 2.0.1
 
 A modular pipeline for amplicon sequencing analysis with comprehensive repeat length characterisation and instability metrics.
 
-## Table of Contents
-
-**Quick Start:**
-- [Installation](#installation)
-- [File Structure](#file-structure)
-- [Run Analysis](#run-analysis)
-- [HPC Deployment](#hpc-deployment-myriad-kathleen-and-similar-clusters)
-  - [Choosing Your Cluster](#choosing-your-cluster)
-  - [Complete Setup Guide](#complete-setup-guide)
-  - [Critical Differences: Kathleen vs Myriad](#critical-differences-kathleen-vs-myriad)
-  - [Quick Reference](#quick-reference)
-  - [Expected Performance](#expected-performance)
-  - [Troubleshooting](#troubleshooting)
-- [Review Results](#review-results)
-
-**Configuration:**
-- [Essential Parameters](#essential-parameters)
-- [Settings File Format](#settings-file-format)
-- [Complete Parameter Reference](#complete-parameter-reference)
-
-**Understanding Duke:**
-- [Module Overview](#module-overview)
-- [Control Sample Analysis](#control-sample-analysis)
-- [Analysis Ranges](#analysis-ranges)
-- [Output Structure](#output-structure)
-
-**Reference:**
-- [Troubleshooting](#troubleshooting)
-- [Advanced Configuration](#advanced-configuration)
-- [Package Dependencies](#package-dependencies)
-
----
-
-## Features
-
-- **7 Analysis Modules**: From import to advanced visualisation
-- **Flexible Parameters**: Extensive customisation options  
-- **Multiple Outputs**: HTML reports, plots, Excel tables, VCF files
-- **Repeat Analysis**: Modal peaks, instability metrics, distribution analysis
-- **Visualisation**: Waterfall plots, histograms, scatter/violin plots
-- **Resume Capability**: Skip completed modules automatically
-- **Auto Cleanup**: Optional removal of intermediate files
+**Latest Updates (v2.0.1):**
+- ✨ **New Command-Line Interface** - Run Duke without editing files
+- ✅ **Optional Trimming** - Enable/disable adapter trimming with `--trim` flag
+- 🔧 **Enhanced Documentation** - Comprehensive parameter explanations with examples
+- 📦 **Organized Library Files** - Clear module number prefixes (00-07)
+- 🐛 **Bug Fixes** - Resume detection, parameter naming consistency
 
 ---
 
 ## Quick Start
 
-### Installation
+### Three Ways to Run Duke
+
+**1. Command-Line Interface (NEW!)** - No file editing required:
+```bash
+./duke --dir_data ~/data --dir_out ~/results --path_ref ~/ref.fasta
+```
+
+**2. Script-Based** - Full control with duke_run.R:
+```bash
+# Edit duke_run.R, then:
+Rscript duke_run.R
+```
+
+**3. Interactive** - RStudio development:
+```r
+source("duke_run_local.R")
+```
+
+---
+
+## Table of Contents
+
+- [Installation](#installation)
+- [File Structure](#file-structure)
+- [Run Analysis](#run-analysis)
+  - [Command-Line Interface](#1-command-line-interface-new)
+  - [Script-Based](#2-script-based-duke_runr)
+  - [Interactive RStudio](#3-interactive-rstudio)
+- [HPC Deployment](#hpc-deployment)
+- [Parameters](#parameters)
+  - [New in 2.0.1](#new-parameters-in-201)
+  - [Essential Parameters](#essential-parameters)
+  - [Complete Reference](#complete-parameter-reference)
+- [Module Overview](#module-overview)
+- [Output Structure](#output-structure)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Installation
 
 ```r
-# Core tidyverse and data manipulation
-install.packages(c("tidyverse", "data.table", "dplyr", "tidyr", "stringr", 
-                   "tibble", "readxl", "plyr"))
+# Core packages
+install.packages(c("tidyverse", "data.table", "rmarkdown", "knitr"))
 
-# Plotting and visualisation
-install.packages(c("ggplot2", "ggrepel", "ggridges", "ggnewscale", "scales", 
-                   "RColorBrewer", "viridisLite", "cowplot"))
+# Visualization
+install.packages(c("ggplot2", "ggrepel", "ggridges", "RColorBrewer", "cowplot"))
 
-# Reporting and tables
-install.packages(c("rmarkdown", "knitr", "kableExtra", "DT", "htmltools", 
-                   "openxlsx"))
+# Tables and reports
+install.packages(c("openxlsx", "DT", "kableExtra", "htmltools"))
 
-# Statistical analysis
+# Analysis
 install.packages(c("mclust", "cluster", "ineq", "moments", "pracma"))
 
 # Parallel processing
 install.packages(c("pbapply", "pbmcapply"))
 
-# Utilities
-install.packages(c("rstudioapi"))
-
-# Install Bioconductor manager and packages
+# Bioconductor
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
 
@@ -81,1510 +78,393 @@ BiocManager::install(c("Biostrings", "ShortRead", "GenomicAlignments",
                        "Rsamtools", "DECIPHER"))
 ```
 
-**Note**: The `tidyverse` package includes `ggplot2`, `dplyr`, `tidyr`, `stringr`, and `tibble`, but they are listed explicitly above for clarity.
+---
 
-### File Structure
+## File Structure
 
 ```
 duke_pipeline/
-├── duke_run.R                    # Main runner script (for HPC)
-├── duke_run_local.R              # Local development version
-├── duke_myriad.sh                # HPC job submission script
-├── 01_import_and_qc.Rmd          # Module 1
-├── 02_alignment.Rmd              # Module 2
-├── 03_repeat_detection.Rmd       # Module 3
-├── 04_allele_calling.Rmd         # Module 4
-├── 05_waterfall.Rmd              # Module 5
-├── 06_range_analysis.Rmd         # Module 6
-├── 07_repeat_visualisation.Rmd   # Module 7
+├── duke_cli.R                    # CLI script (NEW!)
+├── duke                          # CLI wrapper (NEW!)
+├── duke_run.R                    # HPC runner
+├── duke_run_local.R              # Local runner
+├── duke_myriad.sh                # Myriad job script
+├── duke_kathleen.sh              # Kathleen job script
+├── 01_import_and_qc.Rmd through 07_repeat_visualisation.Rmd
 └── lib/                          # Function libraries
     ├── load_all.R
-    ├── utils.R
-    ├── import.R
-    ├── sequence_qc.R
-    ├── alignment.R
-    ├── alignment_processing.R
-    ├── repeats.R
-    ├── clustering.R
-    ├── consensus.R
-    ├── waterfall.R
-    ├── range_analysis.R
-    └── visualisation.R
+    ├── 00_utils.R                # General utilities
+    ├── 01_import.R               # Module 1
+    ├── 01_sequence_qc.R          # Module 1
+    ├── 02_alignment.R            # Module 2
+    ├── 02_alignment_processing.R # Module 2
+    ├── 03_repeats.R              # Module 3
+    ├── 04_clustering.R           # Module 4
+    ├── 04_consensus.R            # Module 4
+    ├── 05_waterfall.R            # Module 5
+    ├── 06_range_analysis.R       # Module 6
+    └── 07_visualisation.R        # Module 7
 ```
 
-**Note:** `duke_run.R` is configured for HPC paths, while `duke_run_local.R` contains local development paths. Keep `duke_run_local.R` in your `.gitignore` to avoid committing personal paths.
+**Note:** Library files prefixed with module numbers for easy identification
 
-### Run Analysis
+---
 
-**Local Development (R/RStudio):**
+## Run Analysis
+
+### 1. Command-Line Interface (NEW!)
+
+**Quick start:**
+```bash
+./duke \
+  --dir_data /path/to/data \
+  --dir_out /path/to/output \
+  --path_ref /path/to/reference.fasta \
+  --path_settings /path/to/settings.xlsx
+```
+
+**With adapter trimming:**
+```bash
+./duke \
+  --dir_data /path/to/data \
+  --dir_out /path/to/output \
+  --path_ref /path/to/reference.fasta \
+  --path_trim_patterns /path/to/adapters.csv
+```
+
+**Without adapter trimming:**
+```bash
+./duke \
+  --dir_data /path/to/data \
+  --dir_out /path/to/output \
+  --path_ref /path/to/reference.fasta \
+  --trim FALSE
+```
+
+**See all options:**
+```bash
+./duke --help
+```
+
+**Key features:**
+- ✅ 54+ configurable parameters
+- ✅ Resume enabled by default (skip completed modules)
+- ✅ Comprehensive help with examples
+- ✅ No file editing required
+
+---
+
+### 2. Script-Based (duke_run.R)
+
+**Local:**
 ```r
-# Edit duke_run_local.R with your local paths
-params$dir_data <- "/path/to/your/fastq/files"
-params$dir_out <- "/path/to/output/directory"
+# Edit duke_run_local.R
+params$dir_data <- "/path/to/data"
+params$dir_out <- "/path/to/output"
 params$path_ref <- "/path/to/reference.fasta"
-params$path_settings <- "/path/to/settings.xlsx"  # Required for Module 6
+params$trim <- FALSE  # Optional: disable trimming
 
-# Run the pipeline
+# Run
 source("duke_run_local.R")
 ```
 
-**Local Command Line:**
-```bash
-# Navigate to pipeline directory
-cd /path/to/duke_pipeline
-
-# Run the pipeline
-Rscript duke_run_local.R
-
-# For long runs (background)
-nohup Rscript duke_run_local.R &
-```
-
-**On HPC (Myriad):**
+**HPC:**
 ```bash
 # Edit duke_run.R with HPC paths
-# Submit job to cluster
+nano ~/Scratch/bin/duke/duke_run.R
+
+# Submit
+qsub duke_myriad.sh
+```
+
+---
+
+### 3. Interactive RStudio
+
+```r
+# Open duke_run_local.R in RStudio
+# Edit parameters
+# Run line-by-line or source
+```
+
+---
+
+## HPC Deployment
+
+### Cluster Selection
+
+| Cluster | Best For | Cores | Scheduler |
+|---------|----------|-------|-----------|
+| **Myriad** | ≤500 samples | 1-36 | SGE (`-pe smp`) |
+| **Kathleen** | 1000+ samples | 80-160 | SGE (`-pe mpi`) |
+
+### Memory Optimization (Kathleen)
+
+For large datasets, request more cores than you use:
+
+```bash
+#$ -pe mpi 160     # Request 160 cores
+#$ -l mem=2G       # 2GB/core = 320GB total
+
+# In duke_run.R:
+threads = 80       # Use only 80 threads
+```
+
+**Why:** Provides memory buffer (320GB / 80 = 4GB per thread) to prevent fork failures.
+
+### Job Submission
+
+```bash
+# Myriad
 qsub duke_myriad.sh
 
-# See HPC Deployment section below for full setup instructions
-```
-
-All runs are automatically logged to `logs/TIMESTAMP/` directories.
-
----
-
----
-
-## HPC Deployment (Myriad, Kathleen, and Similar Clusters)
-
-Duke Pipeline can be deployed on HPC clusters for large-scale analysis. This guide covers setup for UCL's Myriad and Kathleen clusters, but the principles apply to any HPC system using Grid Engine (SGE) or similar job schedulers.
-
-### Choosing Your Cluster
-
-| Cluster | Best For | Cores | Scheduler | Notes |
-|---------|----------|-------|-----------|-------|
-| **Myriad** | Serial/threaded jobs, ≤500 samples | 1-36 | SGE (`-pe smp`) | Shared nodes, TMPDIR available |
-| **Old Kathleen** | Parallel jobs, 1000+ samples | **80+ (min)** | SGE (`-pe mpi`) | Exclusive 2+ nodes, being phased out |
-| **New Kathleen** | **Parallel jobs, 1000+ samples** | **80+ (min)** | **Slurm** | **RECOMMENDED: Modern, less crowded** ✅ |
-
-**For 1000+ samples:** Use **New Kathleen** with 80 cores (~15 hours vs ~52 hours on Myriad)
-
-**⚠️ CRITICAL Differences:**
-- **Old Kathleen:** Uses SGE scheduler, requires `-pe mpi` not `-pe smp`
-- **New Kathleen:** Uses Slurm scheduler, different job script syntax
-- **Hostnames:** `kathleen.rc.ucl.ac.uk` (old) vs `kathleen-ng.rc.ucl.ac.uk` (new)
-
----
-
-### Complete Setup Guide
-
-This guide walks through setting up Duke on an HPC cluster from scratch. Follow these steps in order.
-
-#### Step 1: Connect and Check Prerequisites
-
-```bash
-# Connect to your cluster
-ssh your_username@kathleen.rc.ucl.ac.uk  # or myriad.rc.ucl.ac.uk
-
-# Check current directory
-pwd  # Should be /home/your_username
-
-# Check prerequisites
-module purge
-module load r/recommended
-R --version  # Should show R 4.2.0+
-
-module load samtools/1.11/gnu-4.9.2
-samtools --version  # Should show samtools 1.11
-```
-
-**Expected:** Both R and samtools load successfully
-
----
-
-#### Step 2: Create Directory Structure
-
-```bash
-# Create bin directory in Scratch (not backed up, but writable from compute nodes)
-mkdir -p ~/Scratch/bin
-cd ~/Scratch/bin
-
-# Create directory for Duke
-mkdir -p duke
-cd duke
-
-# Create subdirectories
-mkdir -p lib
-mkdir -p logs
-mkdir -p refs
-mkdir -p refs/adapters
-
-# Verify structure
-ls -la
-```
-
-**Result:** You now have `~/Scratch/bin/duke/` with subdirectories ready
-
----
-
-#### Step 3: Transfer Duke Files
-
-**Option A: Clone from GitHub (if available)**
-
-```bash
-cd ~/Scratch/bin
-
-# Clone Duke repository
-git clone https://github.com/mike-flower/duke.git
-
-# Enter Duke directory (created by Git)
-cd duke
-```
-
-**Option B: Copy from Another Cluster (e.g., from Myriad to Kathleen)**
-
-```bash
-# While logged into Kathleen
-cd ~/Scratch/bin
-
-# Copy entire duke directory from Myriad
-rsync -avz --progress your_username@myriad.rc.ucl.ac.uk:~/Scratch/bin/duke/ ./duke/
-
-# Enter password when prompted
-```
-
-**Option C: Upload from Local Machine**
-
-```bash
-# From your LOCAL machine (new terminal)
-cd /path/to/your/duke/files
-
-# Upload to cluster
-scp -r ./* your_username@kathleen.rc.ucl.ac.uk:~/Scratch/bin/duke/
-```
-
-**Verify files transferred:**
-
-```bash
-cd ~/Scratch/bin/duke
-ls -la
-
-# Should see:
-# - duke_run.R
-# - 01_import_and_qc.Rmd through 07_repeat_visualisation.Rmd
-# - lib/ directory
-# - duke_myriad.sh or duke_kathleen.sh (job script)
-```
-
----
-
-#### Step 4: Install minimap2
-
-```bash
-cd ~/Scratch/bin
-
-# Clone minimap2 from GitHub
-git clone https://github.com/lh3/minimap2
-
-# Compile (takes 2-3 minutes)
-cd minimap2
-make
-
-# Test it compiled successfully
-./minimap2 --version
-# Should show: 2.28-r1209 (or similar)
-
-# Add to PATH for this session
-export PATH=$HOME/Scratch/bin/minimap2:$PATH
-
-# Test PATH
-which minimap2
-# Should show: /scratch/scratch/your_username/bin/minimap2/minimap2
-
-# Make PATH permanent (add to .bashrc)
-echo 'export PATH=$HOME/Scratch/bin/minimap2:$PATH' >> ~/.bashrc
-source ~/.bashrc
-```
-
-**Result:** minimap2 is compiled and available
-
----
-
-#### Step 5: Set Up R Package Library
-
-```bash
-# Create R library directory
-mkdir -p ~/R/library
-
-# Set R library path (add to .bashrc)
-echo 'export R_LIBS_USER=~/R/library' >> ~/.bashrc
-source ~/.bashrc
-
-# Also create .Renviron file for R sessions
-echo 'R_LIBS_USER=~/R/library' > ~/.Renviron
-```
-
-**Result:** R will use your personal library in `~/R/library`
-
----
-
-#### Step 6: Install R Packages
-
-**Important:** This takes 15-20 minutes. Do it in an interactive session for reliability.
-
-```bash
-# Request interactive session with more resources
-qrsh -l h_rt=2:00:00,mem=8G
-
-# Once in interactive session, load R
-module purge
-module load r/recommended
-
-# Start R
-R
-```
-
-**In R, run:**
-
-```r
-# Verify library path
-.libPaths()
-# Should show ~/R/library first
-
-# Install CRAN packages
-packages <- c(
-  "rmarkdown", "knitr", "dplyr", "tidyr", "ggplot2", "readr", 
-  "stringr", "purrr", "DT", "plotly", "scales", "RColorBrewer", 
-  "viridis", "ggridges", "writexl", "openxlsx"
-)
-
-install.packages(packages, lib = "~/R/library", repos = "https://cloud.r-project.org")
-
-# Install BiocManager
-install.packages("BiocManager", lib = "~/R/library", repos = "https://cloud.r-project.org")
-
-# Install Bioconductor packages
-BiocManager::install(c("Biostrings", "GenomicAlignments", "GenomicRanges", 
-                       "IRanges", "Rsamtools", "ShortRead"),
-                     lib = "~/R/library", update = FALSE, ask = FALSE)
-
-# Verify all packages load
-test_packages <- c("rmarkdown", "dplyr", "Biostrings", "GenomicAlignments", "Rsamtools")
-
-for (pkg in test_packages) {
-  tryCatch({
-    library(pkg, character.only = TRUE)
-    cat("✅", pkg, "\n")
-  }, error = function(e) {
-    cat("❌", pkg, "FAILED\n")
-  })
-}
-
-# If all show ✅, you're ready!
-q()  # Quit R (save workspace: n)
-```
-
-**Exit interactive session:**
-
-```bash
-exit  # Returns to login node
-```
-
-**Result:** All R packages installed and working
-
----
-
-#### Step 7: Configure Duke for Your Data
-
-```bash
-cd ~/Scratch/bin/duke
-
-# Edit duke_run.R
-nano duke_run.R
-```
-
-**Key parameters to set:**
-
-```r
-# Find these lines and update:
-
-# Line ~46: Data directory
-dir_data = "/home/your_username/Scratch/data/your_project/data",
-
-# Line ~47: Output directory  
-dir_out = "/home/your_username/Scratch/data/your_project/result_duke",
-
-# Line ~49: Reference sequence
-path_ref = "/home/your_username/Scratch/refs/HTTset20/HTTset20.fasta",
-
-# Line ~324: Thread count (MUST match job script!)
-threads = 80,  # For Kathleen 80-core job
-# OR
-threads = 36,  # For Myriad 36-core job
-```
-
-**Save:** Ctrl+O, Enter, Ctrl+X
-
----
-
-#### Step 8: Upload/Create Job Script
-
-**For New Kathleen - Slurm (RECOMMENDED for 1000+ samples):**
-
-```bash
-cd ~/Scratch/bin/duke
-
-# Create job script
-nano duke_kathleen_slurm.sh
-```
-
-**Paste this content:**
-
-```bash
-#!/bin/bash -l
-#SBATCH --job-name=duke_kathleen
-#SBATCH --nodes=2
-#SBATCH --ntasks=80
-#SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=2G
-#SBATCH --time=48:00:00
-#SBATCH --output=logs/duke_%j.out
-#SBATCH --error=logs/duke_%j.err
-#SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=your.email@ucl.ac.uk
-
-module purge
-module load r/recommended
-module load samtools/1.11/gnu-4.9.2
-
-export R_LIBS_USER=~/R/library
-export PATH=$HOME/Scratch/bin/minimap2:$PATH
-
-cd ~/Scratch/bin/duke
-Rscript duke_run.R
-```
-
-**Submit with:** `sbatch duke_kathleen_slurm.sh`
-
----
-
-**For Old Kathleen - SGE (if New Kathleen unavailable):**
-
-```bash
-#!/bin/bash -l
-#$ -S /bin/bash
-#$ -N duke_kathleen
-#$ -wd /home/your_username/Scratch/bin/duke
-#$ -o logs/kathleen_$JOB_ID.out
-#$ -e logs/kathleen_$JOB_ID.err
-#$ -l h_rt=48:00:00
-#$ -pe mpi 80
-#$ -l mem=2G
-#$ -M your.email@ucl.ac.uk
-#$ -m bea
-
-module purge
-module load r/recommended
-module load samtools/1.11/gnu-4.9.2
-
-export R_LIBS_USER=~/R/library
-export PATH=$HOME/Scratch/bin/minimap2:$PATH
-
-cd ~/Scratch/bin/duke
-Rscript duke_run.R
-```
-
-**Submit with:** `qsub duke_kathleen.sh`
-
----
-
-**For Myriad (36 cores, for ≤500 samples):**
-
-```bash
-#!/bin/bash -l
-#$ -S /bin/bash
-#$ -N duke_myriad
-#$ -wd /home/your_username/Scratch/bin/duke
-#$ -o logs/myriad_$JOB_ID.out
-#$ -e logs/myriad_$JOB_ID.err
-#$ -l h_rt=72:00:00
-#$ -pe smp 36
-#$ -l mem=8G
-#$ -l tmpfs=150G
-#$ -M your.email@ucl.ac.uk
-#$ -m bea
-
-module purge
-module load r/recommended
-module load samtools/1.11/gnu-4.9.2
-
-export R_LIBS_USER=~/R/library
-export PATH=$HOME/Scratch/bin/minimap2:$PATH
-
-cd ~/Scratch/bin/duke
-Rscript duke_run.R
-```
-
-**Submit with:** `qsub duke_myriad.sh`
-
----
-
-**Make executable (SGE scripts only):**
-
-```bash
-chmod +x duke_kathleen.sh  # or duke_myriad.sh
-# Slurm scripts don't need chmod +x
-```
-
----
-
-#### Step 9: Submit Job
-
-**New Kathleen (Slurm):**
-```bash
-cd ~/Scratch/bin/duke
-
-# Submit to queue
-sbatch duke_kathleen_slurm.sh
-
-# Note the job ID
-# Submitted batch job 123456
-```
-
-**Old Kathleen or Myriad (SGE):**
-```bash
-cd ~/Scratch/bin/duke
-
-# Submit to queue
-qsub duke_kathleen.sh  # or qsub duke_myriad.sh
-
-# Note the job ID
-# Your job 123456 ("duke_kathleen") has been submitted
-```
-
----
-
-#### Step 10: Monitor Job
-
-**New Kathleen (Slurm):**
-```bash
-# Check job status
-squeue -u $USER
-
-# Job details
-scontrol show job JOB_ID
-
-# Watch live output
-tail -f logs/duke_JOB_ID.out
-
-# Cancel if needed
-scancel JOB_ID
-```
-
-**Old Kathleen or Myriad (SGE):**
-```bash
-# Check job status
-qstat -u $USER
-
-# States:
-# qw = queued, waiting
-# r  = running
-# Eqw = error
-
-# Watch live output
-tail -f logs/kathleen_JOB_ID.out
-
-# Cancel if needed
-qdel JOB_ID
-
-# Check progress
-ls result_duke/module_data/*.RData | wc -l  # Count completed modules
-
-# Check errors (if any)
-tail logs/kathleen_123456.err
-```
-
----
-
-### Critical Differences: Kathleen vs Myriad
-
-| Feature | Myriad | Kathleen | Important! |
-|---------|--------|----------|------------|
-| **Parallel Env** | `-pe smp` ✅ | **`-pe mpi`** ✅ | CRITICAL: Use mpi not smp! |
-| **Cores** | Up to 36 | **80, 120, 160** (min 80) | Must be multiples of 40, minimum 2 nodes |
-| **TMPDIR** | `-l tmpfs=150G` ✅ | **NOT SUPPORTED** ❌ | Remove tmpfs line for Kathleen! |
-| **Node sharing** | Shared | Exclusive (no sharing) | - |
-| **Hostname** | myriad.rc.ucl.ac.uk | kathleen.rc.ucl.ac.uk | Different login |
-| **Performance (1000 samples)** | ~18 hrs (36 cores) | **~15 hrs (80 cores)** | 20% faster |
-
-**⚠️ Critical for Kathleen:**
-1. **Use `-pe mpi` not `-pe smp`** (multi-node requirement!)
-2. **Minimum 80 cores** (2 nodes × 40 cores)
-3. Remove `-l tmpfs=` from job script (will error otherwise!)
-4. Match `threads` in duke_run.R to cores in job script
-
----
-
-### Quick Reference
-
-**Essential Commands:**
-
-**New Kathleen (Slurm):**
-```bash
-# Submit job
-sbatch duke_kathleen_slurm.sh
-
-# Check status
-squeue -u $USER
-
-# Watch output
-tail -f logs/duke_*.out
-
-# Cancel job
-scancel JOB_ID
-
-# Job details
-scontrol show job JOB_ID
-
-# After completion
-sacct -j JOB_ID --format=JobID,JobName,State,Elapsed
-```
-
-**Old Kathleen / Myriad (SGE):**
-```bash
-# Submit job
+# Kathleen  
 qsub duke_kathleen.sh
-
-# Check status
-qstat -u $USER
-
-# Watch output
-tail -f logs/kathleen_*.out
-
-# Cancel job
-qdel JOB_ID
-
-# Job details
-qstat -j JOB_ID
-
-# After completion
-qacct -j JOB_ID
 ```
 
-**File Locations:**
-
-```bash
-# Duke installation
-~/Scratch/bin/duke/
-
-# Results (not backed up!)
-~/Scratch/bin/duke/result_duke/
-
-# Backed up storage (Kathleen only)
-~/ACFS/
-
-# Job logs
-~/Scratch/bin/duke/logs/
-```
-
-**Important Parameters:**
-
-**New Kathleen (Slurm):**
-```bash
-# In job script:
-#SBATCH --ntasks=80         # Number of cores (80, 120, 160, ...)
-#SBATCH --mem-per-cpu=2G    # Memory per core
-#SBATCH --time=48:00:00     # Walltime (HH:MM:SS)
-
-# In duke_run.R:
-threads = 80                 # MUST match --ntasks!
-```
-
-**Old Kathleen (SGE):**
-```bash
-# In job script:
-#$ -pe mpi 80                # Kathleen: Use mpi, min 80 cores
-#$ -l mem=2G                 # Memory per core
-#$ -l h_rt=48:00:00          # Walltime
-
-# In duke_run.R:
-threads = 80                 # MUST match -pe cores!
-```
-
-**Myriad (SGE):**
-```bash
-# In job script:
-#$ -pe smp 36                # Myriad: Use smp, up to 36 cores
-#$ -l mem=8G                 # Memory per core
-#$ -l tmpfs=150G             # Temp space (Myriad only)
-
-# In duke_run.R:
-threads = 36                 # MUST match -pe cores!
-```
+**Performance:** ~15-18 hours for 1000 samples (Kathleen 80 cores)
 
 ---
 
-### Expected Performance
+## Parameters
 
-**For 1000 samples:**
+### New Parameters in 2.0.1
 
-| Module | Myriad (36c) | Kathleen (80c) | Notes |
-|--------|--------------|----------------|-------|
-| Module 1 | ~1.5 hrs | ~1 hr | Import & QC |
-| Module 2 | ~10 hrs | ~8 hrs | Alignment (minimap2) |
-| **Module 3** | **~15 min** | **~5 min** | Repeat detection (highly parallel!) |
-| Module 4 | ~7 hrs | ~6 hrs | Allele calling |
-| Modules 5-7 | ~30 min | ~30 min | Visualisation |
-| **Total** | **~18 hrs** | **~15 hrs** | **20% faster on Kathleen** |
+```r
+# Optional adapter trimming (NEW!)
+trim = TRUE                          # Enable/disable trimming
+                                    # Set FALSE to skip trimming
 
----
-
-### Troubleshooting
-
-**Problem:** "Unable to find a place to run this job" on Kathleen
-- **Most common cause:** Using `-pe smp` instead of `-pe mpi`
-- **Solution:** Change job script line to `#$ -pe mpi 80` (or 120, 160, etc.)
-- **Why:** Kathleen requires minimum 2 nodes (80 cores), which needs MPI not SMP
-- **Verification:** `grep "pe mpi" duke_kathleen.sh` should show the mpi setting
-
-**Problem:** Job stays in `qw` (queued) state
-- **Normal:** Queue times vary (15 min - 2 hours typical)
-- **Check:** `qstat -j 123456` for error messages
-- **Solution:** Wait, or reduce cores if urgent
-
-**Problem:** Job fails immediately (`Eqw` state)
-- **Check:** `cat logs/kathleen_*.err` for error message
-- **Common causes:**
-  - Using `-pe smp` on Kathleen (must use `-pe mpi`)
-  - tmpfs requested on Kathleen (remove `-l tmpfs=` line)
-  - Requesting less than 80 cores on Kathleen (minimum is 80)
-  - Module not found (check `module purge` then `module load` in job script)
-  - R packages missing (re-run R package installation)
-
-**Problem:** "Package 'XXX' not found"
-- **Solution:** Re-install R packages (see Step 6)
-- **Check:** `R -e "library(XXX)"` loads successfully
-
-**Problem:** "minimap2: command not found"
-- **Check:** `which minimap2` shows path
-- **Solution:** Add to PATH in job script: `export PATH=$HOME/Scratch/bin/minimap2:$PATH`
-
-**Problem:** Job exceeds walltime
-- **Solution:** Increase `-l h_rt=` in job script, or use resume (Duke automatically resumes from completed modules)
-
-**Problem:** Out of memory
-- **Solution:** Increase `-l mem=` per core in job script (e.g., 2G → 4G)
-
----
-
-### Updating Duke from GitHub
-
-If Duke is already installed and you want to update:
-
-```bash
-cd ~/Scratch/bin/duke
-
-# Save local changes
-git stash
-
-# Get updates
-git pull origin main
-
-# Restore local changes
-git stash pop
-
-# Resolve any conflicts if needed
+# Renamed for consistency
+visualise_alignment_downsample = 1000  # Was: visualise_alignment_n_reads
+                                      # Max reads to plot (NA = all)
 ```
 
----
+### Essential Parameters
 
-### Backup Results
+```r
+# Required
+dir_data = "/path/to/data"           # Input directory
+dir_out = "/path/to/output"          # Output directory
+path_ref = "/path/to/reference.fasta" # Reference FASTA
+path_settings = "/path/to/settings.xlsx" # Settings file
 
-**Kathleen has ACFS (backed up storage):**
+# Trimming (if trim = TRUE)
+path_trim_patterns = "/path/to/adapters.csv"
 
-```bash
-# After job completes, backup to ACFS
-mkdir -p ~/ACFS/duke_results_$(date +%Y%m%d)
-
-# Copy key results
-cp -r result_duke/module_data ~/ACFS/duke_results_$(date +%Y%m%d)/
-cp -r result_duke/*.html ~/ACFS/duke_results_$(date +%Y%m%d)/
-cp result_duke/06_range_analysis/range_analysis.xlsx ~/ACFS/duke_results_$(date +%Y%m%d)/
+# Runtime
+threads = 2                          # CPU cores
+resume = TRUE                        # Skip completed modules (default)
 ```
 
-**Myriad - manually download important results:**
+### Complete Parameter Reference
 
-```bash
-# From your local machine
-scp -r your_username@myriad.rc.ucl.ac.uk:~/Scratch/bin/duke/result_duke ./
-```
+#### File Paths
+- `dir_data` - Input directory **(required)**
+- `dir_out` - Output directory **(required)**
+- `path_ref` - Reference FASTA **(required)**
+- `path_trim_patterns` - Adapter file (required if `trim=TRUE`)
+- `path_settings` - Settings Excel **(required for Module 6)**
 
----
+#### Import Options
+- `import_patterns` - File extensions to import
+- `downsample` - Limit reads per sample (NA = all)
+- `select_one_of_pair` - For paired-end: "R1", "R2", or NA
 
-### Summary Checklist
+#### Adapter Trimming
+- `trim` - Enable/disable (default: TRUE)
+- `trim_max_mismatch` - Max errors (default: 3)
+- `trim_with_indels` - Allow indels (default: TRUE)
 
-**Before first job submission:**
-- [ ] Connected to cluster (SSH)
-- [ ] Created `~/Scratch/bin/duke/` directory structure
-- [ ] Transferred Duke files
-- [ ] Compiled minimap2 and added to PATH
-- [ ] Created `~/R/library` and installed all packages
-- [ ] Updated `duke_run.R` with correct paths
-- [ ] Updated `threads` in duke_run.R to match job script
-- [ ] Created job script (duke_kathleen.sh or duke_myriad.sh)
-- [ ] Removed `-l tmpfs=` from Kathleen job script
-- [ ] Made job script executable (`chmod +x`)
-- [ ] Created `logs/` directory
+#### Alignment
+- `minimap2_args` - minimap2 settings (default: "-t 2 -x sr -w 1")
+- `visualise_alignment` - Generate plots (default: TRUE)
+- `visualise_alignment_downsample` - Max reads to plot (default: 1000)
 
-**After submission:**
-- [ ] Job ID noted
-- [ ] Monitoring with `qstat -u $USER`
-- [ ] Watching logs with `tail -f logs/*.out`
+#### Repeat Detection
+All parameters have comprehensive documentation with examples in `duke_run.R` or via `./duke --help`:
 
-**After completion:**
-- [ ] All 7 modules completed successfully
-- [ ] Results backed up (ACFS or local download)
-- [ ] Large intermediate files cleaned up (optional)
+- `rpt_pattern` - Repeat motif (default: "CAG")
+- `rpt_min_repeats` - Minimum count (default: 2)
+- `rpt_max_mismatch` - Error tolerance (default: 0)
+- `rpt_start_perfect_repeats` - Perfect at start (default: 2)
+- `rpt_end_perfect_repeats` - Perfect at end (default: 2)
+- `rpt_max_gap` - Max gap within tract (default: 6)
+  - Example: "CAG-TA-CAG" = 2bp gap
+- `rpt_max_tract_gap` - Max gap between tracts (default: 18)
+- `rpt_return_option` - "longest" or "all"
 
-**You're ready to run Duke on HPC!** 🚀
+#### Clustering
+- `cluster` - Enable clustering (default: TRUE)
+- `cluster_by` - Method: "repeat", "haplotype", or both
+- `haplotype_cluster_max` - Max haplotypes (default: 10)
+- `repeat_cluster_max` - Max repeat lengths (default: 20)
 
----
-## Essential Parameters
+#### Module Control
+- `waterfall` - Generate waterfall plots (default: TRUE)
+- `repeat_histogram` - Generate histograms (default: TRUE)
+- `repeat_scatter` - Generate scatter plots (default: TRUE)
 
-Duke has **55 configurable parameters**. Here are the most important:
-
-### Required Parameters (4)
-
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `dir_data` | Input directory with FASTQ/FASTA/BAM files | `/path/to/data` |
-| `dir_out` | Output directory for all results | `/path/to/results` |
-| `path_ref` | Reference FASTA with NNNNN separator | `/path/to/reference.fasta` |
-| `path_settings` | Settings Excel/CSV (required for Module 6-7) | `/path/to/settings.xlsx` |
-
-### Commonly Modified Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `threads` | `4` | CPU cores for parallel processing |
-| `resume` | `TRUE` | Skip completed modules |
-| `downsample` | `NA` | Subsample to N reads (use `NA` for all) |
-| `rpt_pattern` | `"CAG"` | DNA motif to detect |
-| `cluster_by` | `"repeat"` | Clustering strategy |
-| `group_control` | `TRUE` | Enable control comparison |
-| `waterfall` | `TRUE` | Generate waterfall plots |
-| `remove_intermediate` | `TRUE` | Free RAM during run |
-| `cleanup_temp` | `FALSE` | Delete temp files after |
-
-### Reference Format ⚠️ IMPORTANT
-
-The reference FASTA file **must** use uppercase `NNNNN` (5 consecutive Ns) to mark the repeat region location:
-
-```
->reference_name
-AGCTGATCGATCG...FLANKING_SEQUENCE_LEFT...
-NNNNN
-...FLANKING_SEQUENCE_RIGHT...GATCGATCGAT
-```
-
-**Example HTT reference:**
-```
->HTT_CAG_repeat_amplicon
-GGCGACCCTGGAAAAGCTGATGAAGGCCTTCGAGTCCCTCAAGTCCTTC
-NNNNN
-CAACAGCCGCCACCGCCGCCGCCGCCGCCGCCTCCTCAGCTTCCTCAGC
-```
-
----
-
-## Settings File Format
-
-Duke requires a settings file (Excel or CSV) defining sample-specific parameters for Module 6-7.
-
-**Supported formats:** `.xlsx`, `.xls`, `.csv`
-
-**Example provided:** `settings_example.xlsx`
-
-### Required Columns
-
-| Column | Description | Example |
-|--------|-------------|---------|
-| `file_name` | **Complete** FASTQ filename (Duke extracts stem automatically) | `sample_001.fastq.gz` |
-| `analysis_ranges` | Range definitions using square brackets | `[0-35]` or `[0-35][36-200]` |
-| `floor` | Peak detection frequency threshold(s), one per range | `[3]` or `[3][10]` |
-| `max_peaks` | Maximum peaks per range | `[3]` or `[3][2]` |
-
-### Optional Columns
-
-| Column | Description | Example |
-|--------|-------------|---------|
-| `group` | Sample grouping for comparative analysis | `patient1`, `control` |
-| `group_control_sample` | Any non-blank value = control sample | `1`, `TRUE`, or blank |
-| `time` | Timepoint for temporal analysis | `0`, `6`, `12` |
-| `manual_control_repeat_length` | Manual control setpoint(s), one per range | `[24][120]` or blank |
-| `exclude` | Any non-blank value = exclude from analysis | `1`, `TRUE`, or blank |
-
-### Understanding the `floor` Parameter
-
-The `floor` parameter controls **frequency filtering** for peak detection. It determines the minimum number of times a repeat length must appear to be considered for analysis.
-
-**How it works:**
-
-- **If `floor >= 1`** (e.g., 1, 3, 10): Treated as an **absolute count** (minimum number of reads)
-  - `floor = 3` means "keep only repeat lengths appearing ≥3 times"
-  - Removes low-frequency noise (singletons, doubletons)
-  
-- **If `floor < 1`** (e.g., 0.05, 0.1): Treated as a **proportion** of maximum frequency
-  - `floor = 0.05` means "keep only repeat lengths appearing ≥5% as often as the most common length"
-  - Automatically scales with sequencing depth
-
-**Common values:**
-
-| Value | Effect | Use Case |
-|-------|--------|----------|
-| `[0]` | No filtering, keep all data | Maximum sensitivity, noisy |
-| `[1]` | Keep all (functionally same as 0) | Minimal filtering |
-| `[3]` | **Recommended default** | Removes technical noise, good balance |
-| `[5]` or `[10]` | Higher stringency | Deep sequencing, focus on major peaks |
-| `[0.05]` | Keep ≥5% of max frequency | Adaptive filtering, scales with depth |
-
-**Example for diploid Huntington's disease:**
-```
-analysis_ranges: [0-35][36-200]
-floor:           [3][10]
-```
-- Normal range (0-35): Lower threshold (3) to detect both alleles
-- Expanded range (36-200): Higher threshold (10) as expanded alleles may be less frequent
-
-**What gets filtered:**
-- If you have a repeat length appearing only 1-2 times (likely sequencing errors)
-- With `floor = [3]`, these low-frequency lengths are excluded from peak detection and statistics
-- The `n_reads_total` vs `n_reads_used` columns in output show how many reads were filtered
-
-### Analysis Ranges Syntax
-
-Use **square bracket notation**:
-
-**Single range:**
-```
-[0-35]
-```
-
-**Multiple ranges:**
-```
-[0-35][36-200]
-```
-
-**Open-ended range:**
-```
-[36-NA]    # NA = no upper limit
-```
-
-### Multi-Range Parameters
-
-When you define **multiple analysis ranges**, these parameters must have **matching numbers of values**:
-
-| Parameter | Format | Example for 2 ranges |
-|-----------|--------|---------------------|
-| `analysis_ranges` | `[min-max][min-max]` | `[0-35][36-200]` |
-| `floor` | `[val1][val2]` | `[3][10]` |
-| `max_peaks` | `[val1][val2]` | `[3][2]` |
-| `manual_control_repeat_length` | `[val1][val2]` or blank | `[24][120]` |
-
-**Example row:**
-```
-file_name: sample_001.fastq.gz
-analysis_ranges: [0-35][36-200]
-floor: [3][10]
-max_peaks: [3][2]
-group: patient1
-group_control_sample: 
-```
-
-### Important Notes
-
-- **File name matching**: Duke uses the **complete filename**, not a separate file_stem column. Duke automatically extracts the stem by removing extensions.
-- **Control designation**: **Any non-blank value** in `group_control_sample` marks it as a control (`1`, `TRUE`, `yes`, etc. all work)
-- **Exclusion**: **Any non-blank value** in `exclude` column excludes the sample
-- **Range count consistency**: `floor` and `max_peaks` **must** have the same number of values as `analysis_ranges`
+#### Runtime
+- `threads` - CPU cores (default: 80 HPC / 2 local)
+- `resume` - Skip completed modules (default: TRUE)
+- `remove_intermediate` - Free RAM (default: TRUE)
+- `cleanup_temp` - Delete temp files (default: FALSE)
+- `run_modules` - Which modules to run (default: c(1:7))
+- `log_dir` - Log directory (default: "logs")
 
 ---
 
 ## Module Overview
 
-| Module | Name | Outputs |
-|--------|------|---------|
-| 1 | Import & QC | Read counts, quality metrics, filtering stats |
-| 2 | Alignment | Alignment to reference, MAPQ, coverage, strand |
-| 3 | Repeat Detection | Repeat length calling, distributions |
-| 4 | Allele Calling | Clustering, consensus sequences, variants (VCF) |
-| 5 | Waterfall Plots | Per-cluster visualisations |
-| 6 | Range Analysis | Modal peaks, instability metrics, control comparisons |
-| 7 | Distribution Visualisation | Histograms, scatter/violin plots |
+### Module 1: Import and QC
+- Imports FASTQ/FASTA/BAM files
+- **Optionally trims adapters** (controlled by `trim` parameter)
+- Removes duplicates
+- QC metrics and plots
 
-### Which Modules Use the Settings File?
+### Module 2: Alignment
+- minimap2 alignment to reference
+- Strand correction
+- Coverage visualization
 
-**Only Module 6 (Range Analysis)** requires the settings file specified in `path_settings`.
+### Module 3: Repeat Detection
+- Identifies repeat tracts
+- Tolerates sequencing errors
+- Multiple counting methods
 
-| Module | Uses Settings? | Rerun After Settings Change? |
-|--------|---------------|------------------------------|
-| Module 1: Import & QC | ❌ No | ❌ No - skip with `run_module_1 = FALSE` |
-| Module 2: Alignment | ❌ No | ❌ No - skip with `run_module_2 = FALSE` |
-| Module 3: Repeat Detection | ❌ No | ❌ No - skip with `run_module_3 = FALSE` |
-| Module 4: Allele Calling | ❌ No | ❌ No - skip with `run_module_4 = FALSE` |
-| Module 5: Waterfall Plots | ❌ No | ❌ No - skip with `run_module_5 = FALSE` |
-| **Module 6: Range Analysis** | **✅ Yes** | **✅ Yes - must rerun** |
-| Module 7: Visualisation | ❌ No* | ✅ Yes - uses Module 6 outputs |
+### Module 4: Allele Calling
+- Clusters by repeat/haplotype
+- Consensus sequences
+- Variant calling (VCF export)
 
-*Module 7 doesn't read settings directly, but visualises Module 6 outputs.
+### Module 5: Waterfall Plots
+- Visual read inspection
+- Per-sample and per-cluster plots
+- Configurable downsampling
 
----
+### Module 6: Range Analysis
+- Modal peak detection
+- Instability metrics
+- Control comparisons
+- Excel export
 
-## Control Sample Analysis
-
-Duke quantifies somatic instability by comparing samples to germline/control baselines.
-
-### Setup
-
-**1. Enable in duke_run.R:**
-```r
-group_control = TRUE
-control_sample_selection = "flagged"  # or "earliest" or "all"
-control_setpoint_metric = "median_length"  # or "modal_length" or "mean_length"
-control_aggregation_method = "median"  # or "mean" or "trimmed_mean"
-```
-
-**2. Mark controls in settings file:**
-Add `group_control_sample = 1` for baseline samples (blood, germline, t0).
-
-### Outputs
-
-**Instability metrics** (two types per sample):
-- **Sample-relative:** Compare to sample's own baseline (always calculated)
-- **Control-relative:** Compare to group control baseline (only if `group_control = TRUE`)
-  - Includes z-scores and statistical measures
-  - Detects somatic changes
-
-**Visualisations:**
-- Group control setpoints table
-- Violin plots of control distributions  
-- Instability index by group
-- Expansion/contraction ratios
-
-**Example HD workflow:** Blood as control (germline) → Brain samples (test somatic expansion) → Z-scores quantify deviation
-
----
-
-## Analysis Ranges
-
-Analysis ranges focus analysis on specific repeat length windows.
-
-### Benefits
-
-- **Biological:** Separate normal/pathogenic repeats, clinical severity categories
-- **Technical:** Filter artifacts, focus on high-confidence calls  
-- **Statistical:** Independent peak detection and metrics per range
-
-### Syntax
-
-Defined in settings file using square brackets:
-```
-[0-35]              # Single range
-[0-35][36-200]      # Two ranges
-[0-35][36-NA]       # Open-ended (NA = no upper limit)
-```
-
-### Outputs Per Range
-
-- **Module 6:** Modal peaks, distribution metrics (mean/median/modal), spread (SD/IQR/CV), instability metrics, ridge plots
-- **Module 7:** Histograms, scatter plots, combined visualisations
-
-### Automatic "Full" Range
-
-Duke always creates a "Full" range with all data, regardless of defined ranges. Use this to identify artifacts excluded from focused ranges.
-
-### Best Practices
-
-- Keep ranges consistent across samples for comparability
-- Use biologically meaningful boundaries (e.g., disease thresholds)
-- Typical: 2-4 ranges (more = more plots = longer runtime)
-
-**Example HD ranges:**
-```
-[0-35][36-200]     # Normal vs. expanded
-```
+### Module 7: Repeat Visualization
+- Frequency histograms
+- Scatter/violin plots
+- Publication-ready figures
 
 ---
 
 ## Output Structure
 
 ```
-dir_out/
-├── 01_import_and_qc.html
-├── 01_import_qc/
-│   ├── plots/
-│   │   ├── quality_vs_length.png                      # Combined plot
-│   │   └── quality_vs_length_by_sample/               # Individual plots
-│   │       └── {sample}-quality_vs_length.png
-│   └── qc/
-│       └── qc.xlsx
-│
+result_duke/
+├── 01_import_and_qc.html             # HTML reports
 ├── 02_alignment.html
-├── 02_alignment/
-│   ├── plots/
-│   │   ├── alignment_length_by_flank.png              # Combined plots
-│   │   ├── mapq_distribution.png
-│   │   ├── repeat_segment_length.png
-│   │   ├── alignment_length_by_flank_by_sample/       # Individual plots
-│   │   │   └── {sample}-alignment_length_by_flank.png
-│   │   ├── mapq_distribution_by_sample/
-│   │   │   └── {sample}-mapq_distribution.png
-│   │   ├── coverage_by_sample/
-│   │   │   └── {sample}-coverage.png
-│   │   └── repeat_segment_length_by_sample/
-│   │       └── {sample}-repeat_segment_length.png
-│   └── alignment/
-│       └── alignment_qc.xlsx
-│
-├── 03_repeat_detection.html
-├── 03_repeat_detection/
-│   ├── plots/
-│   │   ├── repeat_histogram.png                       # Combined plots
-│   │   ├── repeat_violin.png
-│   │   ├── repeat_density.png
-│   │   ├── repeat_histogram_by_sample/                # Individual plots
-│   │   │   └── {sample}-repeat_histogram.png
-│   │   ├── repeat_violin_by_sample/
-│   │   │   └── {sample}-repeat_violin.png
-│   │   └── repeat_density_by_sample/
-│   │       └── {sample}-repeat_density.png
-│   └── repeat_detection/
-│       └── repeat_summaries.xlsx
-│
-├── 04_allele_calling.html
-├── 04_allele_calling/
-│   ├── plots/
-│   │   ├── scatter.png                                # Combined plots
-│   │   ├── violin.png
-│   │   ├── scatter_by_sample/                         # Individual plots
-│   │   │   └── {sample}-scatter.png
-│   │   └── violin_by_sample/
-│   │       └── {sample}-violin.png
-│   ├── consensus/
-│   │   ├── consensus_sequences.fasta
-│   │   └── consensus_summary.xlsx
-│   └── variants/
-│       ├── all_samples_variants.vcf
-│       ├── variant_summary.xlsx
-│       └── vcf_by_sample/
-│           └── {sample}_variants.vcf
-│
-├── 05_waterfall.html
-├── 05_waterfall/
-│   └── plots/
-│       ├── waterfall_{sample}.png
-│       └── waterfall_by_cluster/
-│           └── {sample}_cluster{N}-waterfall.png
-│
-├── 06_range_analysis.html
-├── 06_range_analysis/
-│   ├── plots/
-│   │   ├── 01_modal_peaks.png                         # 20 main plots (01-20)
-│   │   ├── 02_modal_vs_mean.png
-│   │   ├── ...
-│   │   ├── 19_read_proportions_by_region.png
-│   │   ├── 20_expansion_contraction_balance.png
-│   │   ├── 01_modal_peaks_by_sample/                  # By-sample plots
-│   │   │   └── {sample}-modal_peaks.png
-│   │   ├── 02_modal_vs_mean_by_range/                 # By-range plots
-│   │   │   └── modal_vs_mean-{range}.png
-│   │   ├── 05_tail_balance_by_range/
-│   │   │   └── tail_balance-{range}.png
-│   │   ├── 21_density_by_group_and_time/              # Density plots
-│   │   │   ├── Full/
-│   │   │   │   ├── density.png
-│   │   │   │   └── density-{group}.png
-│   │   │   └── {range}/
-│   │   │       ├── density-{range}.png
-│   │   │       └── density-{group}-{range}.png
-│   │   ├── distribution_by_range/
-│   │   │   └── metrics-{range}.png
-│   │   ├── distribution_by_sample/
-│   │   │   └── {sample}-distribution.png
-│   │   ├── instability_by_range/
-│   │   │   ├── instability_index-{range}.png
-│   │   │   └── read_counts-{range}.png
-│   │   └── instability_by_sample/
-│   │       └── {sample}-instability.png
-│   └── range_analysis/
-│       └── range_analysis_results.xlsx
-│
+├── ...
 ├── 07_repeat_visualisation.html
-├── 07_repeat_visualisation/
-│   └── plots/
-│       ├── scatter.png                                # Combined scatter plot
-│       ├── histograms_by_sample/
-│       │   ├── {sample}-histogram-full.png            # Full range
-│       │   └── {sample}-histogram-{range}.png         # Per range
-│       ├── scatter_by_range/
-│       │   └── scatter-{range}.png
-│       └── scatter_by_sample/
-│           └── {sample}-scatter.png
 │
-├── module_data/
-│   └── *.RData (for resume functionality)
-└── temp/
-    └── (intermediate files, removed if cleanup_temp = TRUE)
+├── module_data/                      # Cached results (for resume)
+│   ├── 01_import_qc_results.RData
+│   ├── 02_alignment_results.RData
+│   └── ...
+│
+├── 01_import_qc/                     # Module outputs
+│   ├── qc.xlsx
+│   └── plots/
+├── 02_alignment/
+│   └── plots/coverage_by_sample/
+├── ...
+└── 07_repeat_visualisation/
+    └── plots/
 ```
-
-**Plot Organization Notes:**
-- Combined plots are in the root `plots/` directory
-- Individual sample plots are in `*_by_sample/` subdirectories
-- Individual range plots are in `*_by_range/` subdirectories
-- Filenames follow pattern: `{identifier}-{plot_type}.png`
-- Module 6 has 21 numbered plot groups (01-21)
-
----
-
-## Complete Parameter Reference
-
-Duke has **55 configurable parameters** organised by module. All are specified in `duke_run.R`.
-
-### Essential Paths
-
-| Parameter | Type | Default | Required | Description |
-|-----------|------|---------|----------|-------------|
-| `dir_data` | string | - | ✅ | Directory containing input FASTQ/FASTA/BAM files |
-| `dir_out` | string | - | ✅ | Output directory for all results |
-| `path_ref` | string | - | ✅ | Reference FASTA file (must contain NNNNN separator for repeat region) |
-| `path_settings` | string | - | ✅ (Module 6-7) | Settings Excel/CSV file defining analysis ranges and groupings |
-| `path_trim_patterns` | string | - | Optional | CSV file with adapter/primer sequences for trimming |
-| `path_manual_exclusions` | string | `NA` | Optional | Excel/CSV file listing specific read names to exclude from analysis |
-
-### Module 1: Import & QC
-
-**File Import:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `import_patterns` | character vector | `c("\\.fastq$", "\\.fastq.gz$", "\\.fasta$", "\\.fa$", "\\.bam$")` | File extensions to import |
-| `import_recursive` | logical | `TRUE` | Search subdirectories recursively |
-| `r1_pattern` | string | `"_R1_"` | Pattern to identify R1 files (paired-end) |
-| `r2_pattern` | string | `"_R2_"` | Pattern to identify R2 files (paired-end) |
-| `select_one_of_pair` | string | `"R1"` | For paired-end: "R1", "R2", or `NA` to keep both |
-| `downsample` | numeric | `NA` | Subsample to N reads per sample |
-
-**Adapter Trimming:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `trim_max_mismatch` | numeric | `3` | Maximum mismatches in adapter matching (0 = perfect, 3 = ~10% error) |
-| `trim_with_indels` | logical | `TRUE` | Allow insertions/deletions in adapter matching |
-
-### Module 2: Alignment
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `minimap2_args` | string | `"-t 2 -x sr -w 1"` | minimap2 arguments (flags -a, --MD, --cs added automatically) |
-| `visualise_alignment` | logical | `TRUE` | Generate raw alignment plots |
-| `visualise_alignment_corrected` | logical | `TRUE` | Generate plots after strand correction |
-
-**Common minimap2 presets:**
-- `"-t 2 -x sr -w 1"` - Amplicon sequencing (recommended)
-- `"-t 2 -x map-ont -k 15"` - Long genomic ONT reads
-- `"-t 2 -x map-hifi"` - PacBio HiFi genomic data
-
-### Module 3: Repeat Detection
-
-**Pattern Matching:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `rpt_pattern` | string | `"CAG"` | DNA motif to search for |
-| `rpt_min_repeats` | numeric | `2` | Minimum consecutive repeats |
-| `rpt_max_mismatch` | numeric | `0` | Maximum mismatches per repeat unit |
-| `rpt_start_perfect_repeats` | numeric | `2` | Minimum perfect repeats at tract start |
-| `rpt_end_perfect_repeats` | numeric | `2` | Minimum perfect repeats at tract end |
-| `rpt_max_gap` | numeric | `6` | Maximum gap within a tract |
-| `rpt_max_tract_gap` | numeric | `18` | Maximum gap between tracts to merge |
-| `rpt_return_option` | string | `"longest"` | Which tract: "longest", "first", or "all" |
-
-**Repeat Counting:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `repeat_count_method` | string | `"repeat_count_full"` | `"repeat_count_full"` (tract length ÷ pattern, recommended) or `"repeat_count_match"` (exact matches) |
-| `na_repeat_handling` | string | `"convert_to_zero"` | `"convert_to_zero"`, `"filter"`, or `"flag_only"` |
-
-### Module 4: Allele Calling & Clustering
-
-**Clustering Strategy:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `cluster` | logical | `TRUE` | Enable clustering |
-| `cluster_by` | string/vector | `"repeat"` | `"repeat"`, `"haplotype"`, `c("repeat", "haplotype")`, or `"none"` |
-| `repeat_cluster_max` | numeric | `20` | Maximum repeat-based clusters |
-| `haplotype_cluster_max` | numeric | `10` | Maximum haplotype-based clusters |
-
-**Haplotype Clustering:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `haplotype_region` | string | `"both"` | Flanking region: `"left"`, `"right"`, or `"both"` |
-| `haplotype_method` | string | `"levenshtein"` | Distance: `"levenshtein"` or `"hamming"` |
-| `haplotype_trim_length` | string/numeric | `"auto"` | `NA` (no trim), `"auto"` (modal length), or numeric (bp) |
-| `haplotype_subsample` | numeric | `250` | Subsample to N reads for distance matrix |
-
-**Consensus & Variants:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `cluster_consensus` | logical | `TRUE` | Generate consensus sequences |
-| `consensus_threshold` | numeric | `0.5` | Minimum base frequency (0.5 = majority) |
-| `consensus_downsample` | numeric | `50` | Maximum reads per consensus |
-| `call_variants` | logical | `TRUE` | Call variants (generates VCF files) |
-
-### Module 5: Waterfall Plots
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `waterfall` | logical | `TRUE` | Generate waterfall plots |
-| `waterfall_downsample` | numeric | `1000` | Maximum reads to plot per sample |
-| `waterfall_rm_flank_length_outliers` | logical | `TRUE` | Remove reads with unusual flank lengths (IQR method) |
-| `waterfall_y_axis_labels` | string/numeric | `"auto"` | Y-axis label density: `"auto"`, `"all"`, or integer |
-| `waterfall_per_cluster` | logical | `TRUE` | Generate separate waterfall per cluster |
-| `dna_colours` | named vector | See code | Hex colours for DNA bases (A, C, T, G, -, N) |
-
-### Module 6: Range Analysis
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path_settings` | string | - | ✅ **Required** - Settings file with analysis ranges |
-| `range_peak_span` | numeric | `3` | Peak detection smoothing window (odd integer) |
-| `group_control` | logical | `TRUE` | Enable control comparison analysis |
-| `control_sample_selection` | string | `"flagged"` | `"flagged"`, `"earliest"`, or `"all"` |
-| `control_setpoint_metric` | string | `"median_length"` | `"modal_length"`, `"mean_length"`, or `"median_length"` |
-| `control_aggregation_method` | string | `"median"` | `"mean"`, `"median"`, or `"trimmed_mean"` |
-
-### Module 7: Distribution Visualisation
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `repeat_histogram` | logical | `TRUE` | Generate frequency histograms |
-| `repeat_histogram_binwidth` | numeric | `1` | Histogram bin width in repeat units |
-| `repeat_scatter` | logical | `TRUE` | Generate scatter/violin plots |
-| `repeat_distribution_metrics` | character vector | `c("modal_length", "mean_length", "median_length")` | Metrics to overlay on plots |
-
-### Performance & System
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `threads` | numeric | `4` | CPU cores for parallel processing |
-| `resume` | logical | `TRUE` | Skip completed modules using cached files |
-| `remove_intermediate` | logical | `TRUE` | Delete large objects from memory during run (frees RAM) |
-| `cleanup_temp` | logical | `FALSE` | Delete temp/ directory after completion (frees disk space) |
 
 ---
 
 ## Troubleshooting
 
-### Issue: "Cannot find reference file"
-**Solution**: Check `path_ref` is absolute path and file exists.
+### Common Issues
 
-### Issue: "No reads pass QC"
-**Solution**: Check:
-- Adapter sequences in `path_trim_patterns`
-- Reference sequence matches your amplicon
-
-### Issue: "Module fails to render"
-**Solution**: 
-- Check all required packages installed
-- Look in module HTML for specific error
-- Try `resume = FALSE` to re-run from scratch
-
-### Issue: "Out of memory"
-**Solution**:
-- Reduce `threads` parameter
-- Enable `downsample` for testing
-- Use `remove_intermediate = TRUE`
-- Use `cleanup_temp = TRUE`
-
-### Issue: "Alignments have low MAPQ"
-**Solution**:
-- Check reference sequence orientation
-- Verify amplicon primers match reference flanks
-
-### Issue: "Module 4 consensus generation fails silently"
-**Solution**:
-- This was a DECIPHER bug (fixed in v2.0.1)
-- Update to latest version with fixed `lib/consensus.R`
-- Bug was caused by `includeNonLetters=FALSE` parameter
-
-### Issue: "Module 6 fails with 'no package called writexl'"
-**Solution**:
-- This was fixed in v2.0.1 by replacing with `openxlsx`
-- Update to latest `06_range_analysis.Rmd`
-- Alternative: Install writexl with `install.packages("writexl")`
-
-### Issue: "Cannot find minimap2 on HPC"
-**Solution**:
-- Compile from source (see HPC Deployment section)
-- Add to PATH in ~/.bashrc
-- Verify with `minimap2 --version`
-
----
-
-## Advanced Configuration
-
-### Custom Read Filtering
-```r
-trim_max_mismatch = 3      # Adapter matching tolerance
-trim_with_indels = TRUE     # Allow indels in adapters
+**"Error: --path_ref is required"**
+```bash
+# path_ref is now required (no default)
+./duke --path_ref /path/to/reference.fasta ...
 ```
 
-### Clustering Options
-```r
-cluster_by = c("repeat", "haplotype")  # Two-step clustering
-haplotype_cluster_max = 10              # Max haplotypes
-repeat_cluster_max = 20                 # Max repeats
+**"Cannot allocate memory" (Kathleen)**
+```bash
+# Request more cores than you use:
+#$ -pe mpi 160
+#$ -l mem=2G
+# threads = 80 in duke_run.R
 ```
 
-### Waterfall Customisation
+**"visualise_alignment_n_reads not found"**
 ```r
-waterfall_downsample = 1000              # Reads per plot
-waterfall_rm_flank_length_outliers = TRUE # Remove outliers
-waterfall_y_axis_labels = "auto"         # Label density
-waterfall_per_cluster = TRUE             # Per-cluster plots
+# Renamed in 2.0.1:
+visualise_alignment_downsample = 1000  # New name
+```
+
+**"path_trim_patterns required"**
+```bash
+# Either provide it:
+./duke --path_trim_patterns /path/to/adapters.csv ...
+
+# Or disable trimming:
+./duke --trim FALSE ...
+```
+
+**Resume not working (CLI)**
+```bash
+# Resume is enabled by default (changed in 2.0.1)
+# To force re-run:
+./duke --resume FALSE ...
+```
+
+**Want to re-run specific modules**
+```bash
+# Delete module output:
+rm result_duke/module_data/03_repeat_detection_results.RData
+
+# Or run specific modules only:
+./duke --run_modules 3,4,5 ...
 ```
 
 ---
 
-## Package Dependencies
+## Version History
 
-Duke requires **37 R packages** (27 CRAN + 5 Bioconductor + 5 base R).
+### 2.0.1 (January 2025) - Current
+- ✨ **NEW:** Command-line interface
+- ✅ **NEW:** `trim` parameter (optional adapter trimming)
+- 🔧 **RENAMED:** `visualise_alignment_downsample` (was: `_n_reads`)
+- 🐛 **FIXED:** CLI resume detection
+- 🐛 **FIXED:** Resume default now TRUE (consistent)
+- 📚 **ENHANCED:** Comprehensive repeat parameter documentation
+- 📦 **ORGANIZED:** Library files with module prefixes (00-07)
+- 🔧 **UPDATED:** Conditional trimming in Module 1
+- ❌ **REMOVED:** `visualise_alignment_corrected` (didn't exist)
 
-**Note:** Module 6 previously used `writexl` but now uses `openxlsx` for better HPC compatibility.
-
-### CRAN Packages (27)
-
-**Core Data Manipulation:**
-- `tidyverse`, `data.table`, `dplyr`, `tidyr`, `stringr`, `tibble`, `plyr`, `readxl`
-
-**Visualisation:**
-- `ggplot2`, `ggrepel`, `ggridges`, `ggnewscale`, `scales`, `RColorBrewer`, `viridisLite`, `cowplot`
-
-**Reporting:**
-- `rmarkdown`, `knitr`, `kableExtra`, `DT`, `htmltools`, `openxlsx`
-
-**Statistical Analysis:**
-- `mclust`, `cluster`, `ineq`, `moments`, `pracma`
-
-**Parallel Processing:**
-- `pbapply`, `pbmcapply`
-
-**Utilities:**
-- `rstudioapi`
-
-### Bioconductor Packages (5)
-
-- `Biostrings` - DNA/RNA sequence manipulation
-- `ShortRead` - FASTQ file processing
-- `GenomicAlignments` - Genomic alignment manipulation
-- `Rsamtools` - BAM file manipulation
-- `DECIPHER` - Multiple sequence alignment
-
-### External Dependencies
-
-**Required system tools:**
-- `minimap2` - Read alignment (must be in PATH)
-- `samtools` - BAM file processing (v1.11+)
-
-**Installation notes:**
-- On HPC systems without minimap2 modules, compile from source (see HPC Deployment section)
-- samtools typically available as module on HPC systems
-
-### Verification Script
-
-```r
-required_cran <- c("tidyverse", "data.table", "dplyr", "tidyr", "stringr", 
-                   "tibble", "readxl", "plyr", "ggplot2", "ggrepel", 
-                   "ggridges", "ggnewscale", "scales", "RColorBrewer", 
-                   "viridisLite", "cowplot", "rmarkdown", "knitr", 
-                   "kableExtra", "DT", "htmltools", "openxlsx", "mclust", 
-                   "cluster", "ineq", "moments", "pracma", "pbapply", 
-                   "pbmcapply", "rstudioapi")
-
-required_bioc <- c("Biostrings", "ShortRead", "GenomicAlignments", 
-                   "Rsamtools", "DECIPHER")
-
-# Check CRAN packages
-missing_cran <- required_cran[!sapply(required_cran, requireNamespace, quietly = TRUE)]
-if (length(missing_cran) > 0) {
-  cat("Missing CRAN packages:\n")
-  print(missing_cran)
-} else {
-  cat("All CRAN packages installed!\n")
-}
-
-# Check Bioconductor packages
-missing_bioc <- required_bioc[!sapply(required_bioc, requireNamespace, quietly = TRUE)]
-if (length(missing_bioc) > 0) {
-  cat("Missing Bioconductor packages:\n")
-  print(missing_bioc)
-} else {
-  cat("All Bioconductor packages installed!\n")
-}
-```
+### 2.0.0
+- Modular architecture (7 modules)
+- Resume capability
+- Cleanup options
 
 ---
 
 ## Citation
 
-If you use Duke Pipeline in your research, please cite:
-
-```
-[Your paper citation here]
-```
+[Citation information to be added]
 
 ---
 
-## License
+## Contact
 
-[Your license here]
+For issues or questions:
+- GitHub Issues: [repository URL]
+- Email: [contact email]
 
 ---
 
-## Changelog
-
-### Version 2.0.1 (2025-01-06)
-
-**Bug Fixes:**
-- ✅ **Module 4 (consensus.R)**: Fixed DECIPHER bug where `includeNonLetters=FALSE` caused `ConsensusSequence()` to fail silently. Removed problematic parameter (lines 26-33).
-- ✅ **Module 6 (06_range_analysis.Rmd)**: Replaced `writexl` package with `openxlsx` for broader HPC compatibility (line 23, line 2052).
-
-**Enhancements:**
-- ✅ Added comprehensive HPC deployment documentation
-- ✅ Documented minimap2 installation for systems without module
-- ✅ Added R dependency installation guide for HPC
-- ✅ Created job submission and monitoring workflows
-- ✅ Added resource allocation guidelines by dataset size
-
-**Files Modified:**
-- `lib/consensus.R`: Removed `includeNonLetters` parameter
-- `06_range_analysis.Rmd`: Changed `writexl::write_xlsx()` to `openxlsx::write.xlsx()`
-- `README.md`: Added HPC deployment section
-- `duke_myriad.sh`: Template job script for UCL Myriad
-
-### Version 2.0 (2024)
-- ✅ Modular architecture (7 modules)
-- ✅ Descriptive directory naming
-- ✅ Enhanced range analysis (Module 6)
-- ✅ Distribution visualisation (Module 7)
-- ✅ Flexible metric selection
-- ✅ Automatic temp cleanup option
-- ✅ Resume capability
-- ✅ Renamed results/ to module_data/
-
-### Version 1.0
-- Initial monolithic script
+**Duke Pipeline 2.0.1 - Ready for production!** 🎯

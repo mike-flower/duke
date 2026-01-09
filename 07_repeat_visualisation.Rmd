@@ -36,8 +36,8 @@ library(DT)
 library(ggnewscale)
 library(data.table)
 
-# Source visualization functions
-source("lib/visualisation.R")
+# Source shared functions
+source("lib/load_all.R")
 
 # Create output directory
 plots_dir <- file.path(params$dir_out, file.path("07_repeat_visualisation", "plots"))

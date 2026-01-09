@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # ==============================================================================
-# Duke Pipeline - Enhanced Runner Script
+# Duke Pipeline
 # ==============================================================================
 # Runs the modular Duke pipeline for amplicon sequencing analysis
 # ==============================================================================
@@ -70,6 +70,12 @@ params <- list(
   # Adapter trimming (from both 5' and 3' ends using Biostrings::trimLRPatterns)
   # -----------------------------------------------------------------------------
   
+  # trim: Enable or disable adapter trimming
+  #   - TRUE = trim adapters using patterns from path_trim_patterns
+  #   - FALSE = skip adapter trimming (sequences pass through untrimmed)
+  #   Note: If trim=TRUE, path_trim_patterns must be provided
+  trim = TRUE,
+  
   # trim_max_mismatch: Maximum mismatches allowed when matching adapters
   #   - 0 = Perfect match only
   #   - 3 = Good for ONT (~10% error for 30bp adapter)
@@ -110,20 +116,67 @@ params <- list(
   #   "-t 2 -x map-hifi"       # For PacBio HiFi genomic data
   #   "-t 2 -x map-pb"         # For PacBio CLR genomic data
   
-  # Visualisation options (new in enhanced Module 2)
-  visualise_alignment = TRUE,  # Plot raw alignments (can be slow for large datasets)
-  visualise_alignment_corrected = TRUE,  # Plot strand-corrected alignments
+  # Visualization options
+  visualise_alignment = TRUE,  # Generate alignment coverage plots
+  visualise_alignment_downsample = 1000,  # Max reads to plot per sample (NA = plot all, may be slow)
   
   # -----------------------------------------------------------------------------
   # Repeat detection and counting
   # -----------------------------------------------------------------------------
+  # These parameters control how CAG/CTG repeats are identified in sequences
+  #
+  # OVERVIEW:
+  # Duke finds repeat tracts by scanning for imperfect runs of a motif (e.g., CAG).
+  # It tolerates small interruptions (mismatches, gaps) but requires perfect repeats
+  # at tract boundaries to confidently identify start/end positions.
+  #
+  # KEY CONCEPTS:
+  # - "Perfect repeat" = exact match to motif (e.g., "CAG")
+  # - "Mismatch" = substitution in motif (e.g., "CAT" instead of "CAG")
+  # - "Gap" = inserted bases between repeats (e.g., "CAG-TA-CAG" has 2bp gap)
+  # - "Tract" = continuous run of repeats (may contain small gaps/mismatches)
+  #
+  # PARAMETER GUIDE:
+  
+  # rpt_pattern: Repeat motif to search for
+  #   Examples: "CAG" for Huntington's disease, "CTG" for DM1, "CGG" for fragile X
   rpt_pattern = "CAG",
+  
+  # rpt_min_repeats: Minimum repeat count to consider a valid tract
+  #   Lower = more sensitive but more false positives
+  #   Higher = stricter, may miss short expansions
   rpt_min_repeats = 2,
+  
+  # rpt_max_mismatch: Max substitution errors tolerated in each repeat unit
+  #   0 = strict perfect matching (best for high-accuracy data)
+  #   1+ = tolerant to sequencing errors (better for ONT/PacBio CLR)
   rpt_max_mismatch = 0,
+  
+  # rpt_start_perfect_repeats: Perfect (error-free) repeats required at tract START
+  #   Higher = more confident boundaries, less likely to include flanking sequence
+  #   Lower = may include partial repeats at edges
   rpt_start_perfect_repeats = 2,
+  
+  # rpt_end_perfect_repeats: Perfect (error-free) repeats required at tract END
+  #   Higher = more confident boundaries
+  #   Lower = may include partial repeats at edges
   rpt_end_perfect_repeats = 2,
+  
+  # rpt_max_gap: Max inserted bases allowed WITHIN a single repeat tract
+  #   Example: "CAG-TA-CAG" has a 2bp gap
+  #   Higher = more tolerant of interruptions (may merge separate tracts)
+  #   Lower = stricter tract definition (may split into multiple tracts)
   rpt_max_gap = 6,
+  
+  # rpt_max_tract_gap: Max gap between separate repeat tracts to merge them
+  #   Example: "CAG(x5)--18bp--CAG(x3)" would be merged if rpt_max_tract_gap >=18
+  #   Higher = merges distant tracts (reports combined length)
+  #   Lower = keeps tracts separate (reports longest only if rpt_return_option="longest")
   rpt_max_tract_gap = 18,
+  
+  # rpt_return_option: Which tract to return if multiple found in one read
+  #   "longest" = use the biggest tract (recommended for repeat expansions)
+  #   "all" = keep all tracts (use for complex repeat structures)
   rpt_return_option = "longest",
   
   # Repeat counting method (used for clustering and distribution analysis):
@@ -319,6 +372,31 @@ params <- list(
   repeat_distribution_metrics = c("modal_length", "mean_length", "median_length"),
   
   # -----------------------------------------------------------------------------
+  # Pipeline execution control
+  # -----------------------------------------------------------------------------
+  # Which modules to run (vector of module numbers 1-7)
+  #   - c(1:7) = run all modules (default)
+  #   - c(1,2,3) = only Import, Alignment, Repeat Detection
+  #   - c(5,6,7) = only visualization modules
+  #   - c(1,2,3,4,6,7) = skip waterfall (Module 5)
+  # 
+  # Module numbers:
+  #   1. Import and QC
+  #   2. Alignment
+  #   3. Repeat Detection
+  #   4. Allele Calling
+  #   5. Waterfall Plots
+  #   6. Range Analysis
+  #   7. Repeat Visualization
+  # 
+  # Use cases:
+  #   - Testing: c(1,2,3) for quick validation
+  #   - Replotting: c(5,6,7) to regenerate figures only
+  #   - Large datasets: c(1,2,3,4,6,7) to skip slow waterfall plots
+  #   - Reanalysis: c(3,4,5,6,7) if you already have alignments
+  run_modules = c(1:7),
+  
+  # -----------------------------------------------------------------------------
   # Runtime settings
   # -----------------------------------------------------------------------------
   threads = 80,
@@ -341,7 +419,21 @@ params <- list(
   #   - Applied at end of pipeline after all modules successfully complete
   #   - Useful for: repeated runs, limited disk space, production workflows
   #   - Keep FALSE for: debugging, inspecting intermediate results
-  cleanup_temp = FALSE
+  cleanup_temp = FALSE,
+  
+  # -----------------------------------------------------------------------------
+  # Logging and output control
+  # -----------------------------------------------------------------------------
+  # log_dir: Directory for log files
+  #   - Relative to pipeline directory (where duke_run.R is located)
+  #   - Each run creates a timestamped subdirectory
+  #   - Contains duke_run-TIMESTAMP.log and params-TIMESTAMP.R
+  log_dir = "logs",
+  
+  # verbose: Enable verbose output
+  #   - Show additional progress messages
+  #   - Useful for debugging or monitoring long runs
+  verbose = FALSE
 )
 
 # ==============================================================================
@@ -349,7 +441,7 @@ params <- list(
 # ==============================================================================
 
 # Create logs directory at root level (same location as duke_run.R)
-log_dir <- file.path(getwd(), "logs")
+log_dir <- file.path(getwd(), params$log_dir)
 if (!dir.exists(log_dir)) {
   dir.create(log_dir, recursive = TRUE)
 }
@@ -401,6 +493,7 @@ cat("  Threads:", params$threads, "\n")
 cat("  Resume:", params$resume, "\n")
 cat("  Cleanup temp:", params$cleanup_temp, "\n")
 cat("  Remove intermediate:", params$remove_intermediate, "\n")
+cat("  Modules to run:", paste(params$run_modules, collapse=", "), "\n")
 cat("\n")
 
 # Create output directory
@@ -411,160 +504,188 @@ if (!dir.exists(params$dir_out)) {
 # -----------------------------------------------------------------------------
 # Module 1: Import and QC
 # -----------------------------------------------------------------------------
-cat("\n")
-cat("-----------------------------------------------------------------\n")
-cat("Module 1: Import and QC\n")
-cat("-----------------------------------------------------------------\n")
-
-module1_output <- file.path(params$dir_out, "module_data", "01_import_qc_results.RData")
-
-if (params$resume && file.exists(module1_output)) {
-  cat("Skipping Module 1 (results found)...\n")
+if (1 %in% params$run_modules) {
+  cat("\n")
+  cat("-----------------------------------------------------------------\n")
+  cat("Module 1: Import and QC\n")
+  cat("-----------------------------------------------------------------\n")
+  
+  module1_output <- file.path(params$dir_out, "module_data", "01_import_qc_results.RData")
+  
+  if (params$resume && file.exists(module1_output)) {
+    cat("Skipping Module 1 (results found)...\n")
+  } else {
+    rmarkdown::render(
+      input = "01_import_and_qc.Rmd",
+      output_dir = params$dir_out,
+      params = params,
+      envir = new.env()
+    )
+    cat("\nModule 1 complete!\n")
+  }
 } else {
-  rmarkdown::render(
-    input = "01_import_and_qc.Rmd",
-    output_dir = params$dir_out,
-    params = params,
-    envir = new.env()
-  )
-  cat("\nModule 1 complete!\n")
+  cat("\nSkipping Module 1 (not in run_modules)...\n")
 }
 
 # -----------------------------------------------------------------------------
 # Module 2: Alignment and Processing
 # -----------------------------------------------------------------------------
-cat("\n")
-cat("-----------------------------------------------------------------\n")
-cat("Module 2: Alignment and Processing\n")
-cat("-----------------------------------------------------------------\n")
-
-module2_output <- file.path(params$dir_out, "module_data", "02_alignment_results.RData")
-
-if (params$resume && file.exists(module2_output)) {
-  cat("Skipping Module 2 (results found)...\n")
+if (2 %in% params$run_modules) {
+  cat("\n")
+  cat("-----------------------------------------------------------------\n")
+  cat("Module 2: Alignment and Processing\n")
+  cat("-----------------------------------------------------------------\n")
+  
+  module2_output <- file.path(params$dir_out, "module_data", "02_alignment_results.RData")
+  
+  if (params$resume && file.exists(module2_output)) {
+    cat("Skipping Module 2 (results found)...\n")
+  } else {
+    rmarkdown::render(
+      input = "02_alignment.Rmd",
+      output_dir = params$dir_out,
+      params = params,
+      envir = new.env()
+    )
+    cat("\nModule 2 complete!\n")
+  }
 } else {
-  rmarkdown::render(
-    input = "02_alignment.Rmd",
-    output_dir = params$dir_out,
-    params = params,
-    envir = new.env()
-  )
-  cat("\nModule 2 complete!\n")
+  cat("\nSkipping Module 2 (not in run_modules)...\n")
 }
 
 # -----------------------------------------------------------------------------
 # Module 3: Repeat Detection
 # -----------------------------------------------------------------------------
-cat("\n")
-cat("-----------------------------------------------------------------\n")
-cat("Module 3: Repeat Detection\n")
-cat("-----------------------------------------------------------------\n")
-
-module3_output <- file.path(params$dir_out, "module_data", "03_repeat_detection_results.RData")
-
-if (params$resume && file.exists(module3_output)) {
-  cat("Skipping Module 3 (results found)...\n")
+if (3 %in% params$run_modules) {
+  cat("\n")
+  cat("-----------------------------------------------------------------\n")
+  cat("Module 3: Repeat Detection\n")
+  cat("-----------------------------------------------------------------\n")
+  
+  module3_output <- file.path(params$dir_out, "module_data", "03_repeat_detection_results.RData")
+  
+  if (params$resume && file.exists(module3_output)) {
+    cat("Skipping Module 3 (results found)...\n")
+  } else {
+    rmarkdown::render(
+      input = "03_repeat_detection.Rmd",
+      output_dir = params$dir_out,
+      params = params,
+      envir = new.env()
+    )
+    cat("\nModule 3 complete!\n")
+  }
 } else {
-  rmarkdown::render(
-    input = "03_repeat_detection.Rmd",
-    output_dir = params$dir_out,
-    params = params,
-    envir = new.env()
-  )
-  cat("\nModule 3 complete!\n")
+  cat("\nSkipping Module 3 (not in run_modules)...\n")
 }
 
 # -----------------------------------------------------------------------------
 # Module 4: Allele Calling
 # -----------------------------------------------------------------------------
-cat("\n")
-cat("-----------------------------------------------------------------\n")
-cat("Module 4: Allele Calling\n")
-cat("-----------------------------------------------------------------\n")
-
-module4_output <- file.path(params$dir_out, "module_data", "04_allele_calling_results.RData")
-
-if (params$resume && file.exists(module4_output)) {
-  cat("Skipping Module 4 (results found)...\n")
+if (4 %in% params$run_modules) {
+  cat("\n")
+  cat("-----------------------------------------------------------------\n")
+  cat("Module 4: Allele Calling\n")
+  cat("-----------------------------------------------------------------\n")
+  
+  module4_output <- file.path(params$dir_out, "module_data", "04_allele_calling_results.RData")
+  
+  if (params$resume && file.exists(module4_output)) {
+    cat("Skipping Module 4 (results found)...\n")
+  } else {
+    rmarkdown::render(
+      input = "04_allele_calling.Rmd",
+      output_dir = params$dir_out,
+      params = params,
+      envir = new.env()
+    )
+    cat("\nModule 4 complete!\n")
+  }
 } else {
-  rmarkdown::render(
-    input = "04_allele_calling.Rmd",
-    output_dir = params$dir_out,
-    params = params,
-    envir = new.env()
-  )
-  cat("\nModule 4 complete!\n")
+  cat("\nSkipping Module 4 (not in run_modules)...\n")
 }
 
 # -----------------------------------------------------------------------------
 # Module 5: Waterfall Plots (Optional)
 # -----------------------------------------------------------------------------
-if (params$waterfall) {
-  cat("\n")
-  cat("-----------------------------------------------------------------\n")
-  cat("Module 5: Waterfall Plots\n")
-  cat("-----------------------------------------------------------------\n")
-  
-  module5_output <- file.path(params$dir_out, "module_data", "05_waterfall_results.RData")
-  
-  if (params$resume && file.exists(module5_output)) {
-    cat("Skipping Module 5 (results found)...\n")
+if (5 %in% params$run_modules) {
+  if (params$waterfall) {
+    cat("\n")
+    cat("-----------------------------------------------------------------\n")
+    cat("Module 5: Waterfall Plots\n")
+    cat("-----------------------------------------------------------------\n")
+    
+    module5_output <- file.path(params$dir_out, "module_data", "05_waterfall_results.RData")
+    
+    if (params$resume && file.exists(module5_output)) {
+      cat("Skipping Module 5 (results found)...\n")
+    } else {
+      rmarkdown::render(
+        input = "05_waterfall.Rmd",
+        output_dir = params$dir_out,
+        params = params,
+        envir = new.env()
+      )
+      cat("\nModule 5 complete!\n")
+    }
   } else {
-    rmarkdown::render(
-      input = "05_waterfall.Rmd",
-      output_dir = params$dir_out,
-      params = params,
-      envir = new.env()
-    )
-    cat("\nModule 5 complete!\n")
+    cat("\n")
+    cat("Skipping Module 5 (waterfall = FALSE)...\n")
   }
 } else {
-  cat("\n")
-  cat("Skipping Module 5 (waterfall = FALSE)...\n")
+  cat("\nSkipping Module 5 (not in run_modules)...\n")
 }
 
 # -----------------------------------------------------------------------------
 # Module 6: Range Analysis & Instability Metrics
 # -----------------------------------------------------------------------------
-cat("\n")
-cat("-----------------------------------------------------------------\n")
-cat("Module 6: Range Analysis & Instability Metrics\n")
-cat("-----------------------------------------------------------------\n")
-
-module6_output <- file.path(params$dir_out, "module_data", "06_range_analysis_results.RData")
-
-if (params$resume && file.exists(module6_output)) {
-  cat("Skipping Module 6 (results found)...\n")
+if (6 %in% params$run_modules) {
+  cat("\n")
+  cat("-----------------------------------------------------------------\n")
+  cat("Module 6: Range Analysis & Instability Metrics\n")
+  cat("-----------------------------------------------------------------\n")
+  
+  module6_output <- file.path(params$dir_out, "module_data", "06_range_analysis_results.RData")
+  
+  if (params$resume && file.exists(module6_output)) {
+    cat("Skipping Module 6 (results found)...\n")
+  } else {
+    rmarkdown::render(
+      input = "06_range_analysis.Rmd",
+      output_dir = params$dir_out,
+      params = params,
+      envir = new.env()
+    )
+    cat("\nModule 6 complete!\n")
+  }
 } else {
-  rmarkdown::render(
-    input = "06_range_analysis.Rmd",
-    output_dir = params$dir_out,
-    params = params,
-    envir = new.env()
-  )
-  cat("\nModule 6 complete!\n")
+  cat("\nSkipping Module 6 (not in run_modules)...\n")
 }
 
 # -----------------------------------------------------------------------------
 # Module 7: Repeat Distribution Visualisation
 # -----------------------------------------------------------------------------
-cat("\n")
-cat("-----------------------------------------------------------------\n")
-cat("Module 7: Repeat Distribution Visualisation\n")
-cat("-----------------------------------------------------------------\n")
-
-module7_output <- file.path(params$dir_out, "module_data", "07_repeat_visualisation_results.RData")
-
-if (params$resume && file.exists(module7_output)) {
-  cat("Skipping Module 7 (results found)...\n")
+if (7 %in% params$run_modules) {
+  cat("\n")
+  cat("-----------------------------------------------------------------\n")
+  cat("Module 7: Repeat Distribution Visualisation\n")
+  cat("-----------------------------------------------------------------\n")
+  
+  module7_output <- file.path(params$dir_out, "module_data", "07_repeat_visualisation_results.RData")
+  
+  if (params$resume && file.exists(module7_output)) {
+    cat("Skipping Module 7 (results found)...\n")
+  } else {
+    rmarkdown::render(
+      input = "07_repeat_visualisation.Rmd",
+      output_dir = params$dir_out,
+      params = params,
+      envir = new.env()
+    )
+    cat("\nModule 7 complete!\n")
+  }
 } else {
-  rmarkdown::render(
-    input = "07_repeat_visualisation.Rmd",
-    output_dir = params$dir_out,
-    params = params,
-    envir = new.env()
-  )
-  cat("\nModule 7 complete!\n")
+  cat("\nSkipping Module 7 (not in run_modules)...\n")
 }
 
 # ==============================================================================

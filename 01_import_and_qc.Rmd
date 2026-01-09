@@ -419,7 +419,7 @@ Optionally downsample reads for faster processing and visualisation.
 
 ```{r downsample, echo=FALSE}
 # Downsample
-if (!is.na(params$downsample)) {
+if (!is.null(params$downsample) && !is.na(params$downsample)) {
   seq_sample <- apply_fn(seq_unique, 
                          downsample, 
                          sample_size = params$downsample)
@@ -736,51 +736,89 @@ trim_reads <- function(dna_stringset, trim_patterns, max_mismatch, with_indels) 
 ```
 
 ```{r trim_sequences, echo=FALSE}
-# Import trim sequences
-trim_sequences <- read.csv(params$path_trim_patterns, fileEncoding = "UTF-8-BOM")
-trim_sequences <- setNames(trim_sequences$adapter_sequence,
-                           trim_sequences$adapter_name)
-
-# Reverse complement the trim sequences
-trim_sequences_rc <- as.character(reverseComplement(DNAStringSet(trim_sequences)))
-names(trim_sequences_rc) <- paste0(names(trim_sequences_rc), "_rc")
-
-# Combine sense and reverse complement trim sequences
-combined_trim_sequences <- c(trim_sequences, trim_sequences_rc)
-
-# Display table
-trim_df <- enframe(combined_trim_sequences, name = "adapter_name", value = "adapter_sequence")
-DT::datatable(
-  trim_df,
-  caption = "Trim sequences",
-  options = list(pageLength = 25, scrollX = TRUE, scrollY = "400px"),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact'
-)
-
-# Export table
-write_excel_function(named_list = list("trim_sequences" = trim_df),
-                     path = file.path(qc_dir, "qc.xlsx"),
-                     overwrite_sheet = TRUE)
+# Import trim sequences (only if trimming enabled)
+if (params$trim && !is.null(params$path_trim_patterns) && !is.na(params$path_trim_patterns)) {
+  
+  message("Loading adapter sequences for trimming...")
+  
+  trim_sequences <- read.csv(params$path_trim_patterns, fileEncoding = "UTF-8-BOM")
+  trim_sequences <- setNames(trim_sequences$adapter_sequence,
+                             trim_sequences$adapter_name)
+  
+  # Reverse complement the trim sequences
+  trim_sequences_rc <- as.character(reverseComplement(DNAStringSet(trim_sequences)))
+  names(trim_sequences_rc) <- paste0(names(trim_sequences_rc), "_rc")
+  
+  # Combine sense and reverse complement trim sequences
+  combined_trim_sequences <- c(trim_sequences, trim_sequences_rc)
+  
+  # Display table
+  trim_df <- enframe(combined_trim_sequences, name = "adapter_name", value = "adapter_sequence")
+  DT::datatable(
+    trim_df,
+    caption = "Trim sequences",
+    options = list(pageLength = 25, scrollX = TRUE, scrollY = "400px"),
+    rownames = FALSE,
+    filter = 'top',
+    class = 'cell-border stripe compact'
+  )
+  
+  # Export table
+  write_excel_function(named_list = list("trim_sequences" = trim_df),
+                       path = file.path(qc_dir, "qc.xlsx"),
+                       overwrite_sheet = TRUE)
+  
+  cat("\n✓ Adapter trimming enabled:", length(trim_sequences), "adapters loaded\n")
+  
+} else {
+  
+  # Trimming disabled - create empty adapter list
+  combined_trim_sequences <- character(0)
+  
+  if (!params$trim) {
+    cat("\n⊗ Adapter trimming disabled (trim = FALSE)\n")
+  } else {
+    cat("\n⊗ Adapter trimming disabled (no path_trim_patterns provided)\n")
+  }
+  cat("  Sequences will not be trimmed for adapters\n")
+  
+}
 ```
 
 ```{r trim, echo=FALSE, message=FALSE, results='hide'}
-# Run trim function
+# Run trim function (only if adapters provided)
 my_path <- file.path(temp_dir, "02_trim_result.RData")
-if (file.exists(my_path) && params$resume) {
-  load(my_path)
-} else {
-  trim_result <- apply_fn(seq_sample, trim_reads,
-                          trim_patterns = combined_trim_sequences,
-                          max_mismatch = params$trim_max_mismatch,
-                          with_indels = params$trim_with_indels)
-  trim_result <- extract_apply_fn_result(trim_result)
-  save(trim_result, file = my_path)
-}
 
-# Extract trimmed sequencing files
-seq_trim <- lapply(trim_result, "[[", "dna_stringset_trimmed")
+if (length(combined_trim_sequences) > 0) {
+  # Trimming enabled - process adapters
+  
+  if (file.exists(my_path) && params$resume) {
+    message("Loading cached trim results...")
+    load(my_path)
+  } else {
+    message("Trimming adapters from sequences...")
+    
+    trim_result <- apply_fn(seq_sample, trim_reads,
+                            trim_patterns = combined_trim_sequences,
+                            max_mismatch = params$trim_max_mismatch,
+                            with_indels = params$trim_with_indels)
+    trim_result <- extract_apply_fn_result(trim_result)
+    save(trim_result, file = my_path)
+  }
+  
+  # Extract trimmed sequencing files
+  seq_trim <- lapply(trim_result, "[[", "dna_stringset_trimmed")
+  
+  cat("\nAdapter trimming complete\n")
+  
+} else {
+  # Trimming disabled - pass through sequences unchanged
+  message("Skipping adapter trimming (disabled or no adapters)")
+  
+  seq_trim <- seq_sample
+  
+  cat("\n⊗ No adapter trimming performed\n")
+}
 
 # Remove previous sequencing file
 if (params$remove_intermediate) rm(seq_sample)

@@ -1,160 +1,105 @@
 #!/bin/bash -l
 #$ -S /bin/bash
-#$ -N duke_01_12c_16G_24h
-#$ -wd /home/skgtmdf/Scratch/bin/duke
-#$ -o logs/duke_job_$JOB_ID.out
-#$ -e logs/duke_job_$JOB_ID.err
-#$ -l h_rt=24:00:00
-#$ -pe smp 12
-#$ -l mem=16G
-#$ -l tmpfs=50G
-#$ -M michael.flower@ucl.ac.uk
+#$ -N duke_cli
+#$ -l h_rt=48:00:00
+#$ -pe smp 36
+#$ -l mem=4G
+#$ -l tmpfs=100G
+#$ -wd /home/username/Scratch/bin/duke
+#$ -M your.email@ucl.ac.uk
 #$ -m bea
 
-# ============================================================================
-# Duke Pipeline - Myriad HPC Job Script
-# ============================================================================
+# ==============================================================================
+# Duke Pipeline - Myriad Job Script (CLI Version)
+# ==============================================================================
+# 
+# This script runs Duke using the command-line interface (duke_cli.R)
+# Edit the parameters in the ./duke command below
 #
-# SUBMISSION INSTRUCTIONS:
+# Cluster: Myriad (UCL)
+# Scheduler: Grid Engine (SGE)
+# Parallel environment: smp (shared memory)
+# Cores: 36 (maximum for Myriad)
+# Memory: 4GB per core = 144GB total
+# Runtime: 48 hours
 #
-# 1. Configure duke_run.R with your data paths and parameters
+# Expected performance (36 cores):
+#   ~100 samples: 2-3 hours
+#   ~300 samples: 8-12 hours  
+#   ~500 samples: 15-20 hours
 #
-# 2. Make this script executable:
-#    chmod +x duke_myriad.sh
+# For larger datasets (1000+ samples), use Kathleen with 80+ cores
 #
-# 3. Create logs directory (if it doesn't exist):
-#    mkdir -p logs
-#
-# 4. Submit the job:
-#    qsub duke_myriad.sh
-#
-# 5. Monitor the job:
-#    qstat                                   # Check job status
-#    qstat -j <JOB_ID>                       # Detailed job info
-#    tail -f logs/duke_job_<JOB_ID>.out      # Watch output log
-#    tail -f logs/duke_job_<JOB_ID>.err      # Watch error log
-#
-# 6. Cancel job if needed:
-#    qdel <JOB_ID>
-#
-# 7. After completion, check results:
-#    ls -lh ~/Scratch/data/YOUR_PROJECT/result_duke/
-#    tree ~/Scratch/data/YOUR_PROJECT/result_duke/
-#
-# ============================================================================
-# RESOURCE PARAMETERS EXPLAINED:
-# ============================================================================
-#
-# -N duke_pipeline          Job name (appears in qstat)
-# -wd /path/to/duke         Working directory (where job runs)
-# -o logs/duke_job_$JOB_ID.out   Standard output log
-# -e logs/duke_job_$JOB_ID.err   Standard error log
-# -l h_rt=24:00:00          Walltime (24 hours max runtime)
-# -pe smp 4                 Parallel environment (4 CPU cores)
-# -l mem=8G                 Memory per CPU (32GB total = 4 × 8GB)
-# -l tmpfs=50G              Temporary disk space for BAM files
-#
-# ADJUST RESOURCES FOR YOUR DATASET:
-#
-# Small dataset (1-5 samples, <50K reads/sample):
-#   -l h_rt=12:00:00 -pe smp 2 -l mem=4G -l tmpfs=20G
-#
-# Medium dataset (5-20 samples, 50-200K reads/sample):
-#   -l h_rt=24:00:00 -pe smp 4 -l mem=8G -l tmpfs=50G
-#
-# Large dataset (20-50 samples, 200K-1M reads/sample):
-#   -l h_rt=48:00:00 -pe smp 8 -l mem=16G -l tmpfs=100G
-#
-# Very large dataset (50+ samples, >1M reads/sample):
-#   -l h_rt=72:00:00 -pe smp 16 -l mem=32G -l tmpfs=200G
-#
-# IMPORTANT: Match -pe smp value to threads parameter in duke_run.R!
-#
-# ============================================================================
+# ==============================================================================
 
-# ============================================================================
-# Load Modules (ALL software dependencies)
-# ============================================================================
+# Load required modules
 module purge
-module load r/recommended                    # R 4.2.0
-module load samtools/1.11/gnu-4.9.2         # Samtools 1.11
+module load r/recommended
+module load samtools/1.11/gnu-4.9.2
 
-# Set R library path
-export R_LIBS_USER=~/R/library
-
-# Add minimap2 (compiled in ~/Scratch/bin/minimap2)
+# Add minimap2 to PATH
 export PATH=$HOME/Scratch/bin/minimap2:$PATH
 
-# ============================================================================
-# Print Environment Info
-# ============================================================================
-echo "========================================"
-echo "Duke Pipeline Job Started"
-echo "========================================"
-echo "Job ID: $JOB_ID"
-echo "Job Name: $JOB_NAME"
-echo "Hostname: $(hostname)"
-echo "Date: $(date)"
-echo "Working Directory: $(pwd)"
+# Verify modules loaded
+echo "=== Loaded Modules ==="
+module list
 echo ""
-echo "Software Versions:"
-echo "  R: $(R --version | head -1)"
-echo "  samtools: $(samtools --version | head -1)"
-echo "  minimap2: $(minimap2 --version)"
+echo "R version:"
+R --version | head -1
 echo ""
-echo "Resources:"
-echo "  CPUs: $NSLOTS"
-echo "  Memory: 8GB per CPU (Total: $((NSLOTS * 8))GB)"
-echo "  Temp space: 50GB"
-echo "========================================"
+echo "samtools version:"
+samtools --version | head -1
+echo ""
+echo "minimap2 version:"
+minimap2 --version
 echo ""
 
-# ============================================================================
-# Run Duke Pipeline
-# ============================================================================
+# Change to Duke directory
 cd ~/Scratch/bin/duke
-Rscript duke_run.R
 
-# ============================================================================
-# Print Completion Message
-# ============================================================================
-echo ""
-echo "========================================"
-echo "Duke Pipeline Job Completed"
-echo "Date: $(date)"
-echo "========================================"
-echo ""
-echo "Output location:"
-echo "  Check duke_run.R for dir_out parameter"
-echo ""
-echo "Logs:"
-echo "  Job output: logs/duke_job_$JOB_ID.out"
-echo "  Job errors: logs/duke_job_$JOB_ID.err"
-echo "  Duke log: logs/<TIMESTAMP>/<TIMESTAMP>_duke_run.log"
-echo "========================================"
+# ==============================================================================
+# EDIT PARAMETERS BELOW
+# ==============================================================================
 
-# ============================================================================
-# TROUBLESHOOTING:
-# ============================================================================
-#
-# Job fails immediately:
-#   cat logs/duke_job_<JOB_ID>.err
-#   Check module loading and paths
-#
-# Job runs but Duke fails:
-#   cat logs/<TIMESTAMP>/<TIMESTAMP>_duke_run.log
-#   ls -lh result_duke/module_data/
-#
-# Out of memory:
-#   Increase: -l mem=16G
-#   Enable: remove_intermediate = TRUE in duke_run.R
-#
-# Out of temp space:
-#   Increase: -l tmpfs=100G
-#
-# Resume from failure:
-#   Set resume = TRUE in duke_run.R
-#   Delete broken cache: rm result_duke/temp/*.RData
-#   Resubmit: qsub duke_myriad_job.sh
-#
-# ============================================================================
+# Run Duke with CLI
+# Edit these paths for your analysis:
+
+./duke \
+  --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
+  --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
+  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
+  --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
+  --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
+  --threads 36 \
+  --resume TRUE \
+  --remove_intermediate TRUE \
+  --cleanup_temp FALSE
+
+# ==============================================================================
+# COMMON CUSTOMIZATIONS
+# ==============================================================================
+
+# Without adapter trimming:
+# ./duke \
+#   --dir_data ~/Scratch/data/my_experiment \
+#   --dir_out ~/Scratch/results/my_results \
+#   --path_ref ~/Scratch/refs/HTTset20/HTTset20.fasta \
+#   --trim FALSE \
+#   --threads 36
+
+# Force re-run all modules:
+# ./duke --resume FALSE ...
+
+# Run specific modules only (e.g., re-plot after parameter change):
+# ./duke --run_modules 5,6,7 --resume TRUE ...
+
+# Downsample reads for testing:
+# ./duke --downsample 1000 ...
+
+# ==============================================================================
+# END OF SCRIPT
+# ==============================================================================
+
+echo ""
+echo "Duke pipeline complete!"
+echo "Results in: ~/Scratch/results/my_results"
