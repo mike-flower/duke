@@ -42,10 +42,9 @@ source("duke_run_local.R")
   - [Script-Based](#2-script-based-duke_runr)
   - [Interactive RStudio](#3-interactive-rstudio)
 - [HPC Deployment](#hpc-deployment)
+  - [Critical Memory Requirements](#critical-memory-requirements)
+  - [Resource Recommendations](#resource-recommendations)
 - [Parameters](#parameters)
-  - [New in 2.0.1](#new-parameters-in-201)
-  - [Essential Parameters](#essential-parameters)
-  - [Complete Reference](#complete-parameter-reference)
 - [Module Overview](#module-overview)
 - [Output Structure](#output-structure)
 - [Troubleshooting](#troubleshooting)
@@ -93,24 +92,24 @@ duke_pipeline/
 ├── duke                          # CLI wrapper (NEW!)
 ├── duke_run.R                    # HPC runner
 ├── duke_run_local.R              # Local runner
-├── duke_myriad_cli.sh            # Myriad CLI job script (NEW!)
-├── duke_kathleen_cli.sh          # Kathleen CLI job script (NEW!)
 ├── duke_myriad.sh                # Myriad job script
 ├── duke_kathleen.sh              # Kathleen job script
+├── duke_kathleen_slurm.sh        # New Kathleen (Slurm) job script
 ├── 01_import_and_qc.Rmd through 07_repeat_visualisation.Rmd
-└── lib/                          # Function libraries
-    ├── load_all.R
-    ├── 00_utils.R                # General utilities
-    ├── 01_import.R               # Module 1
-    ├── 01_sequence_qc.R          # Module 1
-    ├── 02_alignment.R            # Module 2
-    ├── 02_alignment_processing.R # Module 2
-    ├── 03_repeats.R              # Module 3
-    ├── 04_clustering.R           # Module 4
-    ├── 04_consensus.R            # Module 4
-    ├── 05_waterfall.R            # Module 5
-    ├── 06_range_analysis.R       # Module 6
-    └── 07_visualisation.R        # Module 7
+├── lib/                          # Function libraries
+│   ├── load_all.R
+│   ├── 00_utils.R                # General utilities
+│   ├── 01_import.R               # Module 1
+│   ├── 01_sequence_qc.R          # Module 1
+│   ├── 02_alignment.R            # Module 2
+│   ├── 02_alignment_processing.R # Module 2
+│   ├── 03_repeats.R              # Module 3
+│   ├── 04_clustering.R           # Module 4
+│   ├── 04_consensus.R            # Module 4
+│   ├── 05_waterfall.R            # Module 5
+│   ├── 06_range_analysis.R       # Module 6
+│   └── 07_visualisation.R        # Module 7
+└── logs/                         # Job output logs
 ```
 
 **Note:** Library files prefixed with module numbers for easy identification
@@ -129,27 +128,18 @@ duke_pipeline/
   --path_ref /path/to/reference.fasta
 ```
 
-#### Complete Test Run Example
-
-**Prerequisites on HPC:**
+#### Local Test Run Example
 ```bash
-# Load required modules
+# Load required modules (HPC) or ensure R is in PATH (local)
 module load r/recommended
 module load samtools/1.11/gnu-4.9.2
-
-# Point R to your package library
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
 export R_LIBS_USER=~/R/library
 
-# Add minimap2 to PATH
-export PATH=$HOME/Scratch/bin/minimap2:$PATH
-```
-
-**Run Duke with test dataset:**
-```bash
 # Navigate to Duke directory
 cd /home/skgtmdf/Scratch/bin/duke
 
-# Run test analysis with 3 threads
+# Run Duke with test dataset
 ./duke \
   --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
   --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
@@ -161,11 +151,6 @@ cd /home/skgtmdf/Scratch/bin/duke
   --remove_intermediate TRUE \
   --cleanup_temp FALSE
 ```
-
-**Notes:**
-- Use `--threads 3` for login node testing (never use high thread counts on login nodes)
-- For production runs, submit to queue with job scripts (see [HPC Deployment](#hpc-deployment))
-- Results will be in `/home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke/`
 
 #### With Adapter Trimming
 ```bash
@@ -204,7 +189,7 @@ cd /home/skgtmdf/Scratch/bin/duke
 
 **For running test data on compute nodes via job scripts:**
 
-Edit `duke_myriad_cli.sh` or `duke_kathleen_cli.sh` and update the `./duke` command:
+Edit `duke_myriad.sh` or `duke_kathleen.sh` and update the `./duke` command:
 
 ```bash
 ./duke \
@@ -222,10 +207,10 @@ Edit `duke_myriad_cli.sh` or `duke_kathleen_cli.sh` and update the `./duke` comm
 Then submit:
 ```bash
 # Myriad (36 cores)
-qsub duke_myriad_cli.sh
+qsub duke_myriad.sh
 
 # Kathleen (80 cores - change --threads to 80 in script)
-qsub duke_kathleen_cli.sh
+qsub duke_kathleen.sh
 ```
 
 **Monitor the job:**
@@ -282,6 +267,86 @@ qsub duke_myriad.sh
 |---------|----------|-------|-----------|
 | **Myriad** | ≤500 samples | 1-36 | SGE (`-pe smp`) |
 | **Kathleen** | 1000+ samples | 80-160 | SGE (`-pe mpi`) |
+| **New Kathleen** | 1000+ samples | 80-160 | Slurm |
+
+---
+
+### Critical Memory Requirements
+
+**⚠️ IMPORTANT: Duke requires minimum 4GB RAM per core for Module 4 (Clustering)**
+
+#### Empirical Testing Results (3 samples, Myriad)
+
+| Memory/Core | Total RAM | Runtime | Status |
+|-------------|-----------|---------|--------|
+| **2GB** | 6GB | >4 hours | ❌ **TOO SLOW** - Stuck at clustering |
+| **4GB** | 12GB | ~52 min | ✅ **MINIMUM VIABLE** |
+| **8GB** | 24GB | ~28 min | ✅ **RECOMMENDED** |
+| **16GB** | 48GB | ~33 min | ✅ Good (diminishing returns) |
+| **32GB** | 96GB | ~38 min | ✅ Good (diminishing returns) |
+| **64GB** | 192GB | ~24 min | ✅ Good (diminishing returns) |
+
+**Key Finding:** Module 4 clustering uses parallel processing (`pbmclapply`) which forks R processes. With only 2GB/core, memory pressure causes severe slowdowns. **Minimum 4GB/core required, 8GB/core recommended.**
+
+---
+
+### Resource Recommendations
+
+#### Test Runs (1-10 samples)
+```bash
+#$ -pe smp 3
+#$ -l mem=8G        # 8GB/core recommended
+#$ -l tmpfs=10G
+#$ -l h_rt=2:00:00
+```
+
+#### Small Jobs (10-50 samples)
+```bash
+#$ -pe smp 12
+#$ -l mem=8G        # 8GB/core for safe parallel clustering
+#$ -l tmpfs=20G
+#$ -l h_rt=12:00:00
+```
+
+#### Medium Jobs (50-200 samples)
+```bash
+#$ -pe smp 36       # Myriad maximum
+#$ -l mem=4G        # 4GB/core minimum, 8GB better
+#$ -l tmpfs=30G
+#$ -l h_rt=24:00:00
+```
+
+#### Large Jobs (200+ samples, use Kathleen)
+```bash
+#$ -pe mpi 80
+#$ -l mem=4G        # Total: 320GB
+#$ -l h_rt=48:00:00
+```
+
+**Memory-Optimized for Very Large Datasets (Kathleen):**
+```bash
+#$ -pe mpi 160      # Request 160 cores
+#$ -l mem=2G        # 320GB total
+# --threads 80      # Use only 80 threads = 4GB/thread
+```
+
+---
+
+### tmpfs (Temporary Storage) Recommendations
+
+**What is tmpfs?** Fast temporary storage on compute node for intermediate BAM files.
+
+| Dataset Size | tmpfs Recommendation |
+|--------------|---------------------|
+| 1-10 samples | **10G** |
+| 10-50 samples | **20G** |
+| 50-200 samples | **30G** |
+| 200-500 samples | **50G** |
+| 500+ samples (Kathleen) | **75G** |
+
+**Note:** Duke's `temp/` directory (for module caches) is on Scratch, NOT tmpfs.
+
+---
 
 ### Job Script Setup
 
@@ -291,26 +356,34 @@ qsub duke_myriad.sh
 # After module loads, add these lines:
 export R_LIBS_USER=~/R/library
 export PATH=$HOME/Scratch/bin/minimap2:$PATH
+
+# Create logs directory
+mkdir -p logs
 ```
 
-### Memory Optimization (Kathleen)
+**Make Scripts Executable (SGE only):**
 
-For large datasets, request more cores than you use:
-
+SGE clusters (Myriad, Old Kathleen) require job scripts to be executable:
 ```bash
-#$ -pe mpi 160     # Request 160 cores
-#$ -l mem=2G       # 2GB/core = 320GB total
+# One-time setup for each script
+chmod +x duke_myriad.sh
+chmod +x duke_kathleen.sh
 
-# In duke_run.R or CLI:
-threads = 80       # Use only 80 threads
+# Or make all .sh files executable
+chmod +x *.sh
 ```
 
-**Why:** Provides memory buffer (320GB / 80 = 4GB per thread) to prevent fork failures.
+**Note:** Slurm (New Kathleen) does NOT require `chmod +x` - scripts work as-is.
+
+---
 
 ### Job Submission
 
 **Traditional (Edit duke_run.R):**
 ```bash
+# Make scripts executable (one-time, SGE only)
+chmod +x duke_myriad.sh duke_kathleen.sh
+
 # Myriad
 qsub duke_myriad.sh
 
@@ -318,16 +391,29 @@ qsub duke_myriad.sh
 qsub duke_kathleen.sh
 ```
 
-**CLI (Edit job script parameters):**
+**Slurm (New Kathleen):**
 ```bash
-# Myriad
-qsub duke_myriad_cli.sh
-
-# Kathleen
-qsub duke_kathleen_cli.sh
+# No chmod needed
+sbatch duke_kathleen_slurm.sh
 ```
 
-**Performance:** ~15-18 hours for 1000 samples (Kathleen 80 cores)
+---
+
+### Performance Expectations
+
+#### Myriad (3 cores, 3 samples)
+- 2GB/core: >4 hours (AVOID!)
+- 4GB/core: ~52 minutes
+- 8GB/core: ~28 minutes ← **RECOMMENDED**
+
+#### Myriad (36 cores, production)
+- 100 samples: 2-3 hours
+- 300 samples: 8-12 hours  
+- 500 samples: 15-20 hours
+
+#### Kathleen (80 cores, production)
+- 1000 samples: 15-18 hours
+- 2000 samples: 30-36 hours
 
 ---
 
@@ -395,7 +481,6 @@ All parameters have comprehensive documentation with examples in `duke_run.R` or
 - `rpt_start_perfect_repeats` - Perfect at start (default: 2)
 - `rpt_end_perfect_repeats` - Perfect at end (default: 2)
 - `rpt_max_gap` - Max gap within tract (default: 6)
-  - Example: "CAG-TA-CAG" = 2bp gap
 - `rpt_max_tract_gap` - Max gap between tracts (default: 18)
 - `rpt_return_option` - "longest" or "all"
 
@@ -439,7 +524,8 @@ All parameters have comprehensive documentation with examples in `duke_run.R` or
 - Multiple counting methods
 
 ### Module 4: Allele Calling
-- Clusters by repeat/haplotype
+- **⚠️ Most memory-intensive module** - requires 4GB+ per core
+- Clusters by repeat/haplotype using parallel processing
 - Consensus sequences
 - Variant calling (VCF export)
 
@@ -491,6 +577,32 @@ result_duke/
 
 ### Common Issues
 
+**Job stuck at Module 4 clustering (very slow)**
+```bash
+# CAUSE: Insufficient memory (2GB/core)
+# SOLUTION: Use minimum 4GB/core, 8GB recommended
+
+# Update job script:
+#$ -l mem=8G
+
+# Resubmit
+qsub duke_myriad.sh
+```
+
+**"Error: --path_ref is required"**
+```bash
+# path_ref is now required (no default)
+./duke --path_ref /path/to/reference.fasta ...
+```
+
+**"Cannot allocate memory" (Kathleen)**
+```bash
+# Request more cores than you use:
+#$ -pe mpi 160
+#$ -l mem=2G
+# threads = 80 in duke_run.R
+```
+
 **"Rscript: command not found" (CLI on HPC)**
 ```bash
 # Load R module first
@@ -506,20 +618,6 @@ export R_LIBS_USER=~/R/library
 export R_LIBS_USER=~/R/library
 
 # Or install packages (see Installation section)
-```
-
-**"Error: --path_ref is required"**
-```bash
-# path_ref is now required (no default)
-./duke --path_ref /path/to/reference.fasta ...
-```
-
-**"Cannot allocate memory" (Kathleen)**
-```bash
-# Request more cores than you use:
-#$ -pe mpi 160
-#$ -l mem=2G
-# threads = 80 in duke_run.R
 ```
 
 **"visualise_alignment_n_reads not found"**
@@ -553,6 +651,17 @@ rm result_duke/module_data/03_repeat_detection_results.RData
 ./duke --run_modules 3,4,5 ...
 ```
 
+**Logs appearing in main directory instead of logs/**
+```bash
+# Solution: Logs redirection is now included in all job scripts
+# Ensure you're using the updated scripts that include:
+#$ -o logs/duke_$JOB_ID.out
+#$ -e logs/duke_$JOB_ID.err
+
+# Create logs directory manually if needed:
+mkdir -p logs
+```
+
 ---
 
 ## Version History
@@ -566,6 +675,7 @@ rm result_duke/module_data/03_repeat_detection_results.RData
 - 📚 **ENHANCED:** Comprehensive repeat parameter documentation
 - 📦 **ORGANIZED:** Library files with module prefixes (00-07)
 - 🔧 **UPDATED:** Conditional trimming in Module 1
+- 📊 **DOCUMENTED:** Memory requirements from empirical testing
 - ❌ **REMOVED:** `visualise_alignment_corrected` (didn't exist)
 
 ### 2.0.0

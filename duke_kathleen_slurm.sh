@@ -113,6 +113,9 @@ export R_LIBS_USER=~/R/library
 # Add minimap2 to PATH
 export PATH=$HOME/Scratch/bin/minimap2:$PATH
 
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
 # ==============================================================================
 # Print Environment Info
 # ==============================================================================

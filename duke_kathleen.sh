@@ -5,6 +5,8 @@
 #$ -pe mpi 160
 #$ -l mem=2G
 #$ -wd /home/skgtmdf/Scratch/bin/duke
+#$ -o logs/duke_$JOB_ID.out
+#$ -e logs/duke_$JOB_ID.err
 #$ -M michael.flower@ucl.ac.uk
 #$ -m bea
 
@@ -65,6 +67,9 @@ export R_LIBS_USER=~/R/library
 
 # Add minimap2 to PATH
 export PATH=$HOME/Scratch/bin/minimap2:$PATH
+
+# Create logs directory if it doesn't exist
+mkdir -p logs
 
 # Verify modules loaded
 echo "=== Loaded Modules ==="
