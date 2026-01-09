@@ -303,7 +303,7 @@ option_list <- list(
   make_option("--dry_run", type="logical", default=FALSE,
               help="Show configuration without running [default: %default]"),
   
-  make_option("--verbose", type="logical", default=FALSE,
+  make_option("--verbose", type="logical", default=TRUE,
               help="Verbose output [default: %default]")
 )
 
@@ -471,12 +471,6 @@ params <- list(
   cleanup_temp = args$cleanup_temp
 )
 
-if (args$dry_run) {
-  cat("\n=== DRY RUN MODE ===\n")
-  cat("Configuration validated. To run, remove --dry_run flag.\n\n")
-  quit(status = 0)
-}
-
 # ==============================================================================
 # Setup Logging (EXACTLY matches duke_run.R)
 # ==============================================================================
@@ -508,6 +502,173 @@ cat("=================================================================\n\n")
 cat("Run started:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
 cat("Log file:", log_file, "\n")
 cat("Parameters saved:", params_file, "\n\n")
+
+# ==============================================================================
+# Dry Run - Print All Parameters
+# ==============================================================================
+
+if (args$dry_run) {
+  cat("\n=================================================================\n")
+  cat("                    DRY RUN - CONFIGURATION                      \n")
+  cat("=================================================================\n\n")
+  
+  cat("*** This is a DRY RUN - pipeline will NOT execute ***\n\n")
+  
+  cat("═══════════════════════════════════════════════════════════════\n")
+  cat("FILE PATHS AND DIRECTORIES\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "dir_data", params$dir_data))
+  cat(sprintf("%-35s: %s\n", "dir_out", params$dir_out))
+  cat(sprintf("%-35s: %s\n", "path_ref", params$path_ref))
+  cat(sprintf("%-35s: %s\n", "path_trim_patterns", 
+              if(is.null(params$path_trim_patterns)) "NULL" else params$path_trim_patterns))
+  cat(sprintf("%-35s: %s\n", "path_manual_exclusions", 
+              if(is.null(params$path_manual_exclusions)) "NULL" else params$path_manual_exclusions))
+  cat(sprintf("%-35s: %s\n", "path_settings", 
+              if(is.null(params$path_settings)) "NULL" else params$path_settings))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("FILE IMPORT OPTIONS\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "import_patterns", paste(params$import_patterns, collapse = ", ")))
+  cat(sprintf("%-35s: %s\n", "import_recursive", params$import_recursive))
+  cat(sprintf("%-35s: %s\n", "r1_pattern", params$r1_pattern))
+  cat(sprintf("%-35s: %s\n", "r2_pattern", params$r2_pattern))
+  cat(sprintf("%-35s: %s\n", "select_one_of_pair", params$select_one_of_pair))
+  cat(sprintf("%-35s: %s\n", "downsample", if(is.na(params$downsample)) "NA (disabled)" else params$downsample))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("ADAPTER TRIMMING\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "trim", params$trim))
+  cat(sprintf("%-35s: %s\n", "trim_max_mismatch", params$trim_max_mismatch))
+  cat(sprintf("%-35s: %s\n", "trim_with_indels", params$trim_with_indels))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("ALIGNMENT\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "minimap2_args", params$minimap2_args))
+  cat(sprintf("%-35s: %s\n", "visualise_alignment", params$visualise_alignment))
+  cat(sprintf("%-35s: %s\n", "visualise_alignment_downsample", 
+              if(is.na(params$visualise_alignment_downsample)) "NA (plot all)" else params$visualise_alignment_downsample))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("REPEAT DETECTION\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "rpt_pattern", params$rpt_pattern))
+  cat(sprintf("%-35s: %s\n", "rpt_min_repeats", params$rpt_min_repeats))
+  cat(sprintf("%-35s: %s\n", "rpt_max_mismatch", params$rpt_max_mismatch))
+  cat(sprintf("%-35s: %s\n", "rpt_start_perfect_repeats", params$rpt_start_perfect_repeats))
+  cat(sprintf("%-35s: %s\n", "rpt_end_perfect_repeats", params$rpt_end_perfect_repeats))
+  cat(sprintf("%-35s: %s\n", "rpt_max_gap", params$rpt_max_gap))
+  cat(sprintf("%-35s: %s\n", "rpt_max_tract_gap", params$rpt_max_tract_gap))
+  cat(sprintf("%-35s: %s\n", "rpt_return_option", params$rpt_return_option))
+  cat(sprintf("%-35s: %s\n", "repeat_count_method", params$repeat_count_method))
+  cat(sprintf("%-35s: %s\n", "na_repeat_handling", params$na_repeat_handling))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("CLUSTERING\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "cluster", params$cluster))
+  cat(sprintf("%-35s: %s\n", "cluster_by", paste(params$cluster_by, collapse = ", ")))
+  cat(sprintf("%-35s: %s\n", "haplotype_cluster_max", params$haplotype_cluster_max))
+  cat(sprintf("%-35s: %s\n", "repeat_cluster_max", params$repeat_cluster_max))
+  cat(sprintf("%-35s: %s\n", "haplotype_region", params$haplotype_region))
+  cat(sprintf("%-35s: %s\n", "haplotype_method", params$haplotype_method))
+  cat(sprintf("%-35s: %s\n", "haplotype_trim_length", params$haplotype_trim_length))
+  cat(sprintf("%-35s: %s\n", "haplotype_subsample", 
+              if(is.na(params$haplotype_subsample)) "NA (use all)" else params$haplotype_subsample))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("CONSENSUS AND VARIANT CALLING\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "cluster_consensus", params$cluster_consensus))
+  cat(sprintf("%-35s: %s\n", "consensus_threshold", params$consensus_threshold))
+  cat(sprintf("%-35s: %s\n", "consensus_downsample", 
+              if(is.na(params$consensus_downsample)) "NA (use all)" else params$consensus_downsample))
+  cat(sprintf("%-35s: %s\n", "call_variants", params$call_variants))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("WATERFALL PLOTS (MODULE 5)\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "waterfall", params$waterfall))
+  cat(sprintf("%-35s: %s\n", "waterfall_downsample", 
+              if(is.na(params$waterfall_downsample)) "NA (plot all)" else params$waterfall_downsample))
+  cat(sprintf("%-35s: %s\n", "waterfall_rm_flank_length_outliers", params$waterfall_rm_flank_length_outliers))
+  cat(sprintf("%-35s: %s\n", "waterfall_y_axis_labels", params$waterfall_y_axis_labels))
+  cat(sprintf("%-35s: %s\n", "waterfall_per_cluster", params$waterfall_per_cluster))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("RANGE ANALYSIS (MODULE 6)\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "range_peak_span", params$range_peak_span))
+  cat(sprintf("%-35s: %s\n", "group_control", params$group_control))
+  cat(sprintf("%-35s: %s\n", "control_sample_selection", params$control_sample_selection))
+  cat(sprintf("%-35s: %s\n", "control_setpoint_metric", params$control_setpoint_metric))
+  cat(sprintf("%-35s: %s\n", "control_aggregation_method", params$control_aggregation_method))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("REPEAT VISUALISATION (MODULE 7)\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "repeat_histogram", params$repeat_histogram))
+  cat(sprintf("%-35s: %s\n", "repeat_histogram_binwidth", params$repeat_histogram_binwidth))
+  cat(sprintf("%-35s: %s\n", "repeat_scatter", params$repeat_scatter))
+  cat(sprintf("%-35s: %s\n", "repeat_distribution_metrics", 
+              paste(params$repeat_distribution_metrics, collapse = ", ")))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("RUNTIME AND EXECUTION\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "threads", params$threads))
+  cat(sprintf("%-35s: %s\n", "resume", params$resume))
+  cat(sprintf("%-35s: %s\n", "remove_intermediate", params$remove_intermediate))
+  cat(sprintf("%-35s: %s\n", "cleanup_temp", params$cleanup_temp))
+  cat(sprintf("%-35s: %s\n", "run_modules", paste(run_modules, collapse = ", ")))
+  cat(sprintf("%-35s: %s\n", "log_dir", log_dir))
+  cat(sprintf("%-35s: %s\n", "verbose", args$verbose))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("EXECUTION PLAN\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  
+  module_names <- c("Module 1: Import and QC", 
+                    "Module 2: Alignment", 
+                    "Module 3: Repeat Detection",
+                    "Module 4: Allele Calling", 
+                    "Module 5: Waterfall Plots", 
+                    "Module 6: Range Analysis",
+                    "Module 7: Repeat Visualisation")
+  
+  cat("Modules to run:\n")
+  for (mod in run_modules) {
+    status <- ""
+    if (mod == 5 && !params$waterfall) {
+      status <- " [SKIP - waterfall disabled]"
+    } else if (params$resume) {
+      output <- file.path(params$dir_out, "module_data", 
+                         paste0("0", mod, "_", c("import_qc", "alignment", "repeat_detection",
+                                                  "allele_calling", "waterfall", "range_analysis",
+                                                  "repeat_visualisation")[mod], "_results.RData"))
+      if (file.exists(output)) {
+        status <- " [SKIP - results found]"
+      } else {
+        status <- " [RUN]"
+      }
+    } else {
+      status <- " [RUN]"
+    }
+    cat(sprintf("  %s%s\n", module_names[mod], status))
+  }
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("DRY RUN COMPLETE\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat("To execute this configuration, remove --dry_run flag:\n")
+  cat("  ./duke [same arguments without --dry_run]\n\n")
+  
+  quit(status = 0)
+}
+
 cat("Configuration:\n")
 cat("  Data directory:", params$dir_data, "\n")
 cat("  Output directory:", params$dir_out, "\n")
@@ -529,7 +690,7 @@ tryCatch({
   # Module names and files
   module_names <- c("Import and QC", "Alignment", "Repeat Detection",
                     "Allele Calling", "Waterfall Plots", "Range Analysis",
-                    "Repeat Visualization")
+                    "Repeat Visualisation")
   
   rmd_files <- c("01_import_and_qc.Rmd", "02_alignment.Rmd", "03_repeat_detection.Rmd",
                  "04_allele_calling.Rmd", "05_waterfall.Rmd", "06_range_analysis.Rmd",

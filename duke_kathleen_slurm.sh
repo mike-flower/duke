@@ -8,7 +8,7 @@
 #SBATCH --output=logs/duke_%j.out
 #SBATCH --error=logs/duke_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=your.email@ucl.ac.uk
+#SBATCH --mail-user=michael.flower@ucl.ac.uk
 
 # ==============================================================================
 # Duke Pipeline - New Kathleen (Slurm) Job Script - CLI Version

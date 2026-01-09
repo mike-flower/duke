@@ -78,6 +78,11 @@ BiocManager::install(c("Biostrings", "ShortRead", "GenomicAlignments",
                        "Rsamtools", "DECIPHER"))
 ```
 
+**HPC Setup:** Point R to your existing package library:
+```bash
+export R_LIBS_USER=~/R/library
+```
+
 ---
 
 ## File Structure
@@ -88,6 +93,8 @@ duke_pipeline/
 ├── duke                          # CLI wrapper (NEW!)
 ├── duke_run.R                    # HPC runner
 ├── duke_run_local.R              # Local runner
+├── duke_myriad_cli.sh            # Myriad CLI job script (NEW!)
+├── duke_kathleen_cli.sh          # Kathleen CLI job script (NEW!)
 ├── duke_myriad.sh                # Myriad job script
 ├── duke_kathleen.sh              # Kathleen job script
 ├── 01_import_and_qc.Rmd through 07_repeat_visualisation.Rmd
@@ -114,16 +121,53 @@ duke_pipeline/
 
 ### 1. Command-Line Interface (NEW!)
 
-**Quick start:**
+#### Quick Start - Minimal Example
 ```bash
 ./duke \
   --dir_data /path/to/data \
   --dir_out /path/to/output \
-  --path_ref /path/to/reference.fasta \
-  --path_settings /path/to/settings.xlsx
+  --path_ref /path/to/reference.fasta
 ```
 
-**With adapter trimming:**
+#### Complete Test Run Example
+
+**Prerequisites on HPC:**
+```bash
+# Load required modules
+module load r/recommended
+module load samtools/1.11/gnu-4.9.2
+
+# Point R to your package library
+export R_LIBS_USER=~/R/library
+
+# Add minimap2 to PATH
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+```
+
+**Run Duke with test dataset:**
+```bash
+# Navigate to Duke directory
+cd /home/skgtmdf/Scratch/bin/duke
+
+# Run test analysis with 3 threads
+./duke \
+  --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
+  --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
+  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
+  --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
+  --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
+  --threads 3 \
+  --resume TRUE \
+  --remove_intermediate TRUE \
+  --cleanup_temp FALSE
+```
+
+**Notes:**
+- Use `--threads 3` for login node testing (never use high thread counts on login nodes)
+- For production runs, submit to queue with job scripts (see [HPC Deployment](#hpc-deployment))
+- Results will be in `/home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke/`
+
+#### With Adapter Trimming
 ```bash
 ./duke \
   --dir_data /path/to/data \
@@ -132,7 +176,7 @@ duke_pipeline/
   --path_trim_patterns /path/to/adapters.csv
 ```
 
-**Without adapter trimming:**
+#### Without Adapter Trimming
 ```bash
 ./duke \
   --dir_data /path/to/data \
@@ -141,16 +185,57 @@ duke_pipeline/
   --trim FALSE
 ```
 
-**See all options:**
+#### See All Options
 ```bash
 ./duke --help
 ```
 
-**Key features:**
+**Key Features:**
 - ✅ 54+ configurable parameters
 - ✅ Resume enabled by default (skip completed modules)
 - ✅ Comprehensive help with examples
 - ✅ No file editing required
+
+**⚠️ Important:** Don't run Duke directly on login nodes for production datasets. Use job scripts via `qsub` or `sbatch`.
+
+---
+
+#### HPC Cluster Test Run (Myriad/Kathleen)
+
+**For running test data on compute nodes via job scripts:**
+
+Edit `duke_myriad_cli.sh` or `duke_kathleen_cli.sh` and update the `./duke` command:
+
+```bash
+./duke \
+  --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
+  --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
+  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
+  --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
+  --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
+  --threads 36 \
+  --resume TRUE \
+  --remove_intermediate TRUE \
+  --cleanup_temp FALSE
+```
+
+Then submit:
+```bash
+# Myriad (36 cores)
+qsub duke_myriad_cli.sh
+
+# Kathleen (80 cores - change --threads to 80 in script)
+qsub duke_kathleen_cli.sh
+```
+
+**Monitor the job:**
+```bash
+# Check status
+qstat -u $USER
+
+# Watch log
+tail -f logs/duke_<JOB_ID>.out
+```
 
 ---
 
@@ -198,6 +283,16 @@ qsub duke_myriad.sh
 | **Myriad** | ≤500 samples | 1-36 | SGE (`-pe smp`) |
 | **Kathleen** | 1000+ samples | 80-160 | SGE (`-pe mpi`) |
 
+### Job Script Setup
+
+**IMPORTANT:** All HPC job scripts must include:
+
+```bash
+# After module loads, add these lines:
+export R_LIBS_USER=~/R/library
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+```
+
 ### Memory Optimization (Kathleen)
 
 For large datasets, request more cores than you use:
@@ -206,7 +301,7 @@ For large datasets, request more cores than you use:
 #$ -pe mpi 160     # Request 160 cores
 #$ -l mem=2G       # 2GB/core = 320GB total
 
-# In duke_run.R:
+# In duke_run.R or CLI:
 threads = 80       # Use only 80 threads
 ```
 
@@ -214,12 +309,22 @@ threads = 80       # Use only 80 threads
 
 ### Job Submission
 
+**Traditional (Edit duke_run.R):**
 ```bash
 # Myriad
 qsub duke_myriad.sh
 
 # Kathleen  
 qsub duke_kathleen.sh
+```
+
+**CLI (Edit job script parameters):**
+```bash
+# Myriad
+qsub duke_myriad_cli.sh
+
+# Kathleen
+qsub duke_kathleen_cli.sh
 ```
 
 **Performance:** ~15-18 hours for 1000 samples (Kathleen 80 cores)
@@ -385,6 +490,23 @@ result_duke/
 ## Troubleshooting
 
 ### Common Issues
+
+**"Rscript: command not found" (CLI on HPC)**
+```bash
+# Load R module first
+module load r/recommended
+
+# Also set library path
+export R_LIBS_USER=~/R/library
+```
+
+**"Error: there is no package called 'openxlsx'"**
+```bash
+# Point R to your existing package library
+export R_LIBS_USER=~/R/library
+
+# Or install packages (see Installation section)
+```
 
 **"Error: --path_ref is required"**
 ```bash

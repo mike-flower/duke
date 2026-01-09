@@ -1,34 +1,39 @@
 #!/bin/bash -l
 #$ -S /bin/bash
-#$ -N duke_cli
-#$ -l h_rt=48:00:00
-#$ -pe smp 36
-#$ -l mem=4G
-#$ -l tmpfs=100G
-#$ -wd /home/username/Scratch/bin/duke
-#$ -M your.email@ucl.ac.uk
+#$ -N duke_01_160c_2G_24h
+#$ -l h_rt=24:00:00
+#$ -pe mpi 160
+#$ -l mem=2G
+#$ -wd /home/skgtmdf/Scratch/bin/duke
+#$ -M michael.flower@ucl.ac.uk
 #$ -m bea
 
 # ==============================================================================
-# Duke Pipeline - Myriad Job Script (CLI Version)
+# Duke Pipeline - Old Kathleen Job Script (CLI Version)
 # ==============================================================================
 # 
 # This script runs Duke using the command-line interface (duke_cli.R)
 # Edit the parameters in the ./duke command below
 #
-# Cluster: Myriad (UCL)
+# Cluster: Old Kathleen (UCL) - Being phased out
 # Scheduler: Grid Engine (SGE)
-# Parallel environment: smp (shared memory)
-# Cores: 36 (maximum for Myriad)
-# Memory: 4GB per core = 144GB total
+# Parallel environment: mpi (distributed)
+# Cores: 80 (2 nodes × 40 cores)
+# Memory: 4GB per core = 320GB total
 # Runtime: 48 hours
 #
-# Expected performance (36 cores):
-#   ~100 samples: 2-3 hours
-#   ~300 samples: 8-12 hours  
-#   ~500 samples: 15-20 hours
+# CRITICAL NOTES:
+# - Old Kathleen requires -pe mpi (not -pe smp)
+# - Request cores in multiples of 40 (node size)
+# - No tmpfs support (tmpdir not available)
+# - Being replaced by New Kathleen (Slurm)
 #
-# For larger datasets (1000+ samples), use Kathleen with 80+ cores
+# Expected performance (80 cores):
+#   ~1000 samples: 15-18 hours
+#   ~2000 samples: 30-36 hours
+#
+# For memory issues with very large datasets, see:
+#   duke_kathleen_160c_80t_cli.sh (requests 160 cores, uses 80 threads)
 #
 # ==============================================================================
 
@@ -36,6 +41,9 @@
 module purge
 module load r/recommended
 module load samtools/1.11/gnu-4.9.2
+
+# Set R library path
+export R_LIBS_USER=~/R/library
 
 # Add minimap2 to PATH
 export PATH=$HOME/Scratch/bin/minimap2:$PATH
@@ -70,7 +78,7 @@ cd ~/Scratch/bin/duke
   --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
   --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
-  --threads 36 \
+  --threads 80 \
   --resume TRUE \
   --remove_intermediate TRUE \
   --cleanup_temp FALSE
@@ -85,16 +93,27 @@ cd ~/Scratch/bin/duke
 #   --dir_out ~/Scratch/results/my_results \
 #   --path_ref ~/Scratch/refs/HTTset20/HTTset20.fasta \
 #   --trim FALSE \
-#   --threads 36
+#   --threads 80
 
 # Force re-run all modules:
 # ./duke --resume FALSE ...
 
-# Run specific modules only (e.g., re-plot after parameter change):
+# Run specific modules only:
 # ./duke --run_modules 5,6,7 --resume TRUE ...
 
-# Downsample reads for testing:
-# ./duke --downsample 1000 ...
+# Custom repeat parameters:
+# ./duke --rpt_pattern CTG --rpt_max_mismatch 1 ...
+
+# ==============================================================================
+# MEMORY TROUBLESHOOTING
+# ==============================================================================
+
+# If you encounter "Cannot allocate memory" errors with large datasets,
+# use the memory-optimized version instead:
+#   qsub duke_kathleen_160c_80t_cli.sh
+#
+# That script requests 160 cores but uses only 80 threads, providing
+# a large memory buffer (320GB / 80 threads = 4GB per thread)
 
 # ==============================================================================
 # END OF SCRIPT
