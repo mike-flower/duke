@@ -8,6 +8,7 @@ A modular pipeline for amplicon sequencing analysis with comprehensive repeat le
 - 🔧 **Enhanced Documentation** - Comprehensive parameter explanations with examples
 - 📦 **Organised Library Files** - Clear module number prefixes (00-07)
 - 🐛 **Bug Fixes** - Resume detection, parameter naming consistency
+- 📊 **Improved Logging** - End time display and consistent HH:MM:SS duration format
 
 ---
 
@@ -58,7 +59,7 @@ source("duke_run_local.R")
 install.packages(c("tidyverse", "data.table", "rmarkdown", "knitr"))
 
 # Visualisation
-install.packages(c("ggplot2", "ggrepel", "ggridges", "RColorBrewer", "cowplot"))
+install.packages(c("ggplot2", "ggrepel", "ggridges", "RColorBrewer", "cowplot", "ggnewscale"))
 
 # Tables and reports
 install.packages(c("openxlsx", "DT", "kableExtra", "htmltools"))
@@ -661,6 +662,7 @@ mkdir -p logs
 - 📦 **ORGANISED:** Library files with module prefixes (00-07)
 - 🔧 **UPDATED:** Conditional trimming in Module 1
 - 📊 **DOCUMENTED:** Memory requirements from empirical testing
+- 📊 **IMPROVED:** Logging now shows end time and consistent HH:MM:SS duration format
 - ❌ **REMOVED:** `visualise_alignment_corrected` (didn't exist)
 
 ### 2.0.0

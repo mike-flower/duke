@@ -735,10 +735,16 @@ tryCatch({
   }
   
   end_time <- Sys.time()
+  duration_secs <- as.numeric(difftime(end_time, start_time, units = "secs"))
+  duration_hours <- floor(duration_secs / 3600)
+  duration_mins <- floor((duration_secs %% 3600) / 60)
+  duration_secs_remainder <- round(duration_secs %% 60)
+  
   cat("\n=================================================================\n")
   cat("                    PIPELINE COMPLETED                           \n")
   cat("=================================================================\n\n")
-  cat("Duration:", format(difftime(end_time, start_time, units = "auto")), "\n\n")
+  cat("Run finished:", format(end_time, "%Y-%m-%d %H:%M:%S"), "\n")
+  cat(sprintf("Duration: %02d:%02d:%02d (HH:MM:SS)\n\n", duration_hours, duration_mins, duration_secs_remainder))
   
 }, error = function(e) {
   cat("\n=================================================================\n")

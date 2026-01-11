@@ -757,22 +757,24 @@ if (params$cleanup_temp) {
   cat("\n")
 }
 
-cat("\n")
-cat("=================================================================\n")
-cat("                      ALL DONE!                                  \n")
-cat("=================================================================\n")
-cat("\n")
-
 # ==============================================================================
 # FINISH LOGGING
 # ==============================================================================
 
 # Calculate and log duration (before closing log file)
 end_time <- Sys.time()
-duration <- end_time - start_time
+duration_secs <- as.numeric(difftime(end_time, start_time, units = "secs"))
+duration_hours <- floor(duration_secs / 3600)
+duration_mins <- floor((duration_secs %% 3600) / 60)
+duration_secs_remainder <- round(duration_secs %% 60)
 
+cat("\n")
+cat("=================================================================\n")
+cat("                      ALL DONE!                                  \n")
+cat("=================================================================\n")
+cat("\n")
 cat("Run finished:", format(end_time, "%Y-%m-%d %H:%M:%S"), "\n")
-cat("Total duration:", format(duration), "\n")
+cat(sprintf("Total duration: %02d:%02d:%02d (HH:MM:SS)\n", duration_hours, duration_mins, duration_secs_remainder))
 cat("\n")
 
 # Stop capturing output
