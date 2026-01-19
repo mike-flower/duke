@@ -7,13 +7,18 @@
 
 # Set the working directory where this script is saved
 # Works from both RStudio and command line
+# This script lives in scripts/ subdirectory, so we need to go up one level
+# to reach the duke installation root where lib/ and modules/ are located
+
 if (interactive()) {
   # Running in RStudio
   if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
-    setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+    script_dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+    duke_root <- dirname(script_dir)  # Go up one level from scripts/
+    setwd(duke_root)
   } else {
     # Running interactively but not in RStudio
-    cat("Note: Running interactively. Make sure you're in the pipeline directory.\n")
+    cat("Note: Running interactively. Make sure you're in the duke root directory.\n")
   }
 } else {
   # Running from command line (Rscript)
@@ -21,9 +26,11 @@ if (interactive()) {
   file_arg <- grep("^--file=", args, value = TRUE)
   if (length(file_arg) > 0) {
     script_path <- sub("^--file=", "", file_arg)
-    setwd(dirname(normalizePath(script_path)))
+    script_dir <- dirname(normalizePath(script_path))
+    duke_root <- dirname(script_dir)  # Go up one level from scripts/
+    setwd(duke_root)
   } else {
-    cat("Note: Could not detect script location. Make sure you're in the pipeline directory.\n")
+    cat("Note: Could not detect script location. Make sure you're in the duke root directory.\n")
   }
 }
 
@@ -516,10 +523,11 @@ if (1 %in% params$run_modules) {
     cat("Skipping Module 1 (results found)...\n")
   } else {
     rmarkdown::render(
-      input = "01_import_and_qc.Rmd",
+      input = "modules/01_import_and_qc.Rmd",
       output_dir = params$dir_out,
       params = params,
-      envir = new.env()
+      envir = new.env(),
+      knit_root_dir = getwd()  # Keep knitting directory at duke root
     )
     cat("\nModule 1 complete!\n")
   }
@@ -542,10 +550,11 @@ if (2 %in% params$run_modules) {
     cat("Skipping Module 2 (results found)...\n")
   } else {
     rmarkdown::render(
-      input = "02_alignment.Rmd",
+      input = "modules/02_alignment.Rmd",
       output_dir = params$dir_out,
       params = params,
-      envir = new.env()
+      envir = new.env(),
+      knit_root_dir = getwd()
     )
     cat("\nModule 2 complete!\n")
   }
@@ -568,10 +577,11 @@ if (3 %in% params$run_modules) {
     cat("Skipping Module 3 (results found)...\n")
   } else {
     rmarkdown::render(
-      input = "03_repeat_detection.Rmd",
+      input = "modules/03_repeat_detection.Rmd",
       output_dir = params$dir_out,
       params = params,
-      envir = new.env()
+      envir = new.env(),
+      knit_root_dir = getwd()
     )
     cat("\nModule 3 complete!\n")
   }
@@ -594,10 +604,11 @@ if (4 %in% params$run_modules) {
     cat("Skipping Module 4 (results found)...\n")
   } else {
     rmarkdown::render(
-      input = "04_allele_calling.Rmd",
+      input = "modules/04_allele_calling.Rmd",
       output_dir = params$dir_out,
       params = params,
-      envir = new.env()
+      envir = new.env(),
+      knit_root_dir = getwd()
     )
     cat("\nModule 4 complete!\n")
   }
@@ -621,10 +632,11 @@ if (5 %in% params$run_modules) {
       cat("Skipping Module 5 (results found)...\n")
     } else {
       rmarkdown::render(
-        input = "05_waterfall.Rmd",
+        input = "modules/05_waterfall.Rmd",
         output_dir = params$dir_out,
         params = params,
-        envir = new.env()
+        envir = new.env(),
+        knit_root_dir = getwd()
       )
       cat("\nModule 5 complete!\n")
     }
@@ -651,10 +663,11 @@ if (6 %in% params$run_modules) {
     cat("Skipping Module 6 (results found)...\n")
   } else {
     rmarkdown::render(
-      input = "06_range_analysis.Rmd",
+      input = "modules/06_range_analysis.Rmd",
       output_dir = params$dir_out,
       params = params,
-      envir = new.env()
+      envir = new.env(),
+      knit_root_dir = getwd()
     )
     cat("\nModule 6 complete!\n")
   }
@@ -677,10 +690,11 @@ if (7 %in% params$run_modules) {
     cat("Skipping Module 7 (results found)...\n")
   } else {
     rmarkdown::render(
-      input = "07_repeat_visualisation.Rmd",
+      input = "modules/07_repeat_visualisation.Rmd",
       output_dir = params$dir_out,
       params = params,
-      envir = new.env()
+      envir = new.env(),
+      knit_root_dir = getwd()
     )
     cat("\nModule 7 complete!\n")
   }

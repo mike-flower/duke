@@ -181,6 +181,168 @@ for (rng in names(settings_parsed$ranges_list[[1]])) {
 
 ---
 
+# Comprehensive Range Summary
+
+Build a comprehensive summary table showing all range parameters for each sample.
+
+```{r comprehensive_range_summary, echo=FALSE}
+message("\n=== Building Comprehensive Range Summary ===")
+
+# Build comprehensive range summary for each sample and range
+comprehensive_range_summary_list <- lapply(1:nrow(settings_parsed), function(i) {
+  
+  my_settings <- settings_parsed[i, ]
+  my_file_stem <- my_settings$file_stem
+  
+  # Get ranges and parameters
+  ranges <- my_settings$ranges_list[[1]]
+  floor_vals <- my_settings$floor_list[[1]]
+  max_peaks_vals <- my_settings$max_peaks_list[[1]]
+  
+  # Get manual controls if they exist
+  manual_controls <- list()
+  if (!is.null(my_settings$manual_control_list) && 
+      length(my_settings$manual_control_list) > 0) {
+    manual_controls <- my_settings$manual_control_list[[1]]
+  }
+  
+  # Get sample data to calculate actual boundaries
+  sample_data <- alignment_clustered %>%
+    filter(file_stem == my_file_stem)
+  
+  if (nrow(sample_data) == 0) {
+    warning("No data for sample: ", my_file_stem)
+    return(NULL)
+  }
+  
+  repeat_counts <- sample_data[[params$repeat_count_method]]
+  
+  # Build summary for each range
+  range_summaries <- lapply(names(ranges), function(range_name) {
+    
+    my_range <- ranges[[range_name]]
+    my_floor <- floor_vals[[range_name]]
+    my_max_peaks <- max_peaks_vals[[range_name]]
+    
+    # Manual control if provided
+    manual_control <- if (length(manual_controls) > 0 && 
+                          range_name %in% names(manual_controls)) {
+      manual_controls[[range_name]]
+    } else {
+      NA_real_
+    }
+    
+    # Store original boundaries from settings
+    settings_min <- my_range[1]
+    settings_max <- my_range[2]
+    
+    # Replace NA with actual data boundaries for analysis
+    if (is.na(my_range[1])) my_range[1] <- min(repeat_counts, na.rm = TRUE)
+    if (is.na(my_range[2])) my_range[2] <- max(repeat_counts, na.rm = TRUE)
+    
+    # Filter to range to get observed boundaries
+    counts_in_range <- repeat_counts[repeat_counts >= my_range[1] & 
+                                     repeat_counts <= my_range[2]]
+    
+    # Observed boundaries (what's actually in the data)
+    observed_min <- if (length(counts_in_range) > 0) {
+      min(counts_in_range, na.rm = TRUE)
+    } else {
+      NA_real_
+    }
+    
+    observed_max <- if (length(counts_in_range) > 0) {
+      max(counts_in_range, na.rm = TRUE)
+    } else {
+      NA_real_
+    }
+    
+    data.frame(
+      file_stem = my_file_stem,
+      analysis_range_name = range_name,
+      settings_min = settings_min,
+      settings_max = settings_max,
+      analysis_min = my_range[1],
+      analysis_max = my_range[2],
+      observed_min = observed_min,
+      observed_max = observed_max,
+      floor_threshold = my_floor,
+      max_peaks_allowed = my_max_peaks,
+      manual_control_repeat_length = manual_control,
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  bind_rows(range_summaries)
+})
+
+# Combine all summaries
+comprehensive_range_summary <- bind_rows(comprehensive_range_summary_list)
+
+# Add group and time information
+comprehensive_range_summary <- comprehensive_range_summary %>%
+  left_join(
+    select(settings, file_stem, group, group_control_sample, time),
+    by = "file_stem"
+  ) %>%
+  relocate(file_stem, group, time, analysis_range_name)
+
+message("  Rows created: ", nrow(comprehensive_range_summary))
+message("  Samples: ", length(unique(comprehensive_range_summary$file_stem)))
+message("  Ranges: ", length(unique(comprehensive_range_summary$analysis_range_name)))
+
+# Display initial table (before peaks are added)
+DT::datatable(
+  comprehensive_range_summary,
+  caption = "Comprehensive Range Summary - Configuration and Boundaries",
+  extensions = 'Buttons',
+  options = list(
+    pageLength = 20,
+    scrollX = TRUE,
+    scrollY = "600px",
+    dom = 'Bfrtip',
+    buttons = list(
+      'copy',
+      list(extend = 'csv', filename = 'range_summary_configuration'),
+      list(extend = 'excel', filename = 'range_summary_configuration'),
+      'colvis'
+    ),
+    columnDefs = list(
+      list(width = '120px', targets = 0)
+    )
+  ),
+  rownames = FALSE,
+  filter = 'top',
+  class = 'cell-border stripe compact hover',
+  style = 'bootstrap'
+) %>%
+  DT::formatRound(
+    columns = c('settings_min', 'settings_max', 'analysis_min', 'analysis_max',
+                'observed_min', 'observed_max', 'manual_control_repeat_length'),
+    digits = 1
+  ) %>%
+  DT::formatStyle(
+    'manual_control_repeat_length',
+    backgroundColor = DT::styleEqual(NA, 'white', default = '#fff3cd'),
+    fontWeight = 'bold'
+  ) %>%
+  DT::formatStyle(
+    columns = colnames(comprehensive_range_summary),
+    fontSize = '10px'
+  )
+```
+
+**Column descriptions:**
+
+- **settings_min/max**: Original range boundaries from settings file (may be NA for open ranges)
+- **analysis_min/max**: Actual boundaries used for analysis (NA replaced with data min/max)
+- **observed_min/max**: Minimum and maximum repeat lengths actually observed in the data within this range
+- **floor_threshold**: Minimum read frequency threshold applied
+- **max_peaks_allowed**: Maximum number of peaks allowed to detect
+- **manual_control_repeat_length**: Manually specified control value (highlighted in yellow if present)
+
+---
+
 # Peak detection
 
 Detect modal peaks within each analysis range for each sample.
@@ -279,6 +441,136 @@ datatable(modal_peaks,
           rownames = FALSE) %>%
   formatRound(columns = c('modal_length'), digits = 1) %>%
   formatStyle(columns = colnames(modal_peaks), fontSize = '10px')
+```
+
+```{r add_peaks_to_comprehensive_summary, echo=FALSE}
+# Add detected peaks to comprehensive summary
+message("\n=== Adding Peaks to Comprehensive Summary ===")
+
+# Get peaks in wide format for joining
+message("  Converting peaks to wide format...")
+
+# First, find the maximum number of peaks detected across all samples/ranges
+max_peaks_found <- modal_peaks %>%
+  filter(!is.na(modal_length)) %>%
+  group_by(file_stem, analysis_range_name) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  pull(n) %>%
+  max()
+
+message("  Maximum peaks detected in any sample/range: ", max_peaks_found)
+
+# Dynamically create peak columns based on what exists
+peaks_wide <- modal_peaks %>%
+  filter(!is.na(modal_length)) %>%
+  arrange(file_stem, analysis_range_name, peak_rank) %>%
+  group_by(file_stem, analysis_range_name) %>%
+  summarise(
+    n_peaks_detected = n(),
+    .groups = "drop"
+  )
+
+# Add peak columns dynamically
+for (i in 1:max_peaks_found) {
+  # Extract peaks for this rank
+  peak_data <- modal_peaks %>%
+    filter(!is.na(modal_length), peak_rank == i) %>%
+    select(file_stem, analysis_range_name, modal_length, modal_frequency) %>%
+    rename(!!paste0("peak", i, "_length") := modal_length,
+           !!paste0("peak", i, "_frequency") := modal_frequency)
+  
+  # Join to peaks_wide
+  peaks_wide <- peaks_wide %>%
+    left_join(peak_data, by = c("file_stem", "analysis_range_name"))
+}
+
+message("  Created ", max_peaks_found, " peak column pairs (length + frequency)")
+
+# Join peaks to comprehensive summary
+comprehensive_range_summary <- comprehensive_range_summary %>%
+  left_join(peaks_wide, by = c("file_stem", "analysis_range_name"))
+
+message("  Peaks added successfully")
+if ("peak1_length" %in% colnames(comprehensive_range_summary)) {
+  message("  Total peak1 detected: ", sum(!is.na(comprehensive_range_summary$peak1_length)))
+}
+
+# Dynamically identify peak columns for formatting
+peak_cols <- grep("^peak[0-9]+_(length|frequency)$", 
+                  colnames(comprehensive_range_summary), 
+                  value = TRUE)
+peak_length_cols <- grep("^peak[0-9]+_length$", peak_cols, value = TRUE)
+peak_freq_cols <- grep("^peak[0-9]+_frequency$", peak_cols, value = TRUE)
+
+message("  Peak columns in table: ", paste(peak_cols, collapse = ", "))
+
+# Display updated table with peaks
+dt_table <- DT::datatable(
+  comprehensive_range_summary,
+  caption = "Comprehensive Range Summary - With Detected Peaks",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    pageLength = 20,
+    scrollX = TRUE,
+    scrollY = "650px",
+    dom = 'Bfrtip',
+    buttons = list(
+      'copy',
+      list(extend = 'csv', filename = 'range_summary_with_peaks'),
+      list(extend = 'excel', filename = 'range_summary_with_peaks'),
+      'colvis'
+    ),
+    fixedColumns = list(leftColumns = 2),
+    columnDefs = list(
+      list(width = '110px', targets = 0:1)
+    )
+  ),
+  rownames = FALSE,
+  filter = 'top',
+  class = 'cell-border stripe compact hover',
+  style = 'bootstrap'
+)
+
+# Format numeric columns
+numeric_cols <- c('settings_min', 'settings_max', 'analysis_min', 'analysis_max',
+                  'observed_min', 'observed_max', 'manual_control_repeat_length')
+numeric_cols <- c(numeric_cols, peak_length_cols)
+numeric_cols <- numeric_cols[numeric_cols %in% colnames(comprehensive_range_summary)]
+
+dt_table <- dt_table %>%
+  DT::formatRound(columns = numeric_cols, digits = 1)
+
+# Highlight peak1 (most important) if it exists
+if ("peak1_length" %in% colnames(comprehensive_range_summary)) {
+  dt_table <- dt_table %>%
+    DT::formatStyle(
+      c('peak1_length', 'peak1_frequency'),
+      fontWeight = 'bold',
+      backgroundColor = '#e3f2fd'
+    )
+}
+
+# Highlight peak2 if it exists
+if ("peak2_length" %in% colnames(comprehensive_range_summary)) {
+  dt_table <- dt_table %>%
+    DT::formatStyle(
+      c('peak2_length', 'peak2_frequency'),
+      backgroundColor = '#f0f0f0'
+    )
+}
+
+# Highlight manual controls
+dt_table <- dt_table %>%
+  DT::formatStyle(
+    'manual_control_repeat_length',
+    backgroundColor = DT::styleEqual(NA, 'white', default = '#fff3cd')
+  ) %>%
+  DT::formatStyle(
+    columns = colnames(comprehensive_range_summary),
+    fontSize = '10px'
+  )
+
+dt_table
 ```
 
 ```{r plot_peaks, echo=FALSE, fig.width=12, fig.height=10}
@@ -1281,6 +1573,125 @@ if (params$group_control) {
 }
 ```
 
+```{r add_controls_to_comprehensive_summary, echo=FALSE}
+# Add control information to comprehensive summary
+if (params$group_control && exists("group_controls") && !is.null(group_controls)) {
+  
+  message("\n=== Adding Group Controls to Comprehensive Summary ===")
+  
+  # Get control setpoints per group and range
+  control_setpoints <- group_controls %>%
+    select(group, analysis_range_name, control_setpoint, control_metric_used)
+  
+  # Join to comprehensive summary
+  comprehensive_range_summary <- comprehensive_range_summary %>%
+    left_join(control_setpoints, by = c("group", "analysis_range_name"))
+  
+  message("  Control setpoints added successfully")
+  
+  # Dynamically identify peak columns for formatting
+  peak_cols <- grep("^peak[0-9]+_(length|frequency)$", 
+                    colnames(comprehensive_range_summary), 
+                    value = TRUE)
+  peak_length_cols <- grep("^peak[0-9]+_length$", peak_cols, value = TRUE)
+  peak_freq_cols <- grep("^peak[0-9]+_frequency$", peak_cols, value = TRUE)
+  
+  # Display final comprehensive table
+  dt_final <- DT::datatable(
+    comprehensive_range_summary,
+    caption = "COMPLETE: Comprehensive Range Summary - Configuration, Peaks, and Controls",
+    extensions = c('Buttons', 'FixedColumns'),
+    options = list(
+      pageLength = 25,
+      scrollX = TRUE,
+      scrollY = "700px",
+      dom = 'Bfrtip',
+      buttons = list(
+        'copy',
+        list(extend = 'csv', filename = 'comprehensive_range_summary_complete'),
+        list(extend = 'excel', filename = 'comprehensive_range_summary_complete'),
+        'colvis',
+        list(
+          extend = 'pdfHtml5',
+          orientation = 'landscape',
+          pageSize = 'A3'
+        )
+      ),
+      fixedColumns = list(leftColumns = 2),
+      columnDefs = list(
+        list(width = '110px', targets = 0:1)
+      )
+    ),
+    rownames = FALSE,
+    filter = 'top',
+    class = 'cell-border stripe compact hover',
+    style = 'bootstrap'
+  )
+  
+  # Format numeric columns
+  numeric_cols <- c('settings_min', 'settings_max', 'analysis_min', 'analysis_max',
+                    'observed_min', 'observed_max', 
+                    'manual_control_repeat_length', 'control_setpoint')
+  numeric_cols <- c(numeric_cols, peak_length_cols)
+  numeric_cols <- numeric_cols[numeric_cols %in% colnames(comprehensive_range_summary)]
+  
+  dt_final <- dt_final %>%
+    DT::formatRound(columns = numeric_cols, digits = 1)
+  
+  # Highlight peak1 (most important) if it exists
+  if ("peak1_length" %in% colnames(comprehensive_range_summary)) {
+    dt_final <- dt_final %>%
+      DT::formatStyle(
+        c('peak1_length', 'peak1_frequency'),
+        fontWeight = 'bold',
+        backgroundColor = '#e3f2fd'
+      )
+  }
+  
+  # Highlight peak2 if it exists
+  if ("peak2_length" %in% colnames(comprehensive_range_summary)) {
+    dt_final <- dt_final %>%
+      DT::formatStyle(
+        c('peak2_length', 'peak2_frequency'),
+        backgroundColor = '#f0f0f0'
+      )
+  }
+  
+  # Highlight additional peaks (peak3, peak4, etc.) with progressively lighter grey
+  for (i in 3:length(peak_length_cols)) {
+    peak_len_col <- paste0("peak", i, "_length")
+    peak_freq_col <- paste0("peak", i, "_frequency")
+    if (peak_len_col %in% colnames(comprehensive_range_summary)) {
+      # Progressively lighter grey: #f5f5f5, #f8f8f8, #fafafa
+      grey_value <- sprintf("#f%df%df%d", 2+i, 2+i, 2+i)
+      dt_final <- dt_final %>%
+        DT::formatStyle(
+          c(peak_len_col, peak_freq_col),
+          backgroundColor = grey_value
+        )
+    }
+  }
+  
+  # Highlight manual controls and control setpoints
+  dt_final <- dt_final %>%
+    DT::formatStyle(
+      'manual_control_repeat_length',
+      backgroundColor = DT::styleEqual(NA, 'white', default = '#fff3cd')
+    ) %>%
+    DT::formatStyle(
+      'control_setpoint',
+      backgroundColor = DT::styleEqual(NA, 'white', default = '#d4edda'),
+      fontWeight = 'bold'
+    ) %>%
+    DT::formatStyle(
+      columns = colnames(comprehensive_range_summary),
+      fontSize = '10px'
+    )
+  
+  dt_final
+}
+```
+
 ```{r plot_group_controls, echo=FALSE, fig.width=12, fig.height=7}
 if (params$group_control && !is.null(group_controls)) {
   
@@ -2073,8 +2484,9 @@ if (params$group_control && any(instability_metrics$setpoint_type == "control_re
 Export all results to Excel workbook.
 
 ```{r export_excel, echo=FALSE}
-# Prepare export list
+# Prepare export list - comprehensive summary first
 excel_export <- list(
+  comprehensive_range_summary = comprehensive_range_summary,
   range_summary = range_summary,
   modal_peaks = modal_peaks,
   distribution_summary = distribution_summary
@@ -2098,6 +2510,7 @@ message("  Sheets: ", paste(names(excel_export), collapse = ", "))
 
 **Excel file contains:**
 
+- **comprehensive_range_summary**: Complete table with all parameters, peaks, and controls (NEW!)
 - **range_summary**: Analysis range definitions per sample
 - **modal_peaks**: Detected peaks per sample and range
 - **distribution_summary**: Full distribution statistics
@@ -2122,6 +2535,7 @@ message("  Sheets: ", paste(names(excel_export), collapse = ", "))
 # Compile module output
 module6_output <- list(
   settings = settings_parsed,
+  comprehensive_range_summary = comprehensive_range_summary,
   modal_peaks = modal_peaks,
   distribution_summary = distribution_summary,
   group_controls = group_controls,
@@ -2136,6 +2550,7 @@ output_path <- file.path(results_dir, "06_range_analysis_results.RData")
 save(module6_output, file = output_path)
 
 message("Module 6 outputs saved to: ", output_path)
+message("  comprehensive_range_summary included in module6_output")
 ```
 
 **Module 6 Complete!**

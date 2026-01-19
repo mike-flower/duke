@@ -16,11 +16,11 @@
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Check if duke_cli.R exists
-if [ ! -f "$SCRIPT_DIR/duke_cli.R" ]; then
-    echo "Error: duke_cli.R not found in $SCRIPT_DIR"
+# Check if duke_cli.R exists in scripts subdirectory
+if [ ! -f "$SCRIPT_DIR/scripts/duke_cli.R" ]; then
+    echo "Error: scripts/duke_cli.R not found in $SCRIPT_DIR"
     exit 1
 fi
 
 # Run the Duke CLI
-Rscript "$SCRIPT_DIR/duke_cli.R" "$@"
+Rscript "$SCRIPT_DIR/scripts/duke_cli.R" "$@"

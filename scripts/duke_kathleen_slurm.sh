@@ -172,7 +172,7 @@ echo ""
 # EDIT PARAMETERS BELOW
 # ==============================================================================
 
-# Change to Duke directory
+# Change to Duke root directory (parent of scripts/)
 cd ~/Scratch/bin/duke
 
 # Run Duke with CLI

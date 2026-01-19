@@ -1,14 +1,13 @@
-# Duke Pipeline 2.1.0
+# Duke Pipeline 2.0.1
 
 A modular pipeline for amplicon sequencing analysis with comprehensive repeat length characterisation and instability metrics.
 
-**Latest Updates (v2.1.0):**
-- 🗂️ **Reorganised Directory Structure** - Cleaner root with `modules/` and `scripts/` subdirectories
-- ✨ **Command-Line Interface** - Run Duke without editing files
+**Latest Updates (v2.0.1):**
+- ✨ **New Command-Line Interface** - Run Duke without editing files
 - ✅ **Optional Trimming** - Enable/disable adapter trimming with `--trim` flag
 - 🔧 **Enhanced Documentation** - Comprehensive parameter explanations with examples
 - 📦 **Organised Library Files** - Clear module number prefixes (00-07)
-- 🐛 **Bug Fixes** - Resume detection, parameter naming consistency, knit directory handling
+- 🐛 **Bug Fixes** - Resume detection, parameter naming consistency
 - 📊 **Improved Logging** - End time display and consistent HH:MM:SS duration format
 
 ---
@@ -17,20 +16,20 @@ A modular pipeline for amplicon sequencing analysis with comprehensive repeat le
 
 ### Three Ways to Run Duke
 
-**1. Command-Line Interface (RECOMMENDED)** - No file editing required:
+**1. Command-Line Interface (NEW!)** - No file editing required:
 ```bash
 ./duke --dir_data ~/data --dir_out ~/results --path_ref ~/ref.fasta
 ```
 
 **2. Script-Based** - Full control with duke_run.R:
 ```bash
-# Edit scripts/duke_run.R, then:
-Rscript scripts/duke_run.R
+# Edit duke_run.R, then:
+Rscript duke_run.R
 ```
 
 **3. Interactive** - RStudio development:
 ```r
-source("scripts/duke_run.R")
+source("duke_run_local.R")
 ```
 
 ---
@@ -40,12 +39,10 @@ source("scripts/duke_run.R")
 - [Installation](#installation)
 - [File Structure](#file-structure)
 - [Run Analysis](#run-analysis)
-  - [Command-Line Interface](#1-command-line-interface-recommended)
+  - [Command-Line Interface](#1-command-line-interface-new)
   - [Script-Based](#2-script-based-duke_runr)
   - [Interactive RStudio](#3-interactive-rstudio)
 - [HPC Deployment](#hpc-deployment)
-  - [Job Submission](#job-submission)
-  - [Monitoring Jobs](#monitoring-jobs)
   - [Critical Memory Requirements](#critical-memory-requirements)
   - [Resource Recommendations](#resource-recommendations)
 - [Parameters](#parameters)
@@ -91,10 +88,16 @@ export R_LIBS_USER=~/R/library
 ## File Structure
 
 ```
-duke/
-├── duke                          # CLI wrapper executable
-├── README.md                     # This file
-├── lib/                          # Function libraries (UNCHANGED)
+duke_pipeline/
+├── duke_cli.R                    # CLI script (NEW!)
+├── duke                          # CLI wrapper (NEW!)
+├── duke_run.R                    # HPC runner
+├── duke_run_local.R              # Local runner
+├── duke_myriad.sh                # Myriad job script
+├── duke_kathleen.sh              # Kathleen job script
+├── duke_kathleen_slurm.sh        # New Kathleen (Slurm) job script
+├── 01_import_and_qc.Rmd through 07_repeat_visualisation.Rmd
+├── lib/                          # Function libraries
 │   ├── load_all.R
 │   ├── 00_utils.R                # General utilities
 │   ├── 01_import.R               # Module 1
@@ -107,35 +110,16 @@ duke/
 │   ├── 05_waterfall.R            # Module 5
 │   ├── 06_range_analysis.R       # Module 6
 │   └── 07_visualisation.R        # Module 7
-├── modules/                      # Module Rmd files
-│   ├── 01_import_and_qc.Rmd
-│   ├── 02_alignment.Rmd
-│   ├── 03_repeat_detection.Rmd
-│   ├── 04_allele_calling.Rmd
-│   ├── 05_waterfall.Rmd
-│   ├── 06_range_analysis.Rmd
-│   └── 07_repeat_visualisation.Rmd
-├── scripts/                      # R and shell scripts
-│   ├── duke_run.R                # Script-based runner
-│   ├── duke_cli.R                # CLI script
-│   ├── duke_myriad.sh            # Myriad (SGE) job script
-│   ├── duke_kathleen.sh          # Old Kathleen (SGE) job script
-│   └── duke_kathleen_slurm.sh    # New Kathleen (Slurm) job script
-├── www/                          # Example files
-│   ├── read_exclusions_example.xlsx
-│   └── settings_example.xlsx
-├── logs/                         # Job output logs
-├── demo/                         # Demo datasets
-└── archive/                      # Old versions
+└── logs/                         # Job output logs
 ```
 
-**Note:** Library files prefixed with module numbers for easy identification (00-07)
+**Note:** Library files prefixed with module numbers for easy identification
 
 ---
 
 ## Run Analysis
 
-### 1. Command-Line Interface (RECOMMENDED)
+### 1. Command-Line Interface (NEW!)
 
 #### Quick Start - Minimal Example
 ```bash
@@ -148,14 +132,15 @@ duke/
 #### Local Test Run Example
 ```bash
 # Navigate to Duke directory
-cd ~/Scratch/bin/duke
+cd /home/skgtmdf/Scratch/bin/duke
 
 # Run Duke with test dataset
 ./duke \
-  --dir_data demo/2025.12.17_pb_test/data \
-  --dir_out demo/2025.12.17_pb_test/result_duke \
-  --path_ref ~/refs/HTTset20/HTTset20.fasta \
-  --path_trim_patterns ~/refs/adapters/adapters.csv \
+  --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
+  --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
+  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
+  --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
+  --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
   --threads 3 \
   --resume TRUE \
   --remove_intermediate TRUE \
@@ -193,27 +178,77 @@ cd ~/Scratch/bin/duke
 
 ---
 
+#### HPC Cluster Test Run (Myriad/Kathleen)
+
+**⚠️ Important:** Don't run Duke directly on login nodes for production datasets. Use job scripts via `qsub` or `sbatch`.
+
+**For running test data on compute nodes via job scripts:**
+
+First, load required modules and set paths:
+```bash
+# Load modules (HPC)
+module load r/recommended
+module load samtools/1.11/gnu-4.9.2
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+export R_LIBS_USER=~/R/library
+```
+
+Edit `duke_myriad.sh` or `duke_kathleen.sh` and update the `./duke` command:
+
+```bash
+./duke \
+  --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
+  --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
+  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
+  --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
+  --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
+  --threads 36 \
+  --resume TRUE \
+  --remove_intermediate TRUE \
+  --cleanup_temp FALSE
+```
+
+Then submit:
+```bash
+# Myriad (36 cores)
+qsub duke_myriad.sh
+
+# Kathleen (80 cores - change --threads to 80 in script)
+qsub duke_kathleen.sh
+```
+
+**Monitor the job:**
+```bash
+# Check status
+qstat -u $USER
+
+# Watch log
+tail -f logs/duke_<JOB_ID>.out
+```
+
+---
+
 ### 2. Script-Based (duke_run.R)
 
 **Local:**
 ```r
-# Edit scripts/duke_run.R
-params$dir_data <- "demo/2025.12.17_pb_test/data"
-params$dir_out <- "demo/2025.12.17_pb_test/result_duke"
-params$path_ref <- "~/refs/HTTset20/HTTset20.fasta"
+# Edit duke_run_local.R
+params$dir_data <- "/path/to/data"
+params$dir_out <- "/path/to/output"
+params$path_ref <- "/path/to/reference.fasta"
 params$trim <- FALSE  # Optional: disable trimming
 
 # Run
-source("scripts/duke_run.R")
+source("duke_run_local.R")
 ```
 
 **HPC:**
 ```bash
-# Edit scripts/duke_run.R with HPC paths
-nano ~/Scratch/bin/duke/scripts/duke_run.R
+# Edit duke_run.R with HPC paths
+nano ~/Scratch/bin/duke/duke_run.R
 
-# Submit via job script
-qsub scripts/duke_myriad.sh
+# Submit
+qsub duke_myriad.sh
 ```
 
 ---
@@ -221,7 +256,7 @@ qsub scripts/duke_myriad.sh
 ### 3. Interactive RStudio
 
 ```r
-# Open scripts/duke_run.R in RStudio
+# Open duke_run_local.R in RStudio
 # Edit parameters
 # Run line-by-line or source
 ```
@@ -232,127 +267,11 @@ qsub scripts/duke_myriad.sh
 
 ### Cluster Selection
 
-| Cluster | Best For | Cores | Scheduler | Script |
-|---------|----------|-------|-----------|--------|
-| **Myriad** | ≤500 samples | 1-36 | SGE (`-pe smp`) | `duke_myriad.sh` |
-| **Old Kathleen** | 1000+ samples | 80-160 | SGE (`-pe mpi`) | `duke_kathleen.sh` |
-| **New Kathleen** | 1000+ samples | 80-160 | Slurm | `duke_kathleen_slurm.sh` |
-
----
-
-### Job Submission
-
-#### Myriad (SGE)
-```bash
-# Make executable (one-time)
-chmod +x scripts/duke_myriad.sh
-
-# Edit parameters in the script
-nano scripts/duke_myriad.sh
-
-# Submit
-qsub scripts/duke_myriad.sh
-```
-
-#### Old Kathleen (SGE)
-```bash
-# Make executable (one-time)
-chmod +x scripts/duke_kathleen.sh
-
-# Edit parameters in the script
-nano scripts/duke_kathleen.sh
-
-# Submit
-qsub scripts/duke_kathleen.sh
-```
-
-#### New Kathleen (Slurm)
-```bash
-# No chmod needed for Slurm
-
-# Edit parameters in the script
-nano scripts/duke_kathleen_slurm.sh
-
-# Submit
-sbatch scripts/duke_kathleen_slurm.sh
-```
-
----
-
-### Monitoring Jobs
-
-#### Check Job Status
-
-**SGE (Myriad, Old Kathleen):**
-```bash
-# Check your jobs
-qstat -u $USER
-
-# Watch queue (updates every 5 seconds)
-watch -n 5 'qstat -u $USER'
-
-# Detailed job info
-qstat -j <JOB_ID>
-```
-
-**Slurm (New Kathleen):**
-```bash
-# Check your jobs
-squeue -u $USER
-
-# Watch queue (updates every 5 seconds)
-watch -n 5 'squeue -u $USER'
-
-# Detailed job info
-scontrol show job <JOB_ID>
-```
-
-#### Monitor Log Files
-
-```bash
-# Watch Duke output log
-tail -f logs/duke_<JOB_ID>.out
-
-# Watch Duke error log
-tail -f logs/duke_<JOB_ID>.err
-```
-
-#### Check Recent File Activity
-
-Useful for checking if Duke is actively processing files:
-
-```bash
-# Files modified in last 2 hours (sorted)
-watch -n 10 "find . -type f -newermt '2 hours ago' -print | sed 's|^\./||' | sort"
-
-# Files modified in last 1 minute (sorted) - for active monitoring
-watch -n 10 "find . -type f -newermt '1 minute ago' -print | sed 's|^\./||' | sort"
-
-# One-time check (no watch)
-find . -type f -newermt '30 minutes ago' -print | sed 's|^\./||' | sort
-```
-
-These commands help you verify that:
-- Modules are progressing (new HTML/RData files appearing)
-- Log files are being updated
-- Results are being written to output directory
-
-**Tip:** Adjust the time window based on dataset size:
-- Small datasets (< 50 samples): `'1 minute ago'`
-- Medium datasets (50-500 samples): `'10 minutes ago'`
-- Large datasets (500+ samples): `'1 hour ago'`
-
-#### Cancel Jobs
-
-**SGE:**
-```bash
-qdel <JOB_ID>
-```
-
-**Slurm:**
-```bash
-scancel <JOB_ID>
-```
+| Cluster | Best For | Cores | Scheduler |
+|---------|----------|-------|-----------|
+| **Myriad** | ≤500 samples | 1-36 | SGE (`-pe smp`) |
+| **Kathleen** | 1000+ samples | 80-160 | SGE (`-pe mpi`) |
+| **New Kathleen** | 1000+ samples | 80-160 | Slurm |
 
 ---
 
@@ -389,54 +308,114 @@ scancel <JOB_ID>
 ```bash
 #$ -pe smp 12
 #$ -l mem=8G        # 8GB/core for safe parallel clustering
-#$ -l tmpfs=50G
-#$ -l h_rt=6:00:00
+#$ -l tmpfs=20G
+#$ -l h_rt=12:00:00
 ```
 
-#### Medium Jobs (50-200 samples) - Myriad
+#### Medium Jobs (50-200 samples)
 ```bash
-#$ -pe smp 36       # Maximum for Myriad
-#$ -l mem=8G        # 288GB total (36 × 8GB)
-#$ -l tmpfs=100G
+#$ -pe smp 36       # Myriad maximum
+#$ -l mem=4G        # 4GB/core minimum, 8GB better
+#$ -l tmpfs=30G
 #$ -l h_rt=24:00:00
 ```
 
-#### Large Jobs (200-1000 samples) - Kathleen
+#### Large Jobs (200+ samples, use Kathleen)
 ```bash
-#$ -pe mpi 80       # Old Kathleen
-#$ -l mem=4G        # 320GB total (80 × 4GB)
-#$ -l h_rt=36:00:00
+#$ -pe mpi 80
+#$ -l mem=4G        # Total: 320GB
+#$ -l h_rt=48:00:00
 ```
 
-**Or for Slurm (New Kathleen):**
-```bash
-#SBATCH --nodes=2
-#SBATCH --ntasks=80
-#SBATCH --mem-per-cpu=4G
-#SBATCH --time=36:00:00
-```
-
-#### Very Large Jobs (1000+ samples) - Kathleen
+**Memory-Optimised for Very Large Datasets (Kathleen):**
 ```bash
 #$ -pe mpi 160      # Request 160 cores
 #$ -l mem=2G        # 320GB total
-#$ -l h_rt=48:00:00
-# Use --threads 80 in Duke (not 160!)
+# --threads 80      # Use only 80 threads = 4GB/thread
 ```
 
-**Key Notes:**
-- **Always use 4GB+ per core** for production runs
-- Myriad maximum: 36 cores
-- Kathleen: Request cores in multiples of 40
-- Match `--threads` parameter to core count (except memory workaround above)
+---
+
+### tmpfs (Temporary Storage) Recommendations
+
+**What is tmpfs?** Fast temporary storage on compute node for intermediate BAM files.
+
+| Dataset Size | tmpfs Recommendation |
+|--------------|---------------------|
+| 1-10 samples | **10G** |
+| 10-50 samples | **20G** |
+| 50-200 samples | **30G** |
+| 200-500 samples | **50G** |
+| 500+ samples (Kathleen) | **75G** |
+
+**Note:** Duke's `temp/` directory (for module caches) is on Scratch, NOT tmpfs.
+
+---
+
+### Job Script Setup
+
+**IMPORTANT:** All HPC job scripts must include:
+
+```bash
+# After module loads, add these lines:
+export R_LIBS_USER=~/R/library
+export PATH=$HOME/Scratch/bin/minimap2:$PATH
+
+# Create logs directory
+mkdir -p logs
+```
+
+**Make Scripts Executable (SGE only):**
+
+SGE clusters (Myriad, Old Kathleen) require job scripts to be executable:
+```bash
+# One-time setup for each script
+chmod +x duke_myriad.sh
+chmod +x duke_kathleen.sh
+
+# Or make all .sh files executable
+chmod +x *.sh
+```
+
+**Note:** Slurm (New Kathleen) does NOT require `chmod +x` - scripts work as-is.
+
+---
+
+### Job Submission
+
+**Traditional (Edit duke_run.R):**
+```bash
+# Make scripts executable (one-time, SGE only)
+chmod +x duke_myriad.sh duke_kathleen.sh
+
+# Myriad
+qsub duke_myriad.sh
+
+# Kathleen  
+qsub duke_kathleen.sh
+```
+
+**Slurm (New Kathleen):**
+```bash
+# No chmod needed
+sbatch duke_kathleen_slurm.sh
+```
 
 ---
 
 ## Parameters
 
-### New Parameters in 2.1.0
+### New Parameters in 2.0.1
 
-All parameters remain the same as v2.0.1. The reorganisation only changed directory structure, not functionality.
+```r
+# Optional adapter trimming (NEW!)
+trim = TRUE                          # Enable/disable trimming
+                                    # Set FALSE to skip trimming
+
+# Renamed for consistency
+visualise_alignment_downsample = 1000  # Was: visualise_alignment_n_reads
+                                      # Max reads to plot (NA = all)
+```
 
 ### Essential Parameters
 
@@ -445,6 +424,7 @@ All parameters remain the same as v2.0.1. The reorganisation only changed direct
 dir_data = "/path/to/data"           # Input directory
 dir_out = "/path/to/output"          # Output directory
 path_ref = "/path/to/reference.fasta" # Reference FASTA
+path_settings = "/path/to/settings.xlsx" # Settings file
 
 # Trimming (if trim = TRUE)
 path_trim_patterns = "/path/to/adapters.csv"
@@ -456,14 +436,12 @@ resume = TRUE                        # Skip completed modules (default)
 
 ### Complete Parameter Reference
 
-See `./duke --help` for comprehensive documentation of all 54+ parameters, including:
-
 #### File Paths
 - `dir_data` - Input directory **(required)**
 - `dir_out` - Output directory **(required)**
 - `path_ref` - Reference FASTA **(required)**
 - `path_trim_patterns` - Adapter file (required if `trim=TRUE`)
-- `path_settings` - Settings Excel (required for Module 6)
+- `path_settings` - Settings Excel **(required for Module 6)**
 
 #### Import Options
 - `import_patterns` - File extensions to import
@@ -481,7 +459,7 @@ See `./duke --help` for comprehensive documentation of all 54+ parameters, inclu
 - `visualise_alignment_downsample` - Max reads to plot (default: 1000)
 
 #### Repeat Detection
-All parameters have comprehensive documentation with examples in `scripts/duke_run.R` or via `./duke --help`:
+All parameters have comprehensive documentation with examples in `duke_run.R` or via `./duke --help`:
 
 - `rpt_pattern` - Repeat motif (default: "CAG")
 - `rpt_min_repeats` - Minimum count (default: 2)
@@ -585,18 +563,6 @@ result_duke/
 
 ### Common Issues
 
-**"Error: cannot open the connection" when running Rmd**
-```bash
-# CAUSE: Rmd files moved to modules/ subdirectory
-# SOLUTION: Ensure using v2.1.0 scripts with knit_root_dir fix
-
-# Verify you have the updated scripts:
-grep "knit_root_dir" scripts/duke_run.R
-grep "knit_root_dir" scripts/duke_cli.R
-
-# Should both return lines with: knit_root_dir = getwd()
-```
-
 **Job stuck at Module 4 clustering (very slow)**
 ```bash
 # CAUSE: Insufficient memory (2GB/core)
@@ -606,7 +572,7 @@ grep "knit_root_dir" scripts/duke_cli.R
 #$ -l mem=8G
 
 # Resubmit
-qsub scripts/duke_myriad.sh
+qsub duke_myriad.sh
 ```
 
 **"Error: --path_ref is required"**
@@ -620,28 +586,16 @@ qsub scripts/duke_myriad.sh
 # Request more cores than you use:
 #$ -pe mpi 160
 #$ -l mem=2G
-# threads = 80 in duke command
+# threads = 80 in duke_run.R
 ```
 
-**"duke: command not found"**
+**"Rscript: command not found" (CLI on HPC)**
 ```bash
-# Make duke executable
-chmod +x duke
+# Load R module first
+module load r/recommended
 
-# Run from duke directory
-cd ~/Scratch/bin/duke
-./duke --help
-```
-
-**"scripts/duke_cli.R not found"**
-```bash
-# CAUSE: Using old duke wrapper or wrong directory
-# SOLUTION: Ensure duke wrapper points to scripts/ and run from duke root
-
-# Check duke wrapper:
-head duke
-
-# Should show: Rscript "$SCRIPT_DIR/scripts/duke_cli.R" "$@"
+# Also set library path
+export R_LIBS_USER=~/R/library
 ```
 
 **"Error: there is no package called 'openxlsx'"**
@@ -650,6 +604,28 @@ head duke
 export R_LIBS_USER=~/R/library
 
 # Or install packages (see Installation section)
+```
+
+**"visualise_alignment_n_reads not found"**
+```r
+# Renamed in 2.0.1:
+visualise_alignment_downsample = 1000  # New name
+```
+
+**"path_trim_patterns required"**
+```bash
+# Either provide it:
+./duke --path_trim_patterns /path/to/adapters.csv ...
+
+# Or disable trimming:
+./duke --trim FALSE ...
+```
+
+**Resume not working (CLI)**
+```bash
+# Resume is enabled by default (changed in 2.0.1)
+# To force re-run:
+./duke --resume FALSE ...
 ```
 
 **Want to re-run specific modules**
@@ -661,30 +637,22 @@ rm result_duke/module_data/03_repeat_detection_results.RData
 ./duke --run_modules 3,4,5 ...
 ```
 
-**Files not in modules/ or scripts/ directories**
+**Logs appearing in main directory instead of logs/**
 ```bash
-# CAUSE: Haven't completed reorganisation
-# SOLUTION: See REORGANISATION_INSTRUCTIONS.md
+# Solution: Logs redirection is now included in all job scripts
+# Ensure you're using the updated scripts that include:
+#$ -o logs/duke_$JOB_ID.out
+#$ -e logs/duke_$JOB_ID.err
 
-# Directory should look like:
-# duke/
-# ├── lib/
-# ├── modules/     <- All .Rmd files here
-# ├── scripts/     <- All .R and .sh files here
-# └── duke         <- Wrapper in root
+# Create logs directory manually if needed:
+mkdir -p logs
 ```
 
 ---
 
 ## Version History
 
-### 2.1.0 (January 2026) - Current
-- 🗂️ **REORGANISED:** Clean directory structure with `modules/` and `scripts/` subdirectories
-- 🐛 **FIXED:** `knit_root_dir` handling for Rmd files in subdirectories
-- 📚 **ENHANCED:** Comprehensive reorganisation documentation
-- 📊 **ADDED:** Job monitoring commands in README
-
-### 2.0.1 (January 2025)
+### 2.0.1 (January 2025) - Current
 - ✨ **NEW:** Command-line interface
 - ✅ **NEW:** `trim` parameter (optional adapter trimming)
 - 🔧 **RENAMED:** `visualise_alignment_downsample` (was: `_n_reads`)
@@ -692,7 +660,10 @@ rm result_duke/module_data/03_repeat_detection_results.RData
 - 🐛 **FIXED:** Resume default now TRUE (consistent)
 - 📚 **ENHANCED:** Comprehensive repeat parameter documentation
 - 📦 **ORGANISED:** Library files with module prefixes (00-07)
-- 📊 **IMPROVED:** Logging format
+- 🔧 **UPDATED:** Conditional trimming in Module 1
+- 📊 **DOCUMENTED:** Memory requirements from empirical testing
+- 📊 **IMPROVED:** Logging now shows end time and consistent HH:MM:SS duration format
+- ❌ **REMOVED:** `visualise_alignment_corrected` (didn't exist)
 
 ### 2.0.0
 - Modular architecture (7 modules)
@@ -721,4 +692,4 @@ For issues or questions:
 
 ---
 
-**Duke Pipeline 2.1.0 - Clean, organised, and production-ready!** 🎯
+**Duke Pipeline 2.0.1 - Ready for production!** 🎯

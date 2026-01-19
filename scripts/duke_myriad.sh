@@ -1,9 +1,10 @@
 #!/bin/bash -l
 #$ -S /bin/bash
-#$ -N duke_01_160c_2G_24h
+#$ -N duke_01_12c_8G_24h
 #$ -l h_rt=24:00:00
-#$ -pe mpi 160
-#$ -l mem=2G
+#$ -pe smp 12
+#$ -l mem=8G
+#$ -l tmpfs=100G
 #$ -wd /home/skgtmdf/Scratch/bin/duke
 #$ -o logs/duke_$JOB_ID.out
 #$ -e logs/duke_$JOB_ID.err
@@ -11,43 +12,37 @@
 #$ -m bea
 
 # ==============================================================================
-# Duke Pipeline - Old Kathleen Job Script (CLI Version)
+# Duke Pipeline - Myriad Job Script (CLI Version)
 # ==============================================================================
 # 
 # This script runs Duke using the command-line interface (duke_cli.R)
 # Edit the parameters in the ./duke command below
 #
-# Cluster: Old Kathleen (UCL) - Being phased out
+# Cluster: Myriad (UCL)
 # Scheduler: Grid Engine (SGE)
-# Parallel environment: mpi (distributed)
-# Cores: 80 (2 nodes × 40 cores)
-# Memory: 4GB per core = 320GB total
+# Parallel environment: smp (shared memory)
+# Cores: 36 (maximum for Myriad)
+# Memory: 4GB per core = 144GB total
 # Runtime: 48 hours
 #
-# CRITICAL NOTES:
-# - Old Kathleen requires -pe mpi (not -pe smp)
-# - Request cores in multiples of 40 (node size)
-# - No tmpfs support (tmpdir not available)
-# - Being replaced by New Kathleen (Slurm)
+# Expected performance (36 cores):
+#   ~100 samples: 2-3 hours
+#   ~300 samples: 8-12 hours  
+#   ~500 samples: 15-20 hours
 #
-# Expected performance (80 cores):
-#   ~1000 samples: 15-18 hours
-#   ~2000 samples: 30-36 hours
-#
-# For memory issues with very large datasets, see:
-#   duke_kathleen_160c_80t_cli.sh (requests 160 cores, uses 80 threads)
+# For larger datasets (1000+ samples), use Kathleen with 80+ cores
 #
 # ==============================================================================
 # SUBMISSION INSTRUCTIONS:
 # ==============================================================================
 #
 # 1. Make this script executable (one-time):
-#    chmod +x duke_kathleen.sh
+#    chmod +x duke_myriad.sh
 #
 # 2. Edit parameters in the ./duke command below
 #
 # 3. Submit the job:
-#    qsub duke_kathleen.sh
+#    qsub duke_myriad.sh
 #
 # 4. Monitor the job:
 #    qstat -u $USER
@@ -85,7 +80,7 @@ echo "minimap2 version:"
 minimap2 --version
 echo ""
 
-# Change to Duke directory
+# Change to Duke root directory (parent of scripts/)
 cd ~/Scratch/bin/duke
 
 # ==============================================================================
@@ -101,7 +96,7 @@ cd ~/Scratch/bin/duke
   --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
   --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
-  --threads 80 \
+  --threads 12 \
   --resume TRUE \
   --remove_intermediate TRUE \
   --cleanup_temp FALSE
@@ -116,27 +111,16 @@ cd ~/Scratch/bin/duke
 #   --dir_out ~/Scratch/results/my_results \
 #   --path_ref ~/Scratch/refs/HTTset20/HTTset20.fasta \
 #   --trim FALSE \
-#   --threads 80
+#   --threads 36
 
 # Force re-run all modules:
 # ./duke --resume FALSE ...
 
-# Run specific modules only:
+# Run specific modules only (e.g., re-plot after parameter change):
 # ./duke --run_modules 5,6,7 --resume TRUE ...
 
-# Custom repeat parameters:
-# ./duke --rpt_pattern CTG --rpt_max_mismatch 1 ...
-
-# ==============================================================================
-# MEMORY TROUBLESHOOTING
-# ==============================================================================
-
-# If you encounter "Cannot allocate memory" errors with large datasets,
-# use the memory-optimized version instead:
-#   qsub duke_kathleen_160c_80t_cli.sh
-#
-# That script requests 160 cores but uses only 80 threads, providing
-# a large memory buffer (320GB / 80 threads = 4GB per thread)
+# Downsample reads for testing:
+# ./duke --downsample 1000 ...
 
 # ==============================================================================
 # END OF SCRIPT

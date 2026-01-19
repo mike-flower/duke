@@ -15,6 +15,29 @@
 #
 
 # ==============================================================================
+# Set Working Directory to Duke Installation Root
+# ==============================================================================
+
+# This script lives in scripts/ subdirectory, so we need to go up one level
+# to reach the duke installation root where lib/ and modules/ are located
+
+args_temp <- commandArgs(trailingOnly = FALSE)
+file_arg <- grep("^--file=", args_temp, value = TRUE)
+
+if (length(file_arg) > 0) {
+  # Extract script path and get duke root (parent of scripts/)
+  script_path <- sub("^--file=", "", file_arg)
+  script_dir <- dirname(normalizePath(script_path))
+  duke_root <- dirname(script_dir)  # Go up one level from scripts/
+  setwd(duke_root)
+} else {
+  # Fallback: assume we're already in duke root
+  cat("Warning: Could not detect script location. Assuming current directory is duke root.\n")
+}
+
+cat("Duke installation directory:", getwd(), "\n\n")
+
+# ==============================================================================
 # Parse Command-Line Arguments
 # ==============================================================================
 
@@ -692,9 +715,9 @@ tryCatch({
                     "Allele Calling", "Waterfall Plots", "Range Analysis",
                     "Repeat Visualisation")
   
-  rmd_files <- c("01_import_and_qc.Rmd", "02_alignment.Rmd", "03_repeat_detection.Rmd",
-                 "04_allele_calling.Rmd", "05_waterfall.Rmd", "06_range_analysis.Rmd",
-                 "07_repeat_visualisation.Rmd")
+  rmd_files <- c("modules/01_import_and_qc.Rmd", "modules/02_alignment.Rmd", "modules/03_repeat_detection.Rmd",
+                 "modules/04_allele_calling.Rmd", "modules/05_waterfall.Rmd", "modules/06_range_analysis.Rmd",
+                 "modules/07_repeat_visualisation.Rmd")
   
   output_files <- c("01_import_qc_results.RData", "02_alignment_results.RData",
                     "03_repeat_detection_results.RData", "04_allele_calling_results.RData",
@@ -720,7 +743,8 @@ tryCatch({
       cat("Skipping Module", mod, "(results found)...\n")
     } else {
       rmarkdown::render(rmd_files[mod], output_dir = params$dir_out, 
-                        params = params, envir = new.env())
+                        params = params, envir = new.env(),
+                        knit_root_dir = getwd())
       cat("\nModule", mod, "complete!\n")
     }
   }
