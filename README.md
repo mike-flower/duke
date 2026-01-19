@@ -705,7 +705,7 @@ rm result_duke/module_data/03_repeat_detection_results.RData
 
 If you use Duke Pipeline in your research, please cite:
 
-[Citation to be added]
+Hölbling, B.V. et al. A multimodal screening platform for endogenous dipeptide repeat proteins in C9orf72 patient iPSC-neurons. *Cell Reports* (2025). https://www.sciencedirect.com/science/article/pii/S2211124725004668
 
 ---
 

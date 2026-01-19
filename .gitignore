@@ -3,6 +3,7 @@
 .Rhistory
 .RData
 .Ruserdata
+.Rapp.history
 
 # Exclude specific files
 duke_run_local.R
