@@ -712,8 +712,16 @@ Hölbling, B.V. et al. A multimodal screening platform for endogenous dipeptide 
 ## Contact
 
 **Michael Flower**  
-Email: michael.flower@ucl.ac.uk  
-GitHub: https://github.com/mike-flower/duke
+Senior Clinical Research Fellow  
+Department of Neurodegenerative Disease  
+UCL Queen Square Institute of Neurology  
+London, UK  
+WC1N 3BG
+
+- Email: michael.flower@ucl.ac.uk  
+- UCL Profile: https://profiles.ucl.ac.uk/45681-michael-flower
+- ORCID: https://orcid.org/0000-0001-5568-6239
+- GitHub: https://github.com/mike-flower/duke
 
 For issues or questions:
 - GitHub Issues: https://github.com/mike-flower/duke/issues
