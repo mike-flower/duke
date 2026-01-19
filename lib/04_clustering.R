@@ -5,7 +5,7 @@
 # ==============================================================================
 
 # Cluster reads by repeat length using GMM or k-means
-cluster_by_repeat_length <- function(values, cluster_max = 10) {
+cluster_by_repeat_length <- function(values, cluster_max = 10, cluster_downsample = 10000) {
   
   # Identify non-NA values
   non_na_index <- which(!is.na(values))
@@ -16,46 +16,78 @@ cluster_by_repeat_length <- function(values, cluster_max = 10) {
     return(setNames(rep(1, length(values)), values))
   }
   
+  # Report dataset size
+  n_values <- length(non_na_values)
+  message("  Clustering ", n_values, " repeat length values")
+  
+  # Subsample for cluster optimisation if dataset is large
+  use_subsample <- n_values > cluster_downsample
+  if (use_subsample) {
+    message("  Large dataset detected - using ", cluster_downsample, " subsampled values for cluster optimisation")
+    set.seed(123)
+    subsample_idx <- sample(length(non_na_values), cluster_downsample)
+    optimisation_values <- non_na_values[subsample_idx]
+  } else {
+    optimisation_values <- non_na_values
+  }
+  
   # Auto-detect optimal number of clusters using GMM or silhouette
   
   # Attempt GMM (suppress verbose output)
   gmm <- tryCatch({
     sink(tempfile())  # Suppress "fitting" messages
-    result <- Mclust(non_na_values, G = 1:cluster_max, verbose = FALSE)
+    result <- Mclust(optimisation_values, G = 1:cluster_max, verbose = FALSE)
     sink()
     result
   },
     error = function(e) {
       sink()  # Restore if error
-      message("GMM failed: ", conditionMessage(e), ". Falling back to silhouette-based k-means.")
+      message("  GMM failed: ", conditionMessage(e), ". Falling back to silhouette-based k-means.")
       return(NULL)
     }
   )
     
-    if (!is.null(gmm)) {
-      cluster_ids <- gmm$classification
-      cluster_n <- gmm$G
-      if (cluster_n == 1) {
-        warning("GMM selected a single cluster (G = 1). Check for possible multimodality.")
-      }
-    } else {
-      # Fall back to silhouette-based k-means
-      k_max <- min(cluster_max, length(unique(non_na_values)) - 1)
-      if (k_max < 2) {
-        cluster_n <- 1
-        cluster_ids <- rep(1, length(non_na_values))
-      } else {
-        sil_widths <- sapply(2:k_max, function(k) {
-          km <- kmeans(non_na_values, centers = k)
-          ss <- silhouette(km$cluster, dist(non_na_values))
-          mean(ss[, "sil_width"])
-        })
-        cluster_n <- which.max(sil_widths) + 1  # +1 because index 1 = 2 clusters
-        set.seed(123)
-        km <- kmeans(non_na_values, centers = cluster_n)
-        cluster_ids <- km$cluster
-      }
+  if (!is.null(gmm)) {
+    # GMM succeeded - use it to determine optimal k
+    optimal_k <- gmm$G
+    if (optimal_k == 1) {
+      warning("GMM selected a single cluster (G = 1). Check for possible multimodality.")
     }
+    message("  GMM selected ", optimal_k, " clusters")
+    
+    # Now cluster the FULL dataset with the optimal k
+    if (optimal_k == 1) {
+      cluster_ids <- rep(1, length(non_na_values))
+    } else {
+      # Use k-means on full dataset with optimal k from GMM
+      set.seed(123)
+      km_full <- kmeans(non_na_values, centers = optimal_k, nstart = 10)
+      cluster_ids <- km_full$cluster
+    }
+    
+  } else {
+    # Fall back to silhouette-based k-means
+    k_max <- min(cluster_max, length(unique(optimisation_values)) - 1)
+    if (k_max < 2) {
+      cluster_n <- 1
+      cluster_ids <- rep(1, length(non_na_values))
+    } else {
+      # Compute silhouette on subsampled data
+      message("  Computing silhouette widths for k=2 to k=", k_max)
+      sil_widths <- sapply(2:k_max, function(k) {
+        km <- kmeans(optimisation_values, centers = k, nstart = 10)
+        ss <- silhouette(km$cluster, dist(optimisation_values))
+        mean(ss[, "sil_width"])
+      })
+      optimal_k <- which.max(sil_widths) + 1  # +1 because index 1 = 2 clusters
+      message("  Silhouette analysis selected ", optimal_k, " clusters")
+      
+      # Now cluster the FULL dataset with optimal k
+      set.seed(123)
+      km_full <- kmeans(non_na_values, centers = optimal_k, nstart = 10)
+      cluster_ids <- km_full$cluster
+    }
+  }
   
   # Assign to full-length vector
   cluster_assignments <- rep(NA_integer_, length(values))
@@ -88,7 +120,7 @@ cluster_by_haplotype <- function(sequences,
                                 method = "levenshtein",
                                 max_length_diff = NULL,
                                 trim_to_length = NA,
-                                subsample_max = 5000) {  # NEW: subsample for speed
+                                cluster_downsample = 5000) {  # Downsample for speed
   
   # Remove NA sequences
   valid_idx <- which(!is.na(sequences) & sequences != "")
@@ -158,17 +190,17 @@ cluster_by_haplotype <- function(sequences,
   dna_set <- DNAStringSet(normal_seqs)
   
   # Subsampling strategy for large datasets
-  use_subsample <- !is.null(subsample_max) && !is.na(subsample_max) && 
-                   length(normal_seqs) > subsample_max
+  use_subsample <- !is.null(cluster_downsample) && !is.na(cluster_downsample) && 
+                   length(normal_seqs) > cluster_downsample
   
   if (use_subsample) {
     # Sample representative reads for clustering
     set.seed(123)
-    sample_idx <- sample(length(normal_seqs), subsample_max)
+    sample_idx <- sample(length(normal_seqs), cluster_downsample)
     sample_seqs <- normal_seqs[sample_idx]
     
     message("  Large dataset detected (", length(normal_seqs), " sequences)")
-    message("  Subsampling ", subsample_max, " representatives for initial clustering...")
+    message("  Subsampling ", cluster_downsample, " representatives for initial clustering...")
     
     # Calculate distance matrix on sample only
     dna_sample <- DNAStringSet(sample_seqs)
@@ -201,7 +233,7 @@ cluster_by_haplotype <- function(sequences,
     })
     
     # Assign remaining sequences to nearest centroid
-    message("  Assigning ", length(normal_seqs) - subsample_max, " remaining sequences to clusters...")
+    message("  Assigning ", length(normal_seqs) - cluster_downsample, " remaining sequences to clusters...")
     
     remaining_idx <- setdiff(1:length(normal_seqs), sample_idx)
     remaining_assignments <- sapply(remaining_idx, function(i) {
@@ -285,7 +317,8 @@ cluster_by_combination <- function(sequences, repeat_values,
                                    haplotype_method = "levenshtein",
                                    haplotype_cluster_max = 10,
                                    repeat_cluster_max = 20,
-                                   subsample_max = 5000) {
+                                   haplotype_cluster_downsample = 5000,
+                                   repeat_cluster_downsample = 10000) {
   
   # Validate cluster_order
   valid_orders <- list(
@@ -308,7 +341,8 @@ cluster_by_combination <- function(sequences, repeat_values,
     # Cluster by repeat length first
     primary_clusters <- cluster_by_repeat_length(
       values = repeat_values,
-      cluster_max = repeat_cluster_max
+      cluster_max = repeat_cluster_max,
+      cluster_downsample = repeat_cluster_downsample
     )
     primary_data <- repeat_values
     secondary_data <- sequences
@@ -323,7 +357,7 @@ cluster_by_combination <- function(sequences, repeat_values,
       method = haplotype_method,
       max_length_diff = NULL,
       trim_to_length = NA,
-      subsample_max = subsample_max
+      cluster_downsample = haplotype_cluster_downsample
     )
     primary_data <- sequences
     secondary_data <- repeat_values
@@ -349,7 +383,8 @@ cluster_by_combination <- function(sequences, repeat_values,
       # Cluster by repeat within this primary cluster
       secondary_clusters <- cluster_by_repeat_length(
         values = repeat_values[primary_idx],
-        cluster_max = secondary_max
+        cluster_max = secondary_max,
+        cluster_downsample = repeat_cluster_downsample
       )
       
     } else {  # secondary == "haplotype"
@@ -359,7 +394,7 @@ cluster_by_combination <- function(sequences, repeat_values,
         method = haplotype_method,
         max_length_diff = NULL,
         trim_to_length = NA,
-        subsample_max = subsample_max
+        cluster_downsample = haplotype_cluster_downsample
       )
     }
     
@@ -403,10 +438,11 @@ apply_clustering <- function(alignment_data,
                              right_column = "right",
                              haplotype_cluster_max = 10,
                              repeat_cluster_max = 20,
+                             repeat_cluster_downsample = 10000,
+                             haplotype_cluster_downsample = 5000,
                              haplotype_method = "levenshtein",
                              haplotype_region = "both",
-                             haplotype_trim_length = NA,
-                             haplotype_subsample = 5000) {
+                             haplotype_trim_length = NA) {
   
   # Parse cluster_by parameter (can be vector or single value)
   if (length(cluster_by) == 0 || (length(cluster_by) == 1 && cluster_by == "none")) {
@@ -423,7 +459,8 @@ apply_clustering <- function(alignment_data,
       message("Strategy: repeat_length")
       cluster_assignments <- cluster_by_repeat_length(
         values = alignment_data[[repeat_column]],
-        cluster_max = repeat_cluster_max
+        cluster_max = repeat_cluster_max,
+        cluster_downsample = repeat_cluster_downsample
       )
       
     } else if (cluster_by == "haplotype") {
@@ -541,7 +578,7 @@ apply_clustering <- function(alignment_data,
       method = haplotype_method,
       max_length_diff = NULL,
       trim_to_length = haplotype_trim_length,
-      subsample_max = haplotype_subsample
+      cluster_downsample = haplotype_cluster_downsample
     )
     return(cluster_assignments)
       
@@ -660,7 +697,8 @@ apply_clustering <- function(alignment_data,
       haplotype_method = haplotype_method,
       haplotype_cluster_max = haplotype_cluster_max,
       repeat_cluster_max = repeat_cluster_max,
-      subsample_max = haplotype_subsample
+      haplotype_cluster_downsample = haplotype_cluster_downsample,
+      repeat_cluster_downsample = repeat_cluster_downsample
     )
     
     # cluster_by_combination returns a list with metadata

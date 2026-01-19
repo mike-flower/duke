@@ -195,6 +195,14 @@ option_list <- list(
   make_option("--repeat_cluster_max", type="integer", default=20,
               help="Max repeats to consider [default: %default]", metavar="N"),
   
+  make_option("--repeat_cluster_downsample", type="integer", default=10000,
+              help="Max reads for repeat clustering optimisation (speeds up >10k reads) [default: %default]", 
+              metavar="N"),
+  
+  make_option("--haplotype_cluster_downsample", type="integer", default=5000,
+              help="Max reads for haplotype clustering optimisation (speeds up >5k reads) [default: %default]", 
+              metavar="N"),
+  
   make_option("--haplotype_region", type="character", default="both",
               help="Haplotype region: left/right/both [default: %default]", metavar="REGION"),
   
@@ -205,9 +213,6 @@ option_list <- list(
   make_option("--haplotype_trim_length", type="character", default="auto",
               help="Haplotype trim length: auto/NA/numeric [default: %default]",
               metavar="LENGTH"),
-  
-  make_option("--haplotype_subsample", type="integer", default=250,
-              help="Haplotype subsample size [default: %default]", metavar="N"),
   
   # ===========================================================================
   # Consensus generation and variant calling
@@ -463,10 +468,11 @@ params <- list(
   cluster_by = cluster_by_parsed,
   haplotype_cluster_max = args$haplotype_cluster_max,
   repeat_cluster_max = args$repeat_cluster_max,
+  repeat_cluster_downsample = args$repeat_cluster_downsample,
+  haplotype_cluster_downsample = args$haplotype_cluster_downsample,
   haplotype_region = args$haplotype_region,
   haplotype_method = args$haplotype_method,
   haplotype_trim_length = args$haplotype_trim_length,
-  haplotype_subsample = args$haplotype_subsample,
   cluster_consensus = args$cluster_consensus,
   consensus_threshold = args$consensus_threshold,
   consensus_downsample = args$consensus_downsample,
@@ -596,11 +602,11 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "cluster_by", paste(params$cluster_by, collapse = ", ")))
   cat(sprintf("%-35s: %s\n", "haplotype_cluster_max", params$haplotype_cluster_max))
   cat(sprintf("%-35s: %s\n", "repeat_cluster_max", params$repeat_cluster_max))
+  cat(sprintf("%-35s: %s\n", "repeat_cluster_downsample", params$repeat_cluster_downsample))
+  cat(sprintf("%-35s: %s\n", "haplotype_cluster_downsample", params$haplotype_cluster_downsample))
   cat(sprintf("%-35s: %s\n", "haplotype_region", params$haplotype_region))
   cat(sprintf("%-35s: %s\n", "haplotype_method", params$haplotype_method))
   cat(sprintf("%-35s: %s\n", "haplotype_trim_length", params$haplotype_trim_length))
-  cat(sprintf("%-35s: %s\n", "haplotype_subsample", 
-              if(is.na(params$haplotype_subsample)) "NA (use all)" else params$haplotype_subsample))
   
   cat("\n═══════════════════════════════════════════════════════════════\n")
   cat("CONSENSUS AND VARIANT CALLING\n")

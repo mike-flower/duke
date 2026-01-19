@@ -33,9 +33,15 @@ range_dir <- file.path(params$dir_out, "06_range_analysis", "range_analysis")
 if (!dir.exists(range_dir)) dir.create(range_dir, recursive = TRUE)
 ```
 
-```{r load_shared_functions, echo=FALSE}
-# Source shared functions
-source("lib/load_all.R")
+```{r load_functions, echo=FALSE}
+# Source shared functions - works for both interactive and pipeline execution
+if (file.exists("lib/load_all.R")) {
+  source("lib/load_all.R")
+} else if (file.exists("../lib/load_all.R")) {
+  source("../lib/load_all.R")
+} else {
+  stop("Cannot find lib/load_all.R")
+}
 ```
 
 ---

@@ -27,8 +27,14 @@ invisible(lapply(required_packages, library, character.only = TRUE))
 ```
 
 ```{r load_functions, echo=FALSE}
-# Source all shared functions
-source("lib/load_all.R")
+# Source shared functions - works for both interactive and pipeline execution
+if (file.exists("lib/load_all.R")) {
+  source("lib/load_all.R")
+} else if (file.exists("../lib/load_all.R")) {
+  source("../lib/load_all.R")
+} else {
+  stop("Cannot find lib/load_all.R")
+}
 ```
 
 ```{r create_directories, echo=FALSE}

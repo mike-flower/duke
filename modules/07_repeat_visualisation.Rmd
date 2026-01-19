@@ -35,9 +35,17 @@ library(scales)
 library(DT)
 library(ggnewscale)
 library(data.table)
+```
 
-# Source shared functions
-source("lib/load_all.R")
+```{r load_functions, echo=FALSE}
+# Source shared functions - works for both interactive and pipeline execution
+if (file.exists("lib/load_all.R")) {
+  source("lib/load_all.R")
+} else if (file.exists("../lib/load_all.R")) {
+  source("../lib/load_all.R")
+} else {
+  stop("Cannot find lib/load_all.R")
+}
 
 # Create output directory
 plots_dir <- file.path(params$dir_out, file.path("07_repeat_visualisation", "plots"))

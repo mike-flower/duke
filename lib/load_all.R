@@ -5,12 +5,31 @@
 # Files are prefixed with module numbers (00-07) for easy identification
 # ==============================================================================
 
-# Get the directory where this script is located
-script_dir <- if (exists("params") && !is.null(params$default_wd)) {
-  file.path(params$default_wd, "lib")
-} else {
-  "lib"
+# Intelligently find the lib directory
+# Works from: duke root, modules/ subdirectory, or via pipeline rendering
+find_lib_dir <- function() {
+  # Try to detect where this script is located
+  this_script <- tryCatch({
+    # Method 1: sys.frame (works when sourced)
+    sys.frame(1)$ofile
+  }, error = function(e) NULL)
+  
+  if (!is.null(this_script) && file.exists(this_script)) {
+    # We found the script location - use that directory
+    return(dirname(normalizePath(this_script)))
+  }
+  
+  # Method 2: Check current working directory and common locations
+  if (dir.exists("lib")) {
+    return("lib")
+  } else if (dir.exists("../lib")) {
+    return("../lib")
+  } else {
+    stop("Cannot locate lib directory. Ensure you're running from duke root or modules/ subdirectory.")
+  }
 }
+
+script_dir <- find_lib_dir()
 
 # Load function files in order (00-07 prefix indicates primary module)
 source(file.path(script_dir, "00_utils.R"))                   # General utilities (all modules)

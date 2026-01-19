@@ -28,8 +28,14 @@ invisible(lapply(required_packages, library, character.only = TRUE))
 ```
 
 ```{r load_functions, echo=FALSE}
-# Source all shared functions
-source("lib/load_all.R")
+# Source shared functions - works for both interactive and pipeline execution
+if (file.exists("lib/load_all.R")) {
+  source("lib/load_all.R")
+} else if (file.exists("../lib/load_all.R")) {
+  source("../lib/load_all.R")
+} else {
+  stop("Cannot find lib/load_all.R")
+}
 ```
 
 # Module 4: Allele Calling
@@ -177,10 +183,11 @@ if (file.exists(cache_path) && params$resume) {
         right_column = "right",
         haplotype_cluster_max = params$haplotype_cluster_max,
         repeat_cluster_max = params$repeat_cluster_max,
+        repeat_cluster_downsample = params$repeat_cluster_downsample,
+        haplotype_cluster_downsample = params$haplotype_cluster_downsample,
         haplotype_method = params$haplotype_method,
         haplotype_region = params$haplotype_region,
-        haplotype_trim_length = params$haplotype_trim_length,
-        haplotype_subsample = params$haplotype_subsample
+        haplotype_trim_length = params$haplotype_trim_length
       )
       
       # Handle result - can be vector or list with metadata
@@ -293,8 +300,8 @@ cluster_summary <- alignment_clustered %>%
   group_by(file_stem, cluster_number) %>%
   summarise(
     read_count = n(),
-    repeat_cluster = dplyr::first(repeat_cluster),      # Use dplyr::first() explicitly
-    haplotype_cluster = dplyr::first(haplotype_cluster), # Use dplyr::first() explicitly
+    repeat_cluster = dplyr::first(repeat_cluster),      # Use first() explicitly
+    haplotype_cluster = dplyr::first(haplotype_cluster), # Use first() explicitly
     repeat_count_mode = {
       # Mode: most common value (best for discrete integer data)
       counts <- !!sym(params$repeat_count_method)
@@ -1109,13 +1116,13 @@ if (exists("variant_results") && !is.null(variant_results) && nrow(variant_resul
   # Check if position column exists, if not it might already be named position_on_reference
   if ("position" %in% names(variant_results)) {
     variant_export <- variant_results %>%
-      dplyr::rename(position_on_reference = position) %>%
-      dplyr::select(file_stem, cluster_number, position_on_reference, ref, query, variant_type)
+      rename(position_on_reference = position) %>%
+      select(file_stem, cluster_number, position_on_reference, ref, query, variant_type)
   } else {
     # Column might already be renamed or have different name
     variant_export <- variant_results %>%
-      dplyr::select(file_stem, cluster_number, position, ref, query, variant_type) %>%
-      dplyr::rename(position_on_reference = position)
+      select(file_stem, cluster_number, position, ref, query, variant_type) %>%
+      rename(position_on_reference = position)
   }
   
   # Export variants to CSV

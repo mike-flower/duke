@@ -32,16 +32,22 @@ plots_dir <- file.path(params$dir_out, file.path("05_waterfall", "plots"))
 if (!dir.exists(plots_dir)) dir.create(plots_dir, recursive = TRUE)
 ```
 
-```{r load_shared_functions, echo=FALSE}
-# Source shared functions
-source("lib/load_all.R")
+```{r load_functions, echo=FALSE}
+# Source shared functions - works for both interactive and pipeline execution
+if (file.exists("lib/load_all.R")) {
+  source("lib/load_all.R")
+} else if (file.exists("../lib/load_all.R")) {
+  source("../lib/load_all.R")
+} else {
+  stop("Cannot find lib/load_all.R")
+}
 ```
 
 ---
 
 # Module 5: Waterfall Plots
 
-Visualize read-level structure showing left flank, repeat region, and right flank for each read.
+Visualise read-level structure showing left flank, repeat region, and right flank for each read.
 
 **Key features:**
 

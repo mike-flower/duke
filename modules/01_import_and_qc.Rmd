@@ -71,9 +71,15 @@ if (!dir.exists(qc_dir)) dir.create(qc_dir, recursive = TRUE)
 if (!dir.exists(plots_dir)) dir.create(plots_dir, recursive = TRUE)  # NEW
 ```
 
-```{r load_shared_functions, echo=FALSE}
-# Source shared functions
-source("lib/load_all.R")
+```{r load_functions, echo=FALSE}
+# Source shared functions - works for both interactive and pipeline execution
+if (file.exists("lib/load_all.R")) {
+  source("lib/load_all.R")
+} else if (file.exists("../lib/load_all.R")) {
+  source("../lib/load_all.R")
+} else {
+  stop("Cannot find lib/load_all.R")
+}
 ```
 
 ---
