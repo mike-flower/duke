@@ -15,6 +15,8 @@ duke_run_local-fs.R
 /archive/
 /lib/archive/
 /dev_files/
+/scripts/archive/
+/modules/archive/
 
 # Temporary files
 *.tmp
