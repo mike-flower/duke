@@ -128,16 +128,16 @@ data/
 **Example HTTset20.fasta structure:**
 ```fasta
 >HTTset20
-ATGGCGACCCTGGAAAAGCTGATGAAGGCCTTCGAGTCCCTCAAGTCCTTC
-CAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAnnnn
-nCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCAGCA
-...
+...CGGTGCTGAGCGGCGCCGCGAGTCGGCCCGAGGCCTCCGGGGACTGCCGTGCCGGGCGGGAGACCGCC
+ATGGCGACCCTGGAAAAGCTGATGAAGGCCTTCGAGTCCCTCAAGTCCTTCNNNNNCAACAGCCGCCACC
+GCCGCCGCCGCCGCCGCCGCCTCCTCAGCTTCCTCAGCCGCC...
 ```
 
 The reference contains:
-- Flanking sequences 5' and 3' of the CAG repeat
-- `NNNNN` separator indicating repeat region boundaries
-- Full HTT exon 1 sequence context for accurate alignment
+- Full HTT exon 1 sequence with flanking regions
+- `nnnnn` (lowercase) replaces the CAG repeat tract
+- This masks the repeat region, allowing Duke to detect repeats de novo from sequencing data
+- Flanking sequences provide alignment context on both sides of the repeat
 
 ---
 
