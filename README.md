@@ -673,7 +673,7 @@ Based on benchmark testing (January 2026) with datasets of 83-310 samples.
 **Recommended configuration:**
 ```bash
 #$ -pe smp 12
-#$ -l mem=8G         # 8GB per core = 96GB total
+#$ -l mem=64G        # 64GB per core = 768GB total
 #$ -l tmpfs=200G
 #$ -l h_rt=24:00:00  # Extend to 48:00:00 for 300+ samples
 ```
@@ -760,13 +760,13 @@ For datasets over 500 samples, use Kathleen with 80+ cores.
 
 ### Resource summary
 
-| Dataset Size | Samples | Cluster | Cores | Memory/Core | Runtime |
-|--------------|---------|---------|-------|-------------|---------|
-| Small | <100 | Myriad | 12 | 8GB | 8-10h |
-| Medium | 100-300 | Myriad | 12 | 8GB | 8-10h |
-| Large | 300-500 | Myriad | 12 | 8GB | 28-48h |
-| Very Large | 500-1000 | Kathleen | 80 | 4GB | 16-24h |
-| Massive | 1000+ | Kathleen | 80-160 | 4GB | 24-48h |
+| Dataset size | Samples | Cluster | Cores | Memory/core | tmpfs | Runtime |
+|--------------|---------|---------|-------|-------------|-------|---------|
+| Small | <100 | Myriad | 12 | 64GB | 200GB | 8-10h |
+| Medium | 100-300 | Myriad | 12 | 64GB | 200GB | 8-10h |
+| Large | 300-500 | Myriad | 12 | 64GB | 200GB | 28-48h |
+| Very large | 500-1000 | Kathleen | 80 | 4GB | - | 16-24h |
+| Massive | 1000+ | Kathleen | 80-160 | 4GB | - | 24-48h |
 
 **Key Notes:**
 - Myriad maximum: 36 cores (but 12 cores is optimal based on benchmarks)
