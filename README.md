@@ -13,9 +13,9 @@ A modular pipeline for amplicon sequencing analysis with comprehensive repeat le
 
 ---
 
-## Quick Start
+## Quick start
 
-### Three Ways to Run Duke
+### Three ways to run Duke
 
 **1. Command-Line Interface (RECOMMENDED)** - No file editing required:
 ```bash
@@ -35,24 +35,25 @@ source("scripts/duke_run.R")
 
 ---
 
-## Table of Contents
+## Table of contents
 
 - [Installation](#installation)
-- [Input File Requirements](#input-file-requirements)
-- [File Structure](#file-structure)
-- [Run Analysis](#run-analysis)
-  - [Command-Line Interface](#1-command-line-interface-recommended)
-  - [Script-Based](#2-script-based-duke_runr)
+- [Input file requirements](#input-file-requirements)
+- [File structure](#file-structure)
+- [Run analysis](#run-analysis)
+  - [Command-line interface](#1-command-line-interface-recommended)
+  - [Script-based](#2-script-based-duke_runr)
   - [Interactive RStudio](#3-interactive-rstudio)
-- [HPC Deployment](#hpc-deployment)
-  - [Job Submission](#job-submission)
-  - [Monitoring Jobs](#monitoring-jobs)
-  - [Critical Memory Requirements](#critical-memory-requirements)
-  - [Resource Recommendations](#resource-recommendations)
+- [HPC deployment](#hpc-deployment)
+  - [Job submission](#job-submission)
+  - [Monitoring jobs](#monitoring-jobs)
+  - [Myriad resource recommendations](#myriad-resource-recommendations)
+  - [Kathleen resource recommendations](#kathleen-resource-recommendations)
+  - [Resource summary](#resource-summary)
 - [Parameters](#parameters)
-- [Module Overview](#module-overview)
-- [Common Workflows](#common-workflows)
-- [Output Structure](#output-structure)
+- [Module overview](#module-overview)
+- [Common workflows](#common-workflows)
+- [Output structure](#output-structure)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -90,13 +91,13 @@ export R_LIBS_USER=~/R/library
 
 ---
 
-## Input File Requirements
+## Input file requirements
 
 Duke requires sequencing data and a reference sequence. Additional files are needed depending on which features you use.
 
-### Required Files
+### Required files
 
-#### 1. Sequencing Data
+#### 1. Sequencing data
 
 **Location:** Specified by `--dir_data` parameter  
 **Formats:** FASTQ, FASTQ.gz, FASTA, FA, BAM  
@@ -114,7 +115,7 @@ data/
     └── sample_005.bam
 ```
 
-#### 2. Reference Sequence
+#### 2. Reference sequence
 
 **Location:** Specified by `--path_ref` parameter  
 **Format:** FASTA file  
@@ -141,9 +142,9 @@ The reference contains:
 
 ---
 
-### Optional Files
+### Optional files
 
-#### 3. Adapter Patterns (Required if trimming enabled)
+#### 3. Adapter patterns (required if trimming enabled)
 
 **Location:** Specified by `--path_trim_patterns` parameter  
 **Format:** CSV with columns: `adapter_name`, `adapter_sequence`  
@@ -172,7 +173,7 @@ ampliconez_r,GACTGGAGTTCAGACGTGTGCTCTTCCGATCT
 
 ---
 
-#### 4. Settings Spreadsheet (Required for Module 6)
+#### 4. Settings spreadsheet (required for Module 6)
 
 **Location:** Specified by `--path_settings` parameter  
 **Format:** Excel (.xlsx) or CSV  
@@ -298,7 +299,7 @@ You can create the settings file later and re-run just Module 6:
 
 ---
 
-#### 5. Manual Read Exclusions (Optional)
+#### 5. Manual read exclusions (optional)
 
 **Location:** Specified by `--path_manual_exclusions` parameter  
 **Format:** Excel (.xlsx) or CSV  
@@ -413,7 +414,7 @@ If no reads are excluded, check:
 
 ---
 
-## File Structure
+## File structure
 
 ```
 duke/
@@ -460,11 +461,11 @@ duke/
 
 ---
 
-## Run Analysis
+## Run analysis
 
-### 1. Command-Line Interface (RECOMMENDED)
+### 1. Command-line interface (recommended)
 
-#### Quick Start - Minimal Example
+#### Quick start - minimal example
 
 ```bash
 ./duke \
@@ -475,7 +476,7 @@ duke/
 
 **Note:** This minimal command will run Modules 1-5 and 7. Module 6 (Range Analysis) requires a settings spreadsheet. To include Module 6, add `--path_settings /path/to/settings.xlsx`. To explicitly skip Module 6: use `--run_modules 1,2,3,4,5,7`. See [Settings Spreadsheet](#4-settings-spreadsheet-required-for-module-6) for format details.
 
-#### Local Test Run Example
+#### Local test run example
 ```bash
 # Navigate to Duke directory
 cd ~/Scratch/bin/duke
@@ -492,7 +493,7 @@ cd ~/Scratch/bin/duke
   --cleanup_temp FALSE
 ```
 
-#### With Adapter Trimming
+#### With adapter trimming
 ```bash
 ./duke \
   --dir_data /path/to/data \
@@ -501,7 +502,7 @@ cd ~/Scratch/bin/duke
   --path_trim_patterns /path/to/adapters.csv
 ```
 
-#### Without Adapter Trimming
+#### Without adapter trimming
 ```bash
 ./duke \
   --dir_data /path/to/data \
@@ -510,7 +511,7 @@ cd ~/Scratch/bin/duke
   --trim FALSE
 ```
 
-#### See All Options
+#### See all options
 ```bash
 ./duke --help
 ```
@@ -523,7 +524,7 @@ cd ~/Scratch/bin/duke
 
 ---
 
-### 2. Script-Based (duke_run.R)
+### 2. Script-based (duke_run.R)
 
 **Local:**
 ```r
@@ -559,9 +560,9 @@ qsub scripts/duke_myriad.sh
 
 ---
 
-## HPC Deployment
+## HPC deployment
 
-### Cluster Selection
+### Cluster selection
 
 | Cluster | Best For | Cores | Scheduler | Script |
 |---------|----------|-------|-----------|--------|
@@ -571,7 +572,7 @@ qsub scripts/duke_myriad.sh
 
 ---
 
-### Job Submission
+### Job submission
 
 #### Myriad (SGE)
 ```bash
@@ -610,9 +611,9 @@ sbatch scripts/duke_kathleen_slurm.sh
 
 ---
 
-### Monitoring Jobs
+### Monitoring jobs
 
-#### Check Job Status
+#### Check job status
 
 **SGE (Myriad, Old Kathleen):**
 ```bash
@@ -638,7 +639,7 @@ watch -n 5 'squeue -u $USER'
 scontrol show job <JOB_ID>
 ```
 
-#### Monitor Log Files
+#### Monitor log files
 
 ```bash
 # Watch job output in real-time
@@ -651,7 +652,7 @@ grep -i error logs/duke_*.err
 less logs/duke_*.out
 ```
 
-#### Cancel Jobs
+#### Cancel jobs
 
 **SGE:**
 ```bash
@@ -665,7 +666,7 @@ scancel <JOB_ID>
 
 ---
 
-### Myriad Resource Recommendations
+### Myriad resource recommendations
 
 Based on benchmark testing (January 2026) with datasets of 83-310 samples.
 
@@ -682,7 +683,7 @@ With Duke command:
 ./duke --threads 12 ...
 ```
 
-#### Expected Runtimes (Myriad)
+#### Expected runtimes (Myriad)
 
 | Samples | Runtime | Example |
 |---------|---------|---------|
@@ -690,7 +691,7 @@ With Duke command:
 | ~300 | ~10h | pg (298 samples): 9.4h |
 | 300+ | 28-35h | fs (310 samples): 28.3h |
 
-#### Myriad Benchmark Results
+#### Myriad benchmark results
 
 Testing compared different core/memory configurations:
 
@@ -701,7 +702,7 @@ Testing compared different core/memory configurations:
 | fs | 310 | 28-34h | **27.1h** | Failed |
 | yas | 83 | 9.6h | 15.1h | **5.7h** |
 
-#### Key Findings
+#### Key findings
 
 1. **12 cores with 64GB/core is optimal for most datasets** - provides the best balance of parallelisation and memory
 
@@ -711,7 +712,7 @@ Testing compared different core/memory configurations:
 
 4. **Very large datasets (300+ samples) are slow regardless** - expect 24-48h; consider Kathleen for these
 
-#### Configurations to Avoid (Myriad)
+#### Configurations to avoid (Myriad)
 
 ```bash
 # Not recommended - too few cores despite high memory
@@ -725,7 +726,7 @@ Testing compared different core/memory configurations:
 
 ---
 
-### Kathleen Resource Recommendations
+### Kathleen resource recommendations
 
 For datasets over 500 samples, use Kathleen with 80+ cores.
 
@@ -757,7 +758,7 @@ For datasets over 500 samples, use Kathleen with 80+ cores.
 
 ---
 
-### Resource Summary
+### Resource summary
 
 | Dataset Size | Samples | Cluster | Cores | Memory/Core | Runtime |
 |--------------|---------|---------|-------|-------------|---------|
@@ -776,11 +777,11 @@ For datasets over 500 samples, use Kathleen with 80+ cores.
 
 ## Parameters
 
-### New Parameters in 2.1.0
+### New parameters in 2.1.0
 
 All parameters remain the same as v2.0.1. The reorganisation only changed directory structure, not functionality.
 
-### Essential Parameters
+### Essential parameters
 
 ```r
 # Required
@@ -796,11 +797,11 @@ threads = 2                          # CPU cores
 resume = TRUE                        # Skip completed modules (default)
 ```
 
-### Complete Parameter Reference
+### Complete parameter reference
 
 See `./duke --help` for comprehensive documentation of all 54+ parameters, including:
 
-#### File Paths
+#### File paths
 - `dir_data` - Input directory **(required)**
 - `dir_out` - Output directory **(required)**
 - `path_ref` - Reference FASTA **(required)** - See `www/HTTset20.fasta` for demo
@@ -808,12 +809,12 @@ See `./duke --help` for comprehensive documentation of all 54+ parameters, inclu
 - `path_settings` - Settings Excel (required for Module 6) - See [Settings File Format](#settings-file-format)
 - `path_manual_exclusions` - Read exclusions Excel (optional) - See [Exclusions File Format](#exclusions-file-format)
 
-#### Import Options
+#### Import options
 - `import_patterns` - File extensions to import
 - `downsample` - Limit reads per sample (NA = all)
 - `select_one_of_pair` - For paired-end: "R1", "R2", or NA
 
-#### Adapter Trimming
+#### Adapter trimming
 - `trim` - Enable/disable (default: TRUE)
 - `trim_max_mismatch` - Max errors (default: 3)
 - `trim_with_indels` - Allow indels (default: TRUE)
@@ -823,7 +824,7 @@ See `./duke --help` for comprehensive documentation of all 54+ parameters, inclu
 - `visualise_alignment` - Generate plots (default: TRUE)
 - `visualise_alignment_downsample` - Max reads to plot (default: 1000)
 
-#### Repeat Detection
+#### Repeat detection
 All parameters have comprehensive documentation with examples in `scripts/duke_run.R` or via `./duke --help`:
 
 - `rpt_pattern` - Repeat motif (default: "CAG")
@@ -841,7 +842,7 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 - `haplotype_cluster_max` - Max haplotypes (default: 10)
 - `repeat_cluster_max` - Max repeat lengths (default: 20)
 
-#### Module Control
+#### Module control
 - `waterfall` - Generate waterfall plots (default: TRUE)
 - `repeat_histogram` - Generate histograms (default: TRUE)
 - `repeat_scatter` - Generate scatter plots (default: TRUE)
@@ -856,7 +857,7 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 
 ---
 
-## Module Overview
+## Module overview
 
 ### Module 1: Import and QC
 - Imports FASTQ/FASTA/BAM files
@@ -870,23 +871,23 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 - Coverage visualisation
 - **Optional manual read exclusion** (controlled by `path_manual_exclusions`)
 
-### Module 3: Repeat Detection
+### Module 3: Repeat detection
 - Identifies repeat tracts
 - Tolerates sequencing errors
 - Multiple counting methods
 
-### Module 4: Allele Calling
+### Module 4: Allele calling
 - **⚠️ Most memory-intensive module** - requires 4GB+ per core
 - Clusters by repeat/haplotype using parallel processing
 - Consensus sequences
 - Variant calling (VCF export)
 
-### Module 5: Waterfall Plots
+### Module 5: Waterfall plots
 - Visual read inspection
 - Per-sample and per-cluster plots
 - Configurable downsampling
 
-### Module 6: Range Analysis
+### Module 6: Range analysis
 
 **Requires:** Settings spreadsheet (see [Settings Spreadsheet](#4-settings-spreadsheet-required-for-module-6))
 
@@ -913,16 +914,16 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 ./duke --run_modules 6 --path_settings my_settings.xlsx --resume TRUE ...
 ```
 
-### Module 7: Repeat Visualisation
+### Module 7: Repeat visualisation
 - Frequency histograms
 - Scatter/violin plots
 - Publication-ready figures
 
 ---
 
-## Common Workflows
+## Common workflows
 
-### Workflow 1: Discovery Mode (First Run)
+### Workflow 1: Discovery mode (first run)
 
 **Use when:** Exploring new data or validating amplicon sequencing quality
 
@@ -950,7 +951,7 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 # 3. Validate reference sequence and adapter trimming
 ```
 
-### Workflow 2: Full Analysis with Range Metrics
+### Workflow 2: Full analysis with range metrics
 
 **Use when:** You know your expected ranges and need quantitative instability metrics
 
@@ -975,7 +976,7 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 #    - Excel summary tables
 ```
 
-### Workflow 3: Quality Control with Read Exclusions
+### Workflow 3: Quality control with read exclusions
 
 **Use when:** Manual QC reveals problematic reads that need exclusion
 
@@ -1008,7 +1009,7 @@ samtools view sample_001.bam | grep "suspicious_pattern" | cut -f1 > flagged_rea
 #    Check Module 2 output: "Alignments excluded: X"
 ```
 
-### Workflow 4: Longitudinal Analysis
+### Workflow 4: Longitudinal analysis
 
 **Use when:** Analysing timepoint series or treatment responses
 
@@ -1036,7 +1037,7 @@ samtools view sample_001.bam | grep "suspicious_pattern" | cut -f1 > flagged_rea
 #    - Per-group statistical summaries
 ```
 
-### Workflow 5: Large Dataset HPC Run
+### Workflow 5: Large dataset HPC run
 
 **Use when:** Processing hundreds of samples on computing cluster
 
@@ -1071,7 +1072,7 @@ tail -f logs/duke_*.out
 qsub scripts/duke_myriad.sh  # Resume parameter = TRUE by default
 ```
 
-### Workflow 6: Parameter Optimisation
+### Workflow 6: Parameter optimisation
 
 **Use when:** Fine-tuning repeat detection or clustering parameters
 
@@ -1113,7 +1114,7 @@ qsub scripts/duke_myriad.sh  # Resume parameter = TRUE by default
 
 ---
 
-## Output Structure
+## Output structure
 
 ```
 result_duke/
@@ -1141,7 +1142,7 @@ result_duke/
 
 ## Troubleshooting
 
-### Common Issues
+### Common issues
 
 **"Error: cannot open the connection" when running Rmd**
 ```bash
@@ -1358,7 +1359,7 @@ rm result_duke/module_data/06_range_analysis_results.RData
 
 ---
 
-## Version History
+## Version history
 
 ### 2.1.0 (January 2026) - Current
 - 🗂️ **REORGANISED:** Clean directory structure with `modules/` and `scripts/` subdirectories
