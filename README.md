@@ -665,39 +665,89 @@ scancel <JOB_ID>
 
 ---
 
-### Critical Memory Requirements
+### Myriad Resource Recommendations
 
-**⚠️ Module 4 (Allele Calling) is Memory-Intensive**
+Based on benchmark testing (January 2026) with datasets of 83-310 samples.
 
-Module 4 performs parallel clustering operations that require significant memory per core. Insufficient memory causes jobs to hang, swap excessively, or crash.
+**Recommended configuration:**
+```bash
+#$ -pe smp 12
+#$ -l mem=8G         # 8GB per core = 96GB total
+#$ -l tmpfs=200G
+#$ -l h_rt=24:00:00  # Extend to 48:00:00 for 300+ samples
+```
 
-**Minimum Requirements:**
-- **Development/Testing:** 2GB per core (may be slow)
-- **Production:** 4GB per core (recommended minimum)
-- **Large datasets:** 8GB per core (optimal performance)
+With Duke command:
+```bash
+./duke --threads 12 ...
+```
 
-**Example Configurations:**
+#### Expected Runtimes (Myriad)
+
+| Samples | Runtime | Example |
+|---------|---------|---------|
+| ~100 | 8-10h | jasmine (102 samples): 8.1h |
+| ~300 | ~10h | pg (298 samples): 9.4h |
+| 300+ | 28-35h | fs (310 samples): 28.3h |
+
+#### Myriad Benchmark Results
+
+Testing compared different core/memory configurations:
+
+| Dataset | Samples | 12c/64G | 6c/128G | 24c/32G |
+|---------|---------|---------|---------|---------|
+| jasmine | 102 | **8.1h** | 8.9h | 13.0h |
+| pg | 298 | **9.4h** | 19.9h | 17.5h |
+| fs | 310 | 28-34h | **27.1h** | Failed |
+| yas | 83 | 9.6h | 15.1h | **5.7h** |
+
+#### Key Findings
+
+1. **12 cores with 64GB/core is optimal for most datasets** - provides the best balance of parallelisation and memory
+
+2. **More RAM per core doesn't always help** - 6c/128G was slower than 12c/64G for the pg dataset (19.9h vs 9.4h) despite having more memory per core
+
+3. **Too many cores with less memory can fail** - 24c/32G failed to complete the fs dataset within 48h
+
+4. **Very large datasets (300+ samples) are slow regardless** - expect 24-48h; consider Kathleen for these
+
+#### Configurations to Avoid (Myriad)
 
 ```bash
-# Myriad - Small dataset (≤100 samples)
-#$ -pe smp 12
-#$ -l mem=4G        # 48GB total
-#$ -l h_rt=12:00:00
-# Use --threads 12 in Duke
+# Not recommended - too few cores despite high memory
+#$ -pe smp 6
+#$ -l mem=128G       # Slower for most datasets
 
-# Myriad - Medium dataset (100-500 samples)
-#$ -pe smp 36
-#$ -l mem=4G        # 144GB total
-#$ -l h_rt=24:00:00
-# Use --threads 36 in Duke
+# Not recommended - can cause failures on large datasets  
+#$ -pe smp 24
+#$ -l mem=32G        # fs dataset failed with this config
+```
 
-# Old Kathleen - Large dataset (1000+ samples)
+---
+
+### Kathleen Resource Recommendations
+
+For datasets over 500 samples, use Kathleen with 80+ cores.
+
+**Old Kathleen (SGE):**
+```bash
 #$ -pe mpi 80
-#$ -l mem=8G        # 640GB total
+#$ -l mem=4G         # 320GB total
 #$ -l h_rt=48:00:00
 # Use --threads 80 in Duke
+```
 
-# Memory workaround for Kathleen (if mem=8G unavailable):
+**New Kathleen (Slurm):**
+```bash
+#SBATCH --nodes=2
+#SBATCH --ntasks=80
+#SBATCH --mem-per-cpu=4G
+#SBATCH --time=48:00:00
+# Use --threads 80 in Duke
+```
+
+**Memory workaround for Kathleen** (if mem=4G+ unavailable):
+```bash
 # Request double cores, use half for processing
 #$ -pe mpi 160
 #$ -l mem=2G        # 320GB total
@@ -705,27 +755,22 @@ Module 4 performs parallel clustering operations that require significant memory
 # Use --threads 80 in Duke (not 160!)
 ```
 
-**Key Notes:**
-- **Always use 4GB+ per core** for production runs
-- Myriad maximum: 36 cores
-- Kathleen: Request cores in multiples of 40
-- Match `--threads` parameter to core count (except memory workaround above)
-
 ---
 
-### Resource Recommendations
+### Resource Summary
 
-| Dataset Size | Samples | Cores | Memory/Core | Runtime | Cluster |
-|--------------|---------|-------|-------------|---------|---------|
-| Small | <100 | 12 | 4GB | 2-4h | Myriad |
-| Medium | 100-500 | 36 | 4GB | 8-16h | Myriad |
-| Large | 500-1000 | 80 | 4-8GB | 16-24h | Kathleen |
-| Very Large | 1000+ | 80-160 | 8GB | 24-48h | Kathleen |
+| Dataset Size | Samples | Cluster | Cores | Memory/Core | Runtime |
+|--------------|---------|---------|-------|-------------|---------|
+| Small | <100 | Myriad | 12 | 8GB | 8-10h |
+| Medium | 100-300 | Myriad | 12 | 8GB | 8-10h |
+| Large | 300-500 | Myriad | 12 | 8GB | 28-48h |
+| Very Large | 500-1000 | Kathleen | 80 | 4GB | 16-24h |
+| Massive | 1000+ | Kathleen | 80-160 | 4GB | 24-48h |
 
-**Performance Scaling:**
-- Module 1-3: Linear with cores
-- Module 4: Memory-bound, 4GB+ per core critical
-- Module 5-7: Moderate parallelisation
+**Key Notes:**
+- Myriad maximum: 36 cores (but 12 cores is optimal based on benchmarks)
+- Kathleen: Request cores in multiples of 40
+- Match `--threads` parameter to core count (except memory workaround above)
 
 ---
 

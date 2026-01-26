@@ -122,12 +122,48 @@ settings <- settings %>%
 
 message("Settings loaded from: ", params$path_settings)
 message("  Format: ", toupper(file_ext))
-message("  Samples: ", nrow(settings))
+message("  Total samples in settings: ", nrow(settings))
 
-# Display settings table
+# Filter settings to only include samples present in the actual data
+samples_in_data <- unique(alignment_clustered$file_stem)
+settings_all <- settings  # Keep original for reference
+settings <- settings %>%
+  filter(file_stem %in% samples_in_data)
+
+# Report filtering
+samples_filtered <- setdiff(settings_all$file_stem, settings$file_stem)
+if (length(samples_filtered) > 0) {
+  message("\n=== Settings Filtering ===")
+  message("  Samples in settings file: ", nrow(settings_all))
+  message("  Samples in dataset: ", length(samples_in_data))
+  message("  Samples matched: ", nrow(settings))
+  message("  Samples excluded (not in data): ", length(samples_filtered))
+  if (length(samples_filtered) <= 10) {
+    message("  Excluded samples: ", paste(samples_filtered, collapse = ", "))
+  } else {
+    message("  Excluded samples (first 10): ", 
+            paste(head(samples_filtered, 10), collapse = ", "), " ...")
+  }
+}
+
+# Check if any data samples are missing from settings
+samples_missing_settings <- setdiff(samples_in_data, settings$file_stem)
+if (length(samples_missing_settings) > 0) {
+  warning("\n=== Missing Settings ===")
+  warning("  Samples in data without settings: ", length(samples_missing_settings))
+  if (length(samples_missing_settings) <= 10) {
+    warning("  Samples: ", paste(samples_missing_settings, collapse = ", "))
+  } else {
+    warning("  Samples (first 10): ", 
+            paste(head(samples_missing_settings, 10), collapse = ", "), " ...")
+  }
+  warning("  These samples will be skipped in Module 6 analysis")
+}
+
+# Display filtered settings table
 datatable(settings,
           options = list(pageLength = 10, scrollX = TRUE),
-          caption = "Settings file",
+          caption = "Settings file (filtered to samples in dataset)",
           rownames = FALSE) %>%
   formatStyle(columns = colnames(settings), fontSize = '10px')
 ```
@@ -216,8 +252,10 @@ comprehensive_range_summary_list <- lapply(1:nrow(settings_parsed), function(i) 
   sample_data <- alignment_clustered %>%
     filter(file_stem == my_file_stem)
   
+  # This should not happen since we pre-filtered settings, but check anyway
   if (nrow(sample_data) == 0) {
-    warning("No data for sample: ", my_file_stem)
+    warning("UNEXPECTED: No data for sample: ", my_file_stem, 
+            " (should have been filtered out earlier)")
     return(NULL)
   }
   
@@ -364,8 +402,10 @@ modal_peaks_list <- apply_fn(file_stems_with_settings, function(my_file_stem) {
   sample_data <- alignment_clustered %>%
     filter(file_stem == my_file_stem)
   
+  # This should not happen since we pre-filtered settings
   if (nrow(sample_data) == 0) {
-    warning("No data for sample: ", my_file_stem)
+    warning("UNEXPECTED: No data for sample: ", my_file_stem, 
+            " (should have been filtered out earlier)")
     return(NULL)
   }
   
@@ -374,8 +414,10 @@ modal_peaks_list <- apply_fn(file_stems_with_settings, function(my_file_stem) {
     filter(file_stem == my_file_stem) %>%
     slice(1)
   
+  # This should not happen since we pre-filtered settings
   if (nrow(my_settings) == 0) {
-    warning("No settings for sample: ", my_file_stem)
+    warning("UNEXPECTED: No settings for sample: ", my_file_stem, 
+            " (should have been filtered out earlier)")
     return(NULL)
   }
   
