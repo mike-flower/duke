@@ -50,7 +50,7 @@ option_list <- list(
   # ===========================================================================
   
   make_option("--dir_data", type="character", default=NULL,
-              help="Input data directory (FASTQ files) [REQUIRED]", metavar="PATH"),
+              help="Input data directory (FASTQ/FASTA/BAM files) [REQUIRED]", metavar="PATH"),
   
   make_option("--dir_out", type="character", default=NULL,
               help="Output results directory [REQUIRED]", metavar="PATH"),
