@@ -1063,18 +1063,33 @@ dir.create(repeat_segment_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 # Individual per-sample plots (horizontal orientation to match Module 7)
 for (sample in unique(alignment_split$file_stem)) {
   sample_data <- alignment_split %>% filter(file_stem == sample)
+  n_reads <- nrow(sample_data)
   
-  p_mid_sample <- ggplot(sample_data, aes(x = nchar(mid), y = 1)) +
-    geom_violin(fill = "lightblue", alpha = 0.6, width = 0.8) +
-    geom_jitter(width = 0, alpha = 0.3, size = 1.2, color = "#619CFF") +
-    geom_boxplot(height = 0.15, outlier.shape = NA, alpha = 0.3, fill = "white") +
-    labs(title = paste("Repeat region length -", sample),
-         subtitle = "Mid segment distribution",
-         x = "Mid segment length (bp)",
-         y = "") +
-    theme_minimal() +
-    theme(axis.text.y = element_blank(),
-          axis.ticks.y = element_blank())
+  # Need at least 2 observations for violin/boxplot
+  if (n_reads >= 2) {
+    p_mid_sample <- ggplot(sample_data, aes(x = nchar(mid), y = 1)) +
+      geom_violin(fill = "lightblue", alpha = 0.6, width = 0.8) +
+      geom_jitter(width = 0, alpha = 0.3, size = 1.2, color = "#619CFF") +
+      geom_boxplot(height = 0.15, outlier.shape = NA, alpha = 0.3, fill = "white") +
+      labs(title = paste("Repeat region length -", sample),
+           subtitle = paste0("Mid segment distribution (n = ", n_reads, ")"),
+           x = "Mid segment length (bp)",
+           y = "") +
+      theme_minimal() +
+      theme(axis.text.y = element_blank(),
+            axis.ticks.y = element_blank())
+  } else {
+    # For single-read samples, just show the point
+    p_mid_sample <- ggplot(sample_data, aes(x = nchar(mid), y = 1)) +
+      geom_point(size = 4, color = "#619CFF", alpha = 0.7) +
+      labs(title = paste("Repeat region length -", sample),
+           subtitle = paste0("Mid segment (n = ", n_reads, " read)"),
+           x = "Mid segment length (bp)",
+           y = "") +
+      theme_minimal() +
+      theme(axis.text.y = element_blank(),
+            axis.ticks.y = element_blank())
+  }
   
   ggsave(
     filename = file.path(repeat_segment_by_sample_dir, paste0(sample, "-repeat_segment_length.png")),
