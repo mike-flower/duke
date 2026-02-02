@@ -39,6 +39,7 @@ source("scripts/duke_run.R")
 
 - [Installation](#installation)
 - [Input file requirements](#input-file-requirements)
+- [PacBio Revio run planning](#pacbio-revio-run-planning)
 - [File structure](#file-structure)
 - [Run analysis](#run-analysis)
   - [Command-line interface](#1-command-line-interface-recommended)
@@ -411,6 +412,43 @@ If no reads are excluded, check:
 1. Read names match exactly (use `samtools view` to verify)
 2. File names match (without path, with/without extension as needed)
 3. Excel sheet is named "Exclusions" (case-sensitive)
+
+---
+
+## PacBio Revio run planning
+
+Empirical data from multiple Revio flow cells can help guide experimental design for HTT amplicon sequencing.
+
+### Expected yield per flow cell
+
+Based on 4 complete flow cells processed through Duke:
+
+| Samples per flow cell | Total reads | Reads per sample |
+|-----------------------|-------------|------------------|
+| 250 | ~7.2 million | ~28,700 |
+| 287 | ~8.7 million | ~30,200 |
+| 288 | ~7.5 million | ~26,200 |
+| 381 | ~8.5 million | ~22,400 |
+
+### Key observations
+
+- Each Revio flow cell yields approximately **7–9 million aligned reads** for HTT amplicons
+- Read depth per sample scales inversely with sample count
+- At ~250 samples, expect **~27,000–30,000 reads per sample**
+- At ~380 samples, expect **~22,000 reads per sample**
+- Even at high multiplexing, coverage remains excellent for repeat length calling
+
+### Recommendations
+
+For most HTT CAG repeat analyses, **>5,000 reads per sample** provides robust allele calling and instability metrics. This means a single Revio flow cell can accommodate **250–400 samples** whilst maintaining coverage.
+
+**Planning guidance:**
+
+| Project size | Flow cells | Expected reads/sample |
+|--------------|------------|----------------------|
+| ≤300 samples | 1 | ~25,000–30,000 |
+| 300–400 samples | 1 | ~20,000–25,000 |
+| >400 samples | Consider splitting across 2 | ~25,000+ |
 
 ---
 
