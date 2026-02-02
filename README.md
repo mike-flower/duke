@@ -39,7 +39,7 @@ source("scripts/duke_run.R")
 
 - [Installation](#installation)
 - [Input file requirements](#input-file-requirements)
-- [PacBio Revio run planning](#pacbio-revio-run-planning)
+- [Run planning](#run-planning)
 - [File structure](#file-structure)
 - [Run analysis](#run-analysis)
   - [Command-line interface](#1-command-line-interface-recommended)
@@ -415,7 +415,7 @@ If no reads are excluded, check:
 
 ---
 
-## PacBio Revio run planning
+## Run planning
 
 Empirical data from multiple Revio flow cells can help guide experimental design for HTT amplicon sequencing.
 
