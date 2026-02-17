@@ -238,42 +238,65 @@ minimap2_align_sample <- function(sample_name,
   alignment_info <- alignment_info %>%
     left_join(query_seqs, by = "qname")
   
-  # Calculate alignment metrics from CIGAR
-  cigar_rle <- cigarToRleList(alignment_info$cigar)
+  # # Calculate alignment metrics from CIGAR
+  # cigar_rle <- cigarToRleList(alignment_info$cigar)
+  # 
+  # # Alignment length on reference
+  # alignment_info$alignment_length_on_ref <- vapply(cigar_rle, function(rle) {
+  #   sum(runLength(rle)[runValue(rle) %in% c("M", "D", "N", "=", "X")])
+  # }, integer(1))
+  # 
+  # # Calculate ref_end (standard genomic coordinates: ref_start < ref_end always)
+  # alignment_info$ref_end <- alignment_info$ref_start + alignment_info$alignment_length_on_ref - 1
+  # 
+  # # Insertion/deletion counts
+  # alignment_info$insertions <- vapply(cigar_rle, function(rle) {
+  #   sum(runLength(rle)[runValue(rle) == "I"])
+  # }, integer(1))
+  # alignment_info$deletions <- vapply(cigar_rle, function(rle) {
+  #   sum(runLength(rle)[runValue(rle) == "D"])
+  # }, integer(1))
+  # 
+  # # Alignment length on query
+  # alignment_info$alignment_length_on_query <- vapply(cigar_rle, function(rle) {
+  #   sum(runLength(rle)[runValue(rle) %in% c("M", "I", "=", "X")])
+  # }, integer(1))
+  # 
+  # # Soft-clip at start
+  # alignment_info$softclip_start <- vapply(cigar_rle, function(rle) {
+  #   if (length(rle) > 0 && runValue(rle)[1] == "S") {
+  #     as.integer(runLength(rle)[1])
+  #   } else {
+  #     0L
+  #   }
+  # }, integer(1))
+  # 
+  # # Query coordinates (simple CIGAR-based initially)
+  # alignment_info$query_start <- alignment_info$softclip_start + 1
+  # alignment_info$query_end <- alignment_info$query_start + alignment_info$alignment_length_on_query - 1
   
-  # Alignment length on reference
-  alignment_info$alignment_length_on_ref <- vapply(cigar_rle, function(rle) {
-    sum(runLength(rle)[runValue(rle) %in% c("M", "D", "N", "=", "X")])
-  }, integer(1))
   
-  # Calculate ref_end (standard genomic coordinates: ref_start < ref_end always)
+  # Calculate alignment metrics from CIGAR (vectorized)
+  alignment_info$alignment_length_on_ref <- cigarWidthAlongReferenceSpace(alignment_info$cigar)
   alignment_info$ref_end <- alignment_info$ref_start + alignment_info$alignment_length_on_ref - 1
   
-  # Insertion/deletion counts
-  alignment_info$insertions <- vapply(cigar_rle, function(rle) {
-    sum(runLength(rle)[runValue(rle) == "I"])
-  }, integer(1))
-  alignment_info$deletions <- vapply(cigar_rle, function(rle) {
-    sum(runLength(rle)[runValue(rle) == "D"])
-  }, integer(1))
+  cigar_ops <- cigarOpTable(alignment_info$cigar)
+  alignment_info$insertions <- cigar_ops[, "I"]
+  alignment_info$deletions <- cigar_ops[, "D"]
   
-  # Alignment length on query
-  alignment_info$alignment_length_on_query <- vapply(cigar_rle, function(rle) {
-    sum(runLength(rle)[runValue(rle) %in% c("M", "I", "=", "X")])
-  }, integer(1))
+  alignment_info$alignment_length_on_query <- cigarWidthAlongQuerySpace(
+    alignment_info$cigar, after.soft.clipping = TRUE
+  )
   
-  # Soft-clip at start
-  alignment_info$softclip_start <- vapply(cigar_rle, function(rle) {
-    if (length(rle) > 0 && runValue(rle)[1] == "S") {
-      as.integer(runLength(rle)[1])
-    } else {
-      0L
-    }
-  }, integer(1))
+  alignment_info$softclip_start <- as.integer(ifelse(
+    grepl("^\\d+S", alignment_info$cigar),
+    as.numeric(sub("^(\\d+)S.*", "\\1", alignment_info$cigar)),
+    0L
+  ))
   
-  # Query coordinates (simple CIGAR-based initially)
   alignment_info$query_start <- alignment_info$softclip_start + 1
   alignment_info$query_end <- alignment_info$query_start + alignment_info$alignment_length_on_query - 1
+  
   
   # Clean up intermediate columns and reorder
   alignment_info <- alignment_info %>%
