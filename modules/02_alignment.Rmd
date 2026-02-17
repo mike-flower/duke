@@ -1029,32 +1029,48 @@ DT::datatable(
 
 ```{r plot_mid_length, echo=FALSE, fig.height=6, fig.width=10}
 # Plot mid (repeat) region length distribution
-p_mid_length <- ggplot(alignment_split, aes(x = file_stem, y = nchar(mid))) +
-  geom_violin(fill = "lightblue", alpha = 0.6) +
-  geom_jitter(height = 0, width = 0.2, alpha = 0.2, size = 0.8, color = "#619CFF") +
-  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.3) +
-  scale_x_discrete(guide = guide_axis(angle = 45)) +
-  labs(title = "Distribution of repeat region length (mid segment)",
-       x = "Sample",
-       y = "Mid segment length (bp)") +
-  theme_minimal()
+# Filter out reads with NA mid segments (e.g. failed splitting)
+alignment_split_mid <- alignment_split %>% filter(!is.na(mid))
 
-print(p_mid_length)
+# Only plot samples with >= 2 valid mid segments (violin/boxplot need >= 2 obs)
+samples_with_mid <- alignment_split_mid %>%
+  group_by(file_stem) %>%
+  filter(n() >= 2) %>%
+  ungroup()
+
+if (nrow(samples_with_mid) > 0) {
+  p_mid_length <- ggplot(samples_with_mid, aes(x = file_stem, y = nchar(mid))) +
+    geom_violin(fill = "lightblue", alpha = 0.6) +
+    geom_jitter(height = 0, width = 0.2, alpha = 0.2, size = 0.8, color = "#619CFF") +
+    geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.3) +
+    scale_x_discrete(guide = guide_axis(angle = 45)) +
+    labs(title = "Distribution of repeat region length (mid segment)",
+         x = "Sample",
+         y = "Mid segment length (bp)") +
+    theme_minimal()
+  
+  print(p_mid_length)
+} else {
+  message("No samples with >= 2 valid mid segments for combined plot")
+  p_mid_length <- NULL
+}
 
 # Export combined plot
 # Calculate width (capped at 50 inches)
 n_samples <- length(unique(alignment_split$file_stem))
 plot_width <- min(50, max(8, n_samples * 0.8))
 
-ggsave(
-  filename = file.path(plots_dir, "repeat_segment_length.png"),
-  plot = p_mid_length,
-  width = plot_width,
-  height = 6,
-  dpi = 300,
-  bg = "white",
-  limitsize = FALSE
-)
+if (!is.null(p_mid_length)) {
+  ggsave(
+    filename = file.path(plots_dir, "repeat_segment_length.png"),
+    plot = p_mid_length,
+    width = plot_width,
+    height = 6,
+    dpi = 300,
+    bg = "white",
+    limitsize = FALSE
+  )
+}
 
 # Create subdirectory for per-sample plots
 repeat_segment_by_sample_dir <- file.path(plots_dir, "repeat_segment_length_by_sample")
@@ -1062,8 +1078,14 @@ dir.create(repeat_segment_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Individual per-sample plots (horizontal orientation to match Module 7)
 for (sample in unique(alignment_split$file_stem)) {
-  sample_data <- alignment_split %>% filter(file_stem == sample)
+  sample_data <- alignment_split %>% filter(file_stem == sample, !is.na(mid))
   n_reads <- nrow(sample_data)
+  
+  # Skip samples with no valid mid segments
+  if (n_reads == 0) {
+    message("Skipping mid length plot for ", sample, " (no valid mid segments)")
+    next
+  }
   
   # Need at least 2 observations for violin/boxplot
   if (n_reads >= 2) {
