@@ -889,6 +889,12 @@ datatable(distribution_summary[, key_cols],
 ```
 
 ```{r plot_distributions, echo=FALSE, fig.width=10, fig.height=8}
+# --- Clean non-finite values (NaN, Inf, -Inf) before plotting ---
+# Edge-case samples (e.g. all reads at modal → tail_balance = 0/0 = NaN,
+# mean ≈ 0 → CV = Inf) cause ggplot to fail when computing axis breaks.
+distribution_summary <- distribution_summary %>%
+  mutate(across(where(is.numeric), ~ifelse(is.finite(.) | is.na(.), ., NA_real_)))
+
 # Plot 1: Modal vs mean lengths per sample
 p_modal_mean <- ggplot(distribution_summary,
                        aes(x = modal_length, y = mean_length, colour = analysis_range_name)) +
@@ -925,6 +931,7 @@ ggsave(file.path(plots_dir, "03_spread_by_sample.png"),
 
 # Plot 3: Filtering effect
 filtering_data <- distribution_summary %>%
+  filter(n_reads_total > 0) %>%
   mutate(pct_filtered = ((n_reads_total - n_reads_used) / n_reads_total) * 100)
 
 p_filtering <- ggplot(filtering_data,
@@ -1068,7 +1075,8 @@ density_data_full <- alignment_clustered %>%
     select(settings, file_stem, group, time),
     by = "file_stem"
   ) %>%
-  filter(!is.na(group), !is.na(time), !is.na(repeat_count)) %>%
+  filter(!is.na(group), !is.na(time), !is.na(repeat_count),
+         is.finite(repeat_count)) %>%
   arrange(group, time) %>%
   mutate(
     sample_label = paste0(file_stem, " (t=", time, ")"),
@@ -1255,6 +1263,7 @@ if (!dir.exists(tail_balance_by_range_dir)) {
 }
 
 for (my_range in unique(distribution_summary$analysis_range_name)) {
+  tryCatch({
   range_data <- distribution_summary %>%
     filter(analysis_range_name == my_range)
   
@@ -1338,6 +1347,9 @@ for (my_range in unique(distribution_summary$analysis_range_name)) {
   ggsave(file.path(distribution_by_range_dir, 
                   paste0("metrics_", my_range, ".png")),
          p_metrics_range, width = 12, height = 6, dpi = 300)
+  }, error = function(e) {
+    message("  Warning: Could not generate plots for range ", my_range, ": ", e$message)
+  })
 }
 
 message("  Individual range plots saved to: ", distribution_by_range_dir)
@@ -1351,6 +1363,7 @@ if (!dir.exists(distribution_by_sample_dir)) {
 }
 
 for (my_sample in unique(distribution_summary$file_stem)) {
+  tryCatch({
   sample_data <- distribution_summary %>%
     filter(file_stem == my_sample)
   
@@ -1480,6 +1493,9 @@ for (my_sample in unique(distribution_summary$file_stem)) {
   ggsave(file.path(distribution_by_sample_dir, 
                   paste0(my_sample, "-distribution.png")),
          p_final, width = 14, height = 10, dpi = 300)
+  }, error = function(e) {
+    message("  Warning: Could not generate distribution plot for ", my_sample, ": ", e$message)
+  })
 }
 
 message("  Individual sample plots saved to: ", distribution_by_sample_dir)
