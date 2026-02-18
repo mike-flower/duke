@@ -241,7 +241,9 @@ if (file.exists(cache_path) && params$resume) {
     # No clustering - assign all reads to cluster 1
     message("Clustering disabled - assigning all reads to cluster 1")
     alignment_clustered <- alignment_counts %>%
-      mutate(cluster_number = 1) %>%
+      mutate(cluster_number = 1,
+             repeat_cluster = NA_character_,
+             haplotype_cluster = NA_character_) %>%
       relocate(cluster_number, .after = all_of(params$repeat_count_method))
     
   }
