@@ -402,20 +402,29 @@ params <- list(
   # -----------------------------------------------------------------------------
   # Module 7: Repeat Distribution Visualisation
   # -----------------------------------------------------------------------------
-  # repeat_histogram: Generate frequency histogram plots
+  # repeat_histogram: Generate frequency histogram plots (Module 7)
+  #   - Full-range histograms per sample (histograms_by_sample/full/)
+  #   - Per-range histograms per sample (histograms_by_sample/{range}/)
   repeat_histogram = TRUE,
-  
-  # repeat_histogram_binwidth: Bin width for histogram (in repeats)
+
+  # repeat_histogram_binwidth: Bin width for histogram (in repeat units)
   repeat_histogram_binwidth = 1,
-  
-  # repeat_scatter: Generate scatter/violin plots showing individual reads
+
+  # repeat_scatter: Generate scatter/violin plots (Module 7)
+  #   - Cohort repeat length summary — box+jitter, one point per sample per range
+  #   - Per-sample horizontal scatter plots (scatter_by_sample/full/ and scatter_by_sample/{range}/)
   repeat_scatter = TRUE,
-  
-  # repeat_distribution_metrics: Which summary metrics to show as points/markers
+
+  # repeat_density: Generate ggridges density plots (Module 7)
+  #   - Per-sample full-range density (density_by_sample/full/)
+  #   - Per-sample per-range density ridges (density_by_sample/ranges/)
+  repeat_density = TRUE,
+
+  # repeat_distribution_metrics: Which summary metrics to overlay on scatter and density plots
   #   Options: "modal_length", "mean_length", "median_length"
   #   Can specify multiple, e.g., c("modal_length", "mean_length")
   repeat_distribution_metrics = c("modal_length", "mean_length", "median_length"),
-  
+
   # -----------------------------------------------------------------------------
   # Plot output control
   # -----------------------------------------------------------------------------
@@ -423,18 +432,16 @@ params <- list(
   #   - 150 = screen-quality (default, ~2x faster than 300, suitable for QC review)
   #   - 300 = print-quality (use for publication figures)
   plot_dpi = 150,
-  
-  # plot_per_sample: Generate per-sample plot files (one file per sample)
-  #   - TRUE = create individual per-sample plots in subdirectories (default)
-  #   - FALSE = skip per-sample plots; aggregate cohort plots still generated
-  #   Note: Consider setting FALSE for large datasets (>50 samples) to avoid
-  #   generating hundreds of files per module
-  plot_per_sample = TRUE,
 
-  # Module-specific per-sample overrides (force per-sample plots ON regardless
-  # of plot_per_sample; useful when you want specific plot types for all samples)
-  #   - TRUE = always generate per-sample plots for this module
-  #   - FALSE = follow plot_per_sample (default)
+  # plot_per_sample: Generate per-sample plot files in Modules 2, 3, and 4
+  #   - TRUE = create individual per-sample plots (one file per sample per plot type)
+  #             Module 2: coverage plots, strand plots, alignment visualisation, segment length plots
+  #             Module 3: repeat vs flank scatter, repeat histograms, violin plots, density plots
+  #             Module 4: cluster violin plots, cluster scatter plots
+  #   - FALSE = skip all per-sample plots; cohort-level summary plots still generated
+  #   Note: Consider FALSE for large datasets (>50 samples) — per-sample plots can
+  #   generate hundreds of files and noticeably slow down rendering
+  plot_per_sample = TRUE,
   
   # -----------------------------------------------------------------------------
   # Pipeline execution control

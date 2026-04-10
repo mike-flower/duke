@@ -307,23 +307,26 @@ option_list <- list(
               help="Histogram bin width [default: %default]", metavar="N"),
   
   make_option("--repeat_scatter", type="logical", default=TRUE,
-              help="Generate scatter/violin plots [default: %default]"),
-  
+              help="Generate cohort summary and per-sample scatter/violin plots (Module 7) [default: %default]"),
+
+  make_option("--repeat_density", type="logical", default=TRUE,
+              help="Generate per-sample ggridges density plots (Module 7) [default: %default]"),
+
   make_option("--repeat_distribution_metrics", type="character",
               default="modal_length,mean_length,median_length",
               help="Distribution metrics (comma-separated) [default: %default]",
               metavar="METRICS"),
-  
+
   # ===========================================================================
   # Plot output control
   # ===========================================================================
-  
+
   make_option("--plot_dpi", type="integer", default=150,
               help="Resolution for diagnostic plot output (150=screen, 300=print) [default: %default]",
               metavar="N"),
-  
+
   make_option("--plot_per_sample", type="logical", default=TRUE,
-              help="Generate per-sample plot files. Consider FALSE for large datasets (>50 samples) [default: %default]"),
+              help="Generate per-sample plot files in Modules 2, 3, and 4 (Module 2: coverage/strand/alignment/segment plots; Module 3: scatter/histogram/violin/density; Module 4: violin/scatter). Consider FALSE for large datasets (>50 samples) [default: %default]"),
   
   # ===========================================================================
   # Runtime settings
@@ -502,6 +505,7 @@ params <- list(
   repeat_histogram = args$repeat_histogram,
   repeat_histogram_binwidth = args$repeat_histogram_binwidth,
   repeat_scatter = args$repeat_scatter,
+  repeat_density = args$repeat_density,
   repeat_distribution_metrics = repeat_distribution_metrics,
   check_duplicate_readnames = args$check_duplicate_readnames,
   plot_dpi = args$plot_dpi,
@@ -659,7 +663,8 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "repeat_histogram", params$repeat_histogram))
   cat(sprintf("%-35s: %s\n", "repeat_histogram_binwidth", params$repeat_histogram_binwidth))
   cat(sprintf("%-35s: %s\n", "repeat_scatter", params$repeat_scatter))
-  cat(sprintf("%-35s: %s\n", "repeat_distribution_metrics", 
+  cat(sprintf("%-35s: %s\n", "repeat_density", params$repeat_density))
+  cat(sprintf("%-35s: %s\n", "repeat_distribution_metrics",
               paste(params$repeat_distribution_metrics, collapse = ", ")))
   
   cat("\n═══════════════════════════════════════════════════════════════\n")

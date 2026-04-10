@@ -28,11 +28,17 @@ cat('<script>document.title = "Duke | Module 7: Repeat visualisation";</script>'
 
 **Module 7: Repeat visualisation**
 
-Provides visualisation of repeat length distributions through histograms and scatter plots. These complement the statistical analyses in Module 6 by showing individual reads and distribution shapes visually.
+Provides visualisation of repeat length distributions through histograms, scatter plots, and density plots. These complement the statistical analyses in Module 6 by showing individual reads and distribution shapes visually.
 
 **Input:** Repeat counts and cluster assignments (Modules 3 and 4), modal peaks and distribution summaries (Module 6)
 
 **Metric overlays** (modal, mean, median) are controlled by `params$repeat_distribution_metrics` in the pipeline settings.
+
+**Plot types:**
+
+- `repeat_histogram = TRUE` — frequency histograms, full range and per analysis range
+- `repeat_scatter = TRUE` — cohort summary box+jitter and per-sample horizontal scatter/violin plots
+- `repeat_density = TRUE` — per-sample ggridges density plots, full range and per analysis range
 
 **Outputs:**
 
@@ -80,6 +86,8 @@ message("Output directory: ", plots_dir)
 ```{r timing_init, echo=FALSE}
 module_start_time <- proc.time()["elapsed"]
 timings <- c()
+# Set default for repeat_density if not supplied by older runner scripts
+if (is.null(params$repeat_density)) params$repeat_density <- TRUE
 ```
 
 ---
@@ -580,7 +588,7 @@ ggridges density plots per sample. All plots saved to disk.
 ```
 
 ```{r density_by_sample, echo=FALSE, message=FALSE}
-if (params$repeat_scatter) {
+if (params$repeat_density) {
 
   density_by_sample_dir <- file.path(plots_dir, "density_by_sample")
 

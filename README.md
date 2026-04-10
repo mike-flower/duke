@@ -472,10 +472,10 @@ Quantitative analysis of repeat distributions within user-defined length ranges.
 
 Publication-quality repeat length distribution figures.
 
-- Full-range and per-range histograms (one file per sample)
-- Horizontal scatter/violin plots with modal, mean, and median overlays
-- ggridges density plots — one ridge per analysis range
-- Cohort summary box+jitter plot — scales to hundreds of samples
+- Full-range and per-range histograms (one file per sample) — controlled by `repeat_histogram`
+- Cohort summary box+jitter and per-sample horizontal scatter/violin plots — controlled by `repeat_scatter`
+- Per-sample ggridges density plots, full range and per analysis range — controlled by `repeat_density`
+- Metric overlays (modal, mean, median) on scatter and density plots — controlled by `repeat_distribution_metrics`
 - All plots saved to disk, not shown inline in HTML
 - **Output:** PNG files organised by plot type in `07_repeat_visualisation/plots/`
 
@@ -576,14 +576,15 @@ Publication-quality repeat length distribution figures.
 - `--control_aggregation_method` — `"mean"`, `"median"`, or `"trimmed_mean"` (default: `"median"`)
 
 #### Repeat visualisation (Module 7)
-- `--repeat_histogram` — Generate histograms (default: TRUE)
+- `--repeat_histogram` — Generate frequency histograms (full-range and per analysis range) (default: TRUE)
 - `--repeat_histogram_binwidth` — Bin width in repeat units (default: 1)
-- `--repeat_scatter` — Generate scatter/violin and density plots (default: TRUE)
-- `--repeat_distribution_metrics` — Metric overlays: `"modal_length"`, `"mean_length"`, `"median_length"` (default: all three)
+- `--repeat_scatter` — Generate cohort summary box+jitter and per-sample scatter/violin plots (default: TRUE)
+- `--repeat_density` — Generate per-sample ggridges density plots, full range and per analysis range (default: TRUE)
+- `--repeat_distribution_metrics` — Metric overlays on scatter and density plots: `"modal_length"`, `"mean_length"`, `"median_length"` (default: all three)
 
 #### Plot output
 - `--plot_dpi` — Resolution for diagnostic plots (default: 150; use 300 for publication)
-- `--plot_per_sample` — Generate per-sample plot files in Modules 2–4 (default: TRUE; consider FALSE for >50 samples)
+- `--plot_per_sample` — Generate per-sample plot files in Modules 2, 3, and 4 (Module 2: coverage/strand/alignment/segment; Module 3: scatter/histogram/violin/density; Module 4: violin/scatter). Consider FALSE for large datasets (>50 samples) (default: TRUE)
 
 #### Runtime
 - `--threads` — CPU cores (default: 12)
