@@ -48,7 +48,7 @@ cd ~/Scratch/bin/duke
   --threads 80 \
   --resume TRUE \
   --remove_intermediate TRUE \
-  --cleanup_temp FALSE
+  --remove_temp FALSE
 
 DUKE_EXIT_CODE=$?
 echo ""

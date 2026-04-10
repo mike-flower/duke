@@ -486,12 +486,12 @@ params <- list(
   #   - Safe to enable: data is saved to disk before deletion
   remove_intermediate = TRUE,
   
-  # cleanup_temp: Free up disk space after pipeline completion  
+  # remove_temp: Free up disk space after pipeline completion  
   #   - Deletes temp/ directory containing intermediate RData files
   #   - Applied at end of pipeline after all modules successfully complete
   #   - Useful for: repeated runs, limited disk space, production workflows
   #   - Keep FALSE for: debugging, inspecting intermediate results
-  cleanup_temp = FALSE
+  remove_temp = FALSE
   
   # log_dir is hard-coded to "logs" (see logging setup below)
   # verbose is not used; all informative messages are always printed
@@ -552,7 +552,7 @@ cat("  Output directory:", params$dir_out, "\n")
 cat("  Reference:", params$path_ref, "\n")
 cat("  Threads:", params$threads, "\n")
 cat("  Resume:", params$resume, "\n")
-cat("  Cleanup temp:", params$cleanup_temp, "\n")
+cat("  Cleanup temp:", params$remove_temp, "\n")
 cat("  Remove intermediate:", params$remove_intermediate, "\n")
 cat("  Modules to run:", paste(params$run_modules, collapse=", "), "\n")
 cat("\n")
@@ -785,7 +785,7 @@ cat("\n")
 # CLEANUP
 # ==============================================================================
 
-if (params$cleanup_temp) {
+if (params$remove_temp) {
   cat("\n")
   cat("=================================================================\n")
   cat("                      CLEANUP                                     \n")

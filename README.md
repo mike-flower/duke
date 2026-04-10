@@ -590,7 +590,7 @@ Publication-quality repeat length distribution figures.
 - `--threads` — CPU cores (default: 12)
 - `--resume` — Skip completed modules (default: TRUE)
 - `--remove_intermediate` — Free RAM between modules (default: TRUE)
-- `--cleanup_temp` — Delete temp files on completion (default: FALSE)
+- `--remove_temp` — Delete temp files on completion (default: FALSE)
 - `--run_modules` — Which modules to run (default: `1,2,3,4,5,6,7`)
 
 ---

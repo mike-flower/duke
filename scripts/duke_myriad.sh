@@ -44,4 +44,4 @@ echo ""
   --threads 12 \
   --resume TRUE \
   --remove_intermediate TRUE \
-  --cleanup_temp FALSE
+  --remove_temp FALSE

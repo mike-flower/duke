@@ -345,7 +345,7 @@ option_list <- list(
   make_option("--remove_intermediate", type="logical", default=TRUE,
               help="Free up RAM during pipeline execution [default: %default]"),
   
-  make_option("--cleanup_temp", type="logical", default=TRUE,
+  make_option("--remove_temp", type="logical", default=TRUE,
               help="Free up disk space after completion [default: %default]"),
   
   # ===========================================================================
@@ -515,7 +515,7 @@ params <- list(
   threads = args$threads,
   resume = args$resume,
   remove_intermediate = args$remove_intermediate,
-  cleanup_temp = args$cleanup_temp
+  remove_temp = args$remove_temp
 )
 
 # ==============================================================================
@@ -684,7 +684,7 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "threads", params$threads))
   cat(sprintf("%-35s: %s\n", "resume", params$resume))
   cat(sprintf("%-35s: %s\n", "remove_intermediate", params$remove_intermediate))
-  cat(sprintf("%-35s: %s\n", "cleanup_temp", params$cleanup_temp))
+  cat(sprintf("%-35s: %s\n", "remove_temp", params$remove_temp))
   cat(sprintf("%-35s: %s\n", "run_modules", paste(run_modules, collapse = ", ")))
   cat(sprintf("%-35s: %s\n", "log_dir", log_dir))
   
@@ -792,7 +792,7 @@ tryCatch({
   }
   
   # Cleanup
-  if (params$cleanup_temp) {
+  if (params$remove_temp) {
     temp_dir <- file.path(params$dir_out, "temp")
     if (dir.exists(temp_dir)) {
       unlink(temp_dir, recursive = TRUE)
