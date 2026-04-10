@@ -650,11 +650,12 @@ if (params$repeat_density) {
                .data[[repeat_method]] <= ri$range_max[1]) %>%
         mutate(analysis_range_name = rng)
     }) %>%
-      bind_rows() %>%
-      mutate(analysis_range_name = factor(analysis_range_name,
-                                          levels = rev(sort(unique(analysis_range_name)))))
+      bind_rows()
 
     if (nrow(density_ranges_data) > 0) {
+      density_ranges_data <- density_ranges_data %>%
+        mutate(analysis_range_name = factor(analysis_range_name,
+                                            levels = rev(sort(unique(analysis_range_name)))))
       n_ranges_sample <- length(sample_ranges)
 
       p_density_ranges <- ggplot(density_ranges_data,
