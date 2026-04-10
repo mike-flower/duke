@@ -8,6 +8,7 @@
 # Exclude specific files
 /scripts/duke_run_local.R
 /scripts/duke_run_local-fs.R
+scripts/duke_run_temp.R
 
 # Exclude specific folders
 /demo/
