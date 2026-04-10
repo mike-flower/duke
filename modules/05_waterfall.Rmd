@@ -1,5 +1,6 @@
 ---
-title: "Duke Pipeline - Module 5: Waterfall Plots"
+title: "Duke pipeline"
+subtitle: "Module 5: Waterfall Plots"
 author: "Michael Flower"
 date: "`r Sys.Date()`"
 output: 
@@ -13,13 +14,17 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = FALSE)
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 5: Waterfall Plots";</script>')
 ```
 
 ```{r load_packages, echo=FALSE, message=FALSE}
 # Required packages
-required_packages <- c("dplyr", "tidyr", "ggplot2", "data.table", "stringr", 
-                      "knitr", "DT", "scales", "pbapply")
+required_packages <- c("dplyr", "tidyr", "ggplot2", "data.table", "stringr",
+                      "knitr", "DT", "scales", "pbapply", "openxlsx")
 
 # Load packages
 invisible(lapply(required_packages, library, character.only = TRUE))
@@ -43,36 +48,56 @@ if (file.exists("lib/load_all.R")) {
 }
 ```
 
+```{r timing_init, echo=FALSE}
+module_start_time <- proc.time()["elapsed"]
+timings <- c()
+```
+
 ---
 
-# Module 5: Waterfall Plots
+# Overview
 
-Visualise read-level structure showing left flank, repeat region, and right flank for each read.
+**Module 5: Waterfall Plots**
 
-**Key features:**
+Generates read-level waterfall plots showing the base composition of each read across the left flank, repeat region (mid), and right flank. Reads are stacked vertically and ordered by repeat length, making allele structure and somatic instability immediately visible.
 
-- Colour-coded by base (A/C/T/G)
-- Ordered by repeat length
-- Per-cluster visualisation
-- Outlier removal optional
-- Downsampling for performance
+**Input:** Cluster assignments from Module 4 (joined with repeat counts and segment sequences from Module 3)
+
+**Output:** PNG waterfall plots per sample (`waterfall_{sample}.png`) and optionally per cluster (`waterfall_by_cluster/`)
+
+**Key parameters:**
+
+- `waterfall_downsample`: Maximum reads plotted per sample (default 1,000) — keeps file sizes manageable
+- `waterfall_per_cluster`: Generate separate plots per cluster within each sample
+- `dna_colours`: Base colour scheme (A/C/T/G/gap/N)
 
 ---
 
 # Load data
 
 ```{r load_data, echo=FALSE}
-# Load Module 4 output
 results_dir <- file.path(params$dir_out, "module_data")
-load(file.path(results_dir, "04_allele_calling_results.RData"))
 
-# Extract clustered data
-alignment_clustered <- module4_output$alignment_clustered
+# Load Module 3 slim (repositioned left/mid/right + repeat counts)
+module3_path <- file.path(results_dir, "03_repeat_detection_results.RData")
+if (!file.exists(module3_path)) stop("Module 3 output not found: ", module3_path)
+load(module3_path)
+counts_slim <- module3_output$alignment_counts_slim
 
-# Check data
+# Load Module 4 slim (cluster assignments)
+module4_path <- file.path(results_dir, "04_allele_calling_results.RData")
+if (!file.exists(module4_path)) stop("Module 4 output not found: ", module4_path)
+load(module4_path)
+clusters_slim <- module4_output$alignment_clustered_slim
+
+# Join: slim repeat counts + cluster assignments
+# left/mid/right are the repositioned (Module 3 trimmed) versions
+alignment_clustered <- counts_slim %>%
+  dplyr::left_join(clusters_slim, by = c("file_stem", "qname"))
+
 message("Loaded clustered alignment data:")
-message("  Samples: ", length(unique(alignment_clustered$file_stem)))
-message("  Total reads: ", nrow(alignment_clustered))
+message("  Samples: ",  length(unique(alignment_clustered$file_stem)))
+message("  Total reads: ", format(nrow(alignment_clustered), big.mark = ","))
 message("  Clusters: ", length(unique(alignment_clustered$cluster_number)))
 ```
 
@@ -80,82 +105,67 @@ message("  Clusters: ", length(unique(alignment_clustered$cluster_number)))
 
 # Prepare data for waterfall
 
-```{r prepare_waterfall_data, echo=FALSE}
-# Track total reads per sample before filtering
+```{r t_prepare_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r prepare_waterfall_data, echo=FALSE, message=FALSE}
+# Track total reads per sample
 total_reads_per_sample <- alignment_clustered %>%
   group_by(file_stem) %>%
   summarise(total_reads = n(), .groups = "drop")
 
-# Prepare data for waterfall plots using library function
-waterfall_data <- prepare_waterfall_data(
-  alignment_data = alignment_clustered,
+# Prepare data for waterfall — no outlier filtering here (done in Module 4 if enabled)
+waterfall_data <- suppressMessages(prepare_waterfall_data(
+  alignment_data      = alignment_clustered,
   repeat_count_method = params$repeat_count_method,
-  remove_outliers = params$waterfall_rm_flank_length_outliers,
-  group_vars = c("file_stem", "cluster_number")
-)
+  group_vars          = c("file_stem", "cluster_number")
+))
 
-# Summary with total reads
-waterfall_summary <- waterfall_data %>%
+# Per-sample read counts for subtitle
+n_per_sample <- waterfall_data %>%
   group_by(file_stem) %>%
-  summarise(
-    n_reads = n(),
-    n_clusters = n_distinct(cluster_number),
-    mean_left_length = mean(left_length, na.rm = TRUE),
-    mean_mid_length = mean(mid_length, na.rm = TRUE),
-    mean_right_length = mean(right_length, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  left_join(total_reads_per_sample, by = "file_stem") %>%
-  relocate(total_reads, .after = n_reads)
+  summarise(n_reads = n(), .groups = "drop")
 
-DT::datatable(
-  waterfall_summary,
-  caption = "Waterfall data summary",
-  options = list(
-    pageLength = 25,
-    scrollX = TRUE,
-    scrollY = "500px",
-    autoWidth = TRUE,
-    dom = 'Bfrtip',
-    buttons = c('copy', 'csv', 'excel')
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact',
-  style = 'bootstrap',
-  fillContainer = FALSE
-) %>%
-  DT::formatStyle(columns = colnames(waterfall_summary), fontSize = '85%') %>%
-  DT::formatRound(columns = c('mean_left_length', 'mean_mid_length', 'mean_right_length'), digits = 1)
+# Summary table
+waterfall_summary <- n_per_sample %>%
+  left_join(total_reads_per_sample, by = "file_stem") %>%
+  left_join(
+    waterfall_data %>%
+      group_by(file_stem) %>%
+      summarise(n_clusters  = n_distinct(cluster_number),
+                mean_mid_bp = round(mean(mid_length, na.rm = TRUE), 1),
+                .groups = "drop"),
+    by = "file_stem")
+```
+
+```{r t_prepare_end, echo=FALSE}
+timings["Prepare data"] <- proc.time()["elapsed"] - .t
 ```
 
 ---
 
 # Waterfall plots
 
-Generate waterfall plots showing read structure per sample and cluster.
+```{r t_plots_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
 
-## Plotting function
-
-Waterfall plots are generated using the `create_waterfall_plot()` function from `lib/waterfall.R`.
-
-## Generate plots
-
-```{r generate_waterfall_plots, echo=FALSE, results='asis', fig.width=14, fig.height=10}
+```{r generate_waterfall_plots, echo=FALSE, message=FALSE}
 # Generate waterfall plot for each sample
 for (sample in unique(waterfall_data$file_stem)) {
-  
-  cat("\n\n###", sample, "\n\n")
-  
+
   sample_data <- waterfall_data %>% filter(file_stem == sample)
-  
+
   # Get total reads for this sample
-  sample_total <- total_reads_per_sample %>% 
-    filter(file_stem == sample) %>% 
+  sample_total <- total_reads_per_sample %>%
+    filter(file_stem == sample) %>%
     pull(total_reads)
-  
-  message("Generating waterfall for ", sample, " (", nrow(sample_data), " reads)")
-  
+
+  # Get reads for this sample
+  n_available <- n_per_sample %>% filter(file_stem == sample) %>% pull(n_reads)
+  n_plotted   <- min(n_available, params$waterfall_downsample, na.rm = TRUE)
+
   # Create plot using library function
   p <- create_waterfall_plot(
     data = sample_data,
@@ -166,71 +176,61 @@ for (sample in unique(waterfall_data$file_stem)) {
     y_axis_labels = params$waterfall_y_axis_labels,
     total_reads = sample_total
   )
-  
-  # Don't print to HTML (would make file huge with many samples)
-  # Just save to file and show message
-  message("  → Saved waterfall plot")
-  
+
+  # Override subtitle
+  p <- p + labs(subtitle = sprintf(
+    "%s reads plotted  |  %s total",
+    format(n_plotted, big.mark = ","),
+    format(sample_total, big.mark = ",")))
+
   # Export
   ggsave(
     filename = file.path(plots_dir, paste0("waterfall_", sample, ".png")),
     plot = p,
     width = 14,
     height = 10,
-    dpi = 300,
+    dpi = params$plot_dpi,
     bg = "white"
   )
-  
-  cat("\n\n")
 }
 ```
 
-## Per-cluster plots
-
-Generate separate waterfall plots for each cluster within each sample (optional).
-
-```{r generate_cluster_waterfall_plots, echo=FALSE, results='asis', fig.width=12, fig.height=8}
+```{r generate_cluster_waterfall_plots, echo=FALSE, message=FALSE}
 # Only generate if enabled
 if (params$waterfall_per_cluster) {
-  
+
   # Create subdirectory for cluster plots
   waterfall_by_cluster_dir <- file.path(plots_dir, "waterfall_by_cluster")
   dir.create(waterfall_by_cluster_dir, showWarnings = FALSE, recursive = TRUE)
-  
+
   # Generate per-cluster waterfall plots
   for (sample in unique(waterfall_data$file_stem)) {
-    
-    cat("\n\n###", sample, "- by cluster\n\n")
-    
+
     sample_data <- waterfall_data %>% filter(file_stem == sample)
-    
+
     # Get total reads for this sample
-    sample_total <- total_reads_per_sample %>% 
-      filter(file_stem == sample) %>% 
+    sample_total <- total_reads_per_sample %>%
+      filter(file_stem == sample) %>%
       pull(total_reads)
-    
+
     # Get clusters for this sample
     clusters <- sort(unique(sample_data$cluster_number))
-    
+
     for (clust in clusters) {
-      
+
       cluster_data <- sample_data %>% filter(cluster_number == clust)
-      
+
       if (nrow(cluster_data) < 5) next  # Skip small clusters
-      
-      cat("\n\n####", paste("Cluster", clust), "\n\n")
-      
+
       # Calculate actual plotted count (after downsampling)
       cluster_total <- nrow(cluster_data)
-      cluster_plotted <- if (!is.na(params$waterfall_downsample) && 
+      cluster_plotted <- if (!is.na(params$waterfall_downsample) &&
                              cluster_total > params$waterfall_downsample) {
         params$waterfall_downsample
       } else {
         cluster_total
       }
-      
-      message("  Cluster ", clust, ": ", cluster_plotted, " reads (", cluster_total, " total)")
-      
+
       # Create plot using library function
       p_cluster <- create_waterfall_plot(
         data = cluster_data,
@@ -241,78 +241,80 @@ if (params$waterfall_per_cluster) {
         y_axis_labels = params$waterfall_y_axis_labels,
         total_reads = sample_total
       ) +
-        labs(subtitle = paste(cluster_plotted, "reads plotted from", 
-                             cluster_total, "in cluster", clust, 
+        labs(subtitle = paste(cluster_plotted, "reads plotted from",
+                             cluster_total, "in cluster", clust,
                              paste0("(", sample_total, " total in sample)")))
-      
-      # Don't print to HTML (would make file huge)
-      # Just save to file
-      message("    → Saved cluster waterfall plot")
-      
+
       # Export
       ggsave(
         filename = file.path(waterfall_by_cluster_dir, paste0(sample, "_cluster", clust, "-waterfall.png")),
         plot = p_cluster,
         width = 12,
         height = 8,
-        dpi = 300,
+        dpi = params$plot_dpi,
         bg = "white"
       )
-      
-      cat("\n\n")
     }
   }
-  
-  message("All waterfall plots exported to: ", plots_dir)
-  
+
 } else {
-  cat("\n\nPer-cluster waterfall plots skipped (waterfall_per_cluster = FALSE)\n\n")
-  message("Per-cluster plots skipped. Set waterfall_per_cluster = TRUE to enable.")
+  message("Per-cluster plots skipped (waterfall_per_cluster = FALSE)")
 }
 ```
 
----
-
-# Summary
-
-**Waterfall plots generated:**
-
-- Per-sample plots showing all reads
-- Per-cluster plots for detailed inspection
-- Color-coded by base composition
-- Ordered by repeat length
-
-**Outputs saved to:**
-- `05_plots/` - PNG files
-- `05_waterfall/` - Analysis files (if any)
+```{r t_plots_end, echo=FALSE}
+timings["Generate plots"] <- proc.time()["elapsed"] - .t
+```
 
 ---
 
 # Save outputs
 
 ```{r save_outputs, echo=FALSE}
-# Compile module output
-module5_output <- list(
-  waterfall_data = waterfall_data,
-  waterfall_summary = waterfall_summary
-)
-
-# Save complete module output
-results_dir <- file.path(params$dir_out, "module_data")
-if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE)
-
-output_path <- file.path(results_dir, "05_waterfall_results.RData")
-save(module5_output, file = output_path)
-
-message("Module 5 outputs saved to: ", output_path)
+message("Module 5 complete. Waterfall plots saved to: ", plots_dir)
 ```
 
 **Module 5 Complete!**
 
-Results saved to: `r output_path`
-
 - **`r length(unique(waterfall_data$file_stem))`** samples processed
-- **`r nrow(waterfall_data)`** reads visualised
-- **`r sum(waterfall_summary$n_clusters)`** total clusters across all samples
+- **`r nrow(waterfall_data)`** reads in waterfall data
+- Plots saved to `05_waterfall/plots/`
 
 ---
+
+# Module diagnostics
+
+## Timing
+
+```{r timing_table, echo=FALSE}
+timing_df <- build_timing_table(timings)
+DT::datatable(
+  timing_df,
+  caption = "Section timing — Module 5",
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Section", "Seconds", "Elapsed (mm:ss)", "Cumulative (mm:ss)")
+) %>%
+  DT::formatStyle("section", target = "row",
+                  fontWeight = DT::styleEqual("Total", "bold"))
+```
+
+```{r diagnostics_export, echo=FALSE}
+waterfall_excel_path <- file.path(params$dir_out, "05_waterfall", "waterfall.xlsx")
+dir.create(dirname(waterfall_excel_path), showWarnings = FALSE, recursive = TRUE)
+write_excel_function(
+  named_list = list("timing" = timing_df),
+  path = waterfall_excel_path,
+  overwrite_sheet = TRUE
+)
+message(sprintf("Module 5 complete — total time: %s", format_elapsed(sum(timings))))
+```
+
+---
+
+# Session info
+
+```{r session_info, echo=FALSE}
+sessionInfo()
+```

@@ -50,29 +50,33 @@ correct_strand_orientation <- function(sample_name,
       dplyr::mutate(query_length = nchar(query_sequence))
   }
   
-  # Correct sequence and coordinates for reverse strand reads
-  alignment_corrected <- alignment_info %>%
-    rowwise() %>%
-    dplyr::mutate(
-      # Reverse complement sequences if on reverse strand
-      query_sequence = ifelse(strand == "-", 
-                             reverse_complement(query_sequence), 
-                             query_sequence),
-      aligned_subsequence = ifelse(!is.na(aligned_subsequence) && strand == "-",
-                                  reverse_complement(aligned_subsequence),
-                                  aligned_subsequence),
-      
-      # For reverse strand: coordinates stay AS-IS after RC
-      # Minimap2 reports coordinates in RC space for antisense alignments
-      # After we RC the sequence, those coordinates are now correct for the RC'd sequence
-      # Original: query_start=100, query_end=200 (in RC space)
-      # After RC: query_start=100, query_end=200 (now in real space on RC'd sequence)
-      # NO coordinate transformation needed!
-      
-      # Mark corrected reverse strands as "+c"
-      strand = ifelse(as.character(strand) == "-", "+c", as.character(strand))
-    ) %>%
-    ungroup()
+  # Correct sequence and coordinates for reverse strand reads (vectorized)
+  alignment_corrected <- alignment_info
+
+  # Convert strand from factor to character first — assigning "+c" to a factor
+  # without that level would silently produce NAs
+  alignment_corrected$strand <- as.character(alignment_corrected$strand)
+
+  rev_idx <- which(alignment_corrected$strand == "-")
+
+  if (length(rev_idx) > 0) {
+    # Reverse complement query_sequence for all reverse-strand reads in one C-level call
+    alignment_corrected$query_sequence[rev_idx] <-
+      as.character(reverseComplement(DNAStringSet(alignment_corrected$query_sequence[rev_idx])))
+
+    # Reverse complement aligned_subsequence where it exists
+    has_subseq <- rev_idx[!is.na(alignment_corrected$aligned_subsequence[rev_idx])]
+    if (length(has_subseq) > 0) {
+      alignment_corrected$aligned_subsequence[has_subseq] <-
+        as.character(reverseComplement(DNAStringSet(alignment_corrected$aligned_subsequence[has_subseq])))
+    }
+
+    # For reverse strand: minimap2 coordinates are already in RC space, so
+    # they remain valid for the RC'd sequence — no coordinate transformation needed.
+
+    # Mark corrected reads
+    alignment_corrected$strand[rev_idx] <- "+c"
+  }
   
   # Save cache
   save(alignment_corrected, file = cache_path)

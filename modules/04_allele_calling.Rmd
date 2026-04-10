@@ -1,5 +1,6 @@
 ---
-title: "Duke Pipeline - Module 4: Allele Calling"
+title: "Duke pipeline"
+subtitle: "Module 4: Allele Calling"
 author: "Michael Flower"
 date: "`r Sys.Date()`"
 output: 
@@ -13,7 +14,11 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = FALSE)
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 4: Allele Calling";</script>')
 ```
 
 ```{r load_packages, message=FALSE, warning=FALSE, echo=FALSE}
@@ -38,31 +43,44 @@ if (file.exists("lib/load_all.R")) {
 }
 ```
 
-# Module 4: Allele Calling
+```{r timing_init, echo=FALSE}
+module_start_time <- proc.time()["elapsed"]
+timings <- c()
+```
+
+# Overview
 
 This module performs **clustering** to assign reads to distinct alleles, generates **consensus sequences**, and **calls variants** against the reference.
-
-## Overview
 
 **Input:** Repeat count data from Module 3
 
 **Processing:**
 
 1. Cluster reads by repeat length, haplotype, or both
-2. Assign cluster numbers ordered by mean repeat length
+2. Assign cluster numbers ordered by abundance (cluster 1 = most reads)
 3. Generate consensus sequences for each cluster
 4. Call variants in consensus sequences (if reference provided)
 5. Calculate cluster-specific summary statistics
 
-**Output:** Read-level cluster assignments, consensus sequences, and variants
+**Outputs:**
+
+- `alignment_clustered_slim` — cluster assignments per read (join keys + cluster number; join with Module 2/3 for full data)
+- Cluster summary statistics table (`cluster_summary`)
+- Cluster count per sample plot (`cluster_count_per_sample.png`)
+- Per-sample violin and scatter plots (`violin_by_sample/`, `scatter_by_sample/`)
+- Consensus sequences — Excel (`consensus.xlsx`) and FASTA (full, left, mid, right per cluster)
+- Variant calls — Excel (`variant.xlsx`), CSV, and VCF files (per sample and combined)
+- `04_allele_calling_results.RData` for downstream modules
 
 **Key Parameters:**
 
-- `cluster_by`: Clustering strategy - "repeat", "haplotype", or "both"
-- `haplotype_cluster_max`: Maximum haplotype clusters to detect (auto-detect)
-- `repeat_cluster_max`: Maximum repeat-length clusters to detect (auto-detect)
-- `cluster_consensus`: Whether to generate consensus sequences
-- `call_variants`: Whether to call variants against reference
+- `cluster_by`: Clustering strategy — `"repeat"` (by repeat count), `"haplotype"` (by flanking sequence variants), or `"both"` (two-step)
+- `repeat_cluster_max`: Maximum number of repeat-length clusters to detect per sample
+- `haplotype_cluster_max`: Maximum number of haplotype clusters to detect
+- `cluster_consensus`: Generate consensus sequences (`TRUE`/`FALSE`)
+- `consensus_threshold`: Minimum agreement for consensus base call (0.5 = majority rule)
+- `consensus_downsample`: Maximum reads used per cluster for consensus alignment (performance vs accuracy tradeoff)
+- `call_variants`: Call variants in consensus sequences against the reference (`TRUE`/`FALSE`)
 
 ---
 
@@ -83,48 +101,63 @@ dir.create(variants_dir, showWarnings = FALSE, recursive = TRUE)
 ```
 
 ```{r load_data, echo=FALSE, results='asis'}
-message("Loading Module 3 output...")
+# Load Module 2 results (alignment_split with sequences)
+module2_path <- file.path(results_dir, "02_alignment_results.RData")
+if (!file.exists(module2_path)) {
+  stop("Module 2 output not found: ", module2_path,
+       "\nPlease run Module 2 first!")
+}
+load(module2_path)
+alignment_split <- module2_output$alignment_split
+message("Loaded ", format(nrow(alignment_split), big.mark = ","),
+        " reads from Module 2 (alignment_split)")
 
-# Load Module 3 results
+# Load Module 3 results (slim repeat counts)
 module3_path <- file.path(results_dir, "03_repeat_detection_results.RData")
 if (!file.exists(module3_path)) {
-  stop("Module 3 output not found: ", module3_path, 
+  stop("Module 3 output not found: ", module3_path,
        "\nPlease run Module 3 first!")
 }
-
 load(module3_path)
-alignment_counts <- module3_output$alignment_counts
+counts_slim <- module3_output$alignment_counts_slim
+message("Loaded ", format(nrow(counts_slim), big.mark = ","),
+        " rows from Module 3 (alignment_counts_slim)")
 
-message("Loaded ", format(nrow(alignment_counts), big.mark = ","), " reads from Module 3")
+# Join: start from alignment_split, replace left/mid/right with Module 3
+# repositioned versions, and add repeat count columns.
+# alignment_split$left/mid/right reflect Module 2 alignment boundaries;
+# counts_slim$left/mid/right have been trimmed to the detected repeat tract.
+alignment_counts <- alignment_split %>%
+  dplyr::select(-left, -mid, -right) %>%
+  dplyr::left_join(counts_slim, by = c("file_stem", "qname"))
+
+n_unmatched <- sum(is.na(alignment_counts$repeat_count))
+if (n_unmatched > 0) {
+  message("Note: ", format(n_unmatched, big.mark = ","),
+          " reads have no repeat count (NA after join)")
+}
+message("Combined: ", format(nrow(alignment_counts), big.mark = ","), " reads ready for clustering")
 
 # Format sample list for HTML
-samples <- unique(alignment_counts$file_stem)
+samples   <- unique(alignment_counts$file_stem)
 n_samples <- length(samples)
 if (n_samples <= 10) {
-  cat("\n\n**", n_samples, " samples:**\n\n", 
-      paste(samples, collapse = ", "), "\n\n", sep="")
+  cat("\n\n**", n_samples, " samples:**\n\n",
+      paste(samples, collapse = ", "), "\n\n", sep = "")
 } else {
-  cat("\n\n**", n_samples, " samples:**\n\n", 
-      paste(head(samples, 10), collapse = ", "), 
-      ", ... and ", n_samples - 10, " more\n\n", sep="")
+  cat("\n\n**", n_samples, " samples:**\n\n",
+      paste(head(samples, 10), collapse = ", "),
+      ", ... and ", n_samples - 10, " more\n\n", sep = "")
 }
 
-# Load reference sequence from Module 2 if variant calling is enabled
+# Load reference sequence for variant calling (already loaded Module 2 above)
 reference_seq <- NULL
 if (params$call_variants) {
-  module2_path <- file.path(results_dir, "02_alignment_results.RData")
-  if (file.exists(module2_path)) {
-    load(module2_path)
-    if (!is.null(module2_output$ref_full_sequence)) {
-      reference_seq <- module2_output$ref_full_sequence
-      message("Loaded reference sequence from Module 2: ", nchar(reference_seq), " bp")
-    } else {
-      message("Warning: Module 2 output does not contain full reference sequence")
-      message("Variant calling will be skipped")
-    }
+  if (!is.null(module2_output$ref_full_sequence)) {
+    reference_seq <- module2_output$ref_full_sequence
+    message("Reference sequence: ", nchar(reference_seq), " bp")
   } else {
-    message("Warning: Module 2 output not found")
-    message("Variant calling will be skipped")
+    message("Warning: Module 2 output does not contain full reference sequence — variant calling will be skipped")
   }
 }
 ```
@@ -134,6 +167,10 @@ if (params$call_variants) {
 # Clustering
 
 Assign reads to clusters (alleles) using the strategy: **`r params$cluster_by`**
+
+```{r t_cluster_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
 
 ```{r clustering, echo=FALSE}
 # Check resume
@@ -254,6 +291,10 @@ if (file.exists(cache_path) && params$resume) {
 }
 ```
 
+```{r t_cluster_end, echo=FALSE}
+timings["Clustering"] <- proc.time()["elapsed"] - .t
+```
+
 **Clustering Strategy Explanation:**
 
 ```{r clustering_explanation, echo=FALSE, results='asis'}
@@ -292,7 +333,7 @@ if (length(params$cluster_by) == 2) {
 
 ---
 
-## Cluster Summary
+## Cluster summary
 
 Statistics for each cluster per sample.
 
@@ -340,18 +381,19 @@ cluster_summary <- cluster_summary %>%
   relocate(read_proportion, .after = read_count)
 
 # Also renumber in alignment_clustered to match
+# Note: rename() avoided here due to S4 dispatch conflict with Bioconductor packages;
+# column renaming done inside select() instead.
 cluster_mapping <- cluster_summary %>%
-  select(file_stem, cluster_number_original, cluster_number)
+  dplyr::select(file_stem,
+                cluster_number_old = cluster_number_original,
+                cluster_number_new = cluster_number)
 
 alignment_clustered <- alignment_clustered %>%
-  left_join(
-    cluster_mapping %>% rename(cluster_number_old = cluster_number_original, 
-                                cluster_number_new = cluster_number),
-    by = c("file_stem", "cluster_number" = "cluster_number_old")
-  ) %>%
-  select(-cluster_number) %>%
-  rename(cluster_number = cluster_number_new) %>%
-  relocate(cluster_number, .after = all_of(params$repeat_count_method))
+  dplyr::left_join(cluster_mapping,
+                   by = c("file_stem", "cluster_number" = "cluster_number_old")) %>%
+  dplyr::select(-cluster_number) %>%
+  dplyr::rename(cluster_number = cluster_number_new) %>%
+  dplyr::relocate(cluster_number, .after = all_of(params$repeat_count_method))
 
 message("Clusters renumbered by abundance (cluster 1 = most reads)")
 message("Updated cluster numbers in both cluster_summary and alignment_clustered")
@@ -408,10 +450,14 @@ datatable(cluster_summary,
 
 ---
 
-## Cluster Visualisation
+## Cluster visualisation
+
+The **cluster count plot** (shown inline) summarises how many clusters were detected per sample — a quick check on whether clustering is behaving as expected. For diploid samples with two alleles, expect 2 dominant clusters.
+
+**Per-sample violin and scatter plots** are saved to `cluster/violin_by_sample/` and `cluster/scatter_by_sample/`. Each shows all clusters for one sample: violin plots show the full repeat count distribution per cluster; scatter plots show mean ± SD with point size proportional to read count.
 
 ```{r cluster_plots, echo=FALSE, fig.height=8, fig.width=12, warning=FALSE}
-# Generate colors for any number of clusters
+# Generate colours for any number of clusters
 n_clusters <- length(unique(alignment_clustered$cluster_number[!is.na(alignment_clustered$cluster_number)]))
 if (n_clusters <= 12) {
   cluster_colors <- RColorBrewer::brewer.pal(max(3, n_clusters), "Set3")
@@ -420,9 +466,9 @@ if (n_clusters <= 12) {
   cluster_colors <- viridisLite::viridis(n_clusters, option = "turbo")
 }
 
-# Create plots directory
-plots_dir <- file.path(params$dir_out, file.path("04_allele_calling", "plots"))
-dir.create(plots_dir, showWarnings = FALSE, recursive = TRUE)
+# Ensure cluster directory is available
+cluster_dir <- file.path(params$dir_out, "04_allele_calling", "cluster")
+dir.create(cluster_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Determine dynamic plot dimensions based on number of samples
 n_samples <- length(unique(alignment_clustered$file_stem))
@@ -439,7 +485,7 @@ if (n_samples <= 30) {
 } else if (n_samples <= 100) {
   plot_strategy <- "limited_combined"
   message("Note: ", n_samples, " samples detected.")
-  message("  Combined violin plot will be crowded but generated for overview.")
+  message("Note: ", n_samples, " samples detected. Per-sample plots will be generated.")
   message("  Individual plots per sample will be clearer for detailed analysis.")
 } else if (n_samples <= 200) {
   plot_strategy <- "individual_only"
@@ -466,213 +512,160 @@ violin_width <- 12
 scatter_width <- min(40, max(8, n_samples * 0.8))  # Between 8-40 inches
 scatter_height <- 6
 
-# Violin plot colored by cluster - faceted by sample for clarity
-# Add read count indicators (circle size) at bottom
+# Only cluster_counts and y_indicator are needed for per-sample violin plots
 cluster_counts <- alignment_clustered %>%
   group_by(file_stem, cluster_number) %>%
   summarise(n = n(), .groups = "drop")
 
-# Get y-axis range for positioning
 y_min <- min(alignment_clustered[[params$repeat_count_method]], na.rm = TRUE)
 y_max <- max(alignment_clustered[[params$repeat_count_method]], na.rm = TRUE)
-y_indicator <- y_min - (y_max - y_min) * 0.1  # Position below data
+y_indicator <- y_min - (y_max - y_min) * 0.1
 
 alignment_with_counts <- alignment_clustered %>%
   left_join(cluster_counts, by = c("file_stem", "cluster_number"))
 
-# Only generate combined plot if strategy allows (≤200 samples)
-if (plot_strategy %in% c("all", "limited_combined", "individual_only")) {
-  
-  # Create combined violin plot
-  p_violin_combined <- ggplot(alignment_with_counts, aes(x = factor(cluster_number), 
-                                y = !!sym(params$repeat_count_method), 
-                                fill = factor(cluster_number))) +
-  geom_violin(alpha = 0.7, scale = "width") +
-  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.9, fill = "white") +
-  # Add read count indicators (circles scaled to n)
-  geom_point(data = cluster_counts, 
-             aes(x = factor(cluster_number), y = y_indicator, size = n),
-             shape = 21, fill = "grey30", color = "black", alpha = 0.8, 
-             inherit.aes = FALSE) +
-  geom_text(data = cluster_counts,
-            aes(x = factor(cluster_number), y = y_indicator, label = n),
-            size = 2.5, color = "black", fontface = "bold",
-            angle = 90, vjust = 0.5,
-            inherit.aes = FALSE) +
-  facet_wrap(~ file_stem, scales = "free_x", ncol = violin_ncol) +
-  scale_fill_manual(values = cluster_colors, name = "Cluster") +
-  scale_size_continuous(name = "Read count", range = c(3, 15)) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 15)) +
-  labs(title = "Repeat count distribution by cluster",
-       subtitle = paste("Clustering strategy:", params$cluster_by, 
-                       "- Each panel is one sample. Circle size at bottom = read count"),
-       x = "Cluster",
-       y = paste0("Repeat count (", params$repeat_count_method, ")")) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(size = 9, angle = 45, hjust = 1),
-        strip.text = element_text(face = "bold"),
-        legend.position = "right")
+# Per-sample violin plots (gated by plot_per_sample and plot_strategy)
+# No colour by cluster — avoids large legends when many clusters exist.
+# Point size at baseline encodes read count.
+violin_by_sample_dir <- file.path(cluster_dir, "violin_by_sample")
 
-# Display combined plot
-print(p_violin_combined)
+if (params$plot_per_sample && plot_strategy != "summary_only") {
+  dir.create(violin_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
-# Save combined violin plot
-ggsave(
-  filename = file.path(plots_dir, "violin.png"),
-  plot = p_violin_combined,
-  width = violin_width,
-  height = violin_height,
-  dpi = 300,
-  bg = "white"
-)
-
-} else {
-  message("Skipped combined violin plot (>200 samples)")
-}
-
-# Create subdirectory for per-sample plots
-violin_by_sample_dir <- file.path(plots_dir, "violin_by_sample")
-dir.create(violin_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
-
-# Create and save individual violin plots per sample
-# Skip if >200 samples (too many files)
-if (plot_strategy != "summary_only") {
-  
   for (sample in unique(alignment_clustered$file_stem)) {
-    sample_data <- alignment_with_counts %>% filter(file_stem == sample)
-    sample_counts <- cluster_counts %>% filter(file_stem == sample)
-    
-    p_violin_sample <- ggplot(sample_data, aes(x = factor(cluster_number), 
-                                               y = !!sym(params$repeat_count_method), 
-                                               fill = factor(cluster_number))) +
-      geom_violin(alpha = 0.7, scale = "width") +
+    sample_data   <- alignment_with_counts %>% filter(file_stem == sample)
+    sample_counts <- cluster_counts        %>% filter(file_stem == sample)
+
+    p_violin_sample <- ggplot(sample_data, aes(x = factor(cluster_number),
+                                               y = !!sym(params$repeat_count_method))) +
+      geom_violin(fill = "#619CFF", alpha = 0.6, scale = "width") +
       geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.9, fill = "white") +
-      geom_point(data = sample_counts, 
+      geom_point(data = sample_counts,
                  aes(x = factor(cluster_number), y = y_indicator, size = n),
-                 shape = 21, fill = "grey30", color = "black", alpha = 0.8, 
+                 shape = 21, fill = "grey30", color = "black", alpha = 0.8,
                  inherit.aes = FALSE) +
       geom_text(data = sample_counts,
                 aes(x = factor(cluster_number), y = y_indicator, label = n),
                 size = 3, color = "black", fontface = "bold",
-                angle = 90, vjust = 0.5,
-                inherit.aes = FALSE) +
-      scale_fill_manual(values = cluster_colors, name = "Cluster") +
+                angle = 90, vjust = 0.5, inherit.aes = FALSE) +
       scale_size_continuous(name = "Read count", range = c(4, 15)) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 15)) +
       labs(title = paste("Repeat count distribution -", sample),
-           x = "Cluster",
-           y = paste0("Repeat count (", params$repeat_count_method, ")")) +
+           x     = "Cluster",
+           y     = paste0("Repeat count (", params$repeat_count_method, ")")) +
       theme_minimal() +
-      theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+      theme(axis.text.x   = element_text(size = 10, angle = 45, hjust = 1),
             legend.position = "right")
-    
+
     ggsave(
       filename = file.path(violin_by_sample_dir, paste0(sample, "-violin.png")),
-      plot = p_violin_sample,
-      width = 10,
-      height = 6,
-      dpi = 300,
-      bg = "white"
+      plot     = p_violin_sample,
+      width    = 10,
+      height   = 6,
+      dpi      = params$plot_dpi,
+      bg       = "white"
     )
   }
-  
-  message("Violin plots exported to: ", violin_by_sample_dir)
-  
+  message("Per-sample violin plots saved to: ", violin_by_sample_dir)
+
+} else if (plot_strategy == "summary_only") {
+  message("Skipped individual violin plots (>200 samples)")
 } else {
-  message("Skipped individual violin plots (>200 samples - would generate ", n_samples, " files)")
-  message("  For per-sample plots, filter your data to a subset of samples before Module 4")
+  message("Per-sample violin plots skipped (plot_per_sample = FALSE)")
 }
 ```
 
-```{r cluster_scatter, echo=FALSE, fig.height=8, fig.width=12, warning=FALSE}
-# Scatter plot with position dodge to separate overlapping error bars
-# Color error bars by cluster to match points
+```{r cluster_scatter, echo=FALSE, fig.height=4, fig.width=6, warning=FALSE}
 
-# Add position dodge to separate overlapping points/error bars
-dodge_width <- 0.6
+# --- 1. Cluster count per sample (always shown — scales to any n) ---
+cluster_count_per_sample <- cluster_summary %>%
+  dplyr::group_by(file_stem) %>%
+  dplyr::summarise(n_clusters = dplyr::n(), .groups = "drop")
 
-p_scatter_combined <- ggplot(cluster_summary, aes(x = file_stem, y = repeat_count_mean, 
-                             fill = factor(cluster_number), 
-                             color = factor(cluster_number),  # Add color for error bars
-                             size = read_count,
-                             group = cluster_number)) +  # Group by cluster for dodging
-  geom_errorbar(aes(ymin = repeat_count_mean - repeat_count_sd,
-                    ymax = repeat_count_mean + repeat_count_sd),
-                width = 0.3, alpha = 0.6, linewidth = 0.8,
-                position = position_dodge(width = dodge_width)) +  # Dodge error bars
-  geom_point(alpha = 0.8, shape = 21, stroke = 0.8,
-             position = position_dodge(width = dodge_width)) +  # Dodge points
-  geom_text(aes(label = read_count), size = 2.5, color = "black", fontface = "bold",
-            position = position_dodge(width = dodge_width)) +  # Dodge labels
-  scale_fill_manual(values = cluster_colors, name = "Cluster") +
-  scale_color_manual(values = cluster_colors, guide = "none") +  # Match error bar colors, hide legend
-  scale_size_continuous(name = "Read count", range = c(5, 20), 
-                       breaks = c(100, 1000, 5000, 10000)) +
-  scale_x_discrete(guide = guide_axis(angle = 45)) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 15)) +
-  labs(title = "Cluster centres by sample",
-       subtitle = "Error bars colored by cluster and dodged to reduce overlap. Circle size = read count, error bars = ± 1 SD",
-       x = "Sample",
-       y = paste0("Mean repeat count (", params$repeat_count_method, ")")) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(size = 10),
-        legend.position = "right")
+p_cluster_count <- ggplot(cluster_count_per_sample, aes(x = "", y = n_clusters)) +
+  geom_boxplot(outlier.shape = NA, width = 0.35, fill = "grey92", colour = "grey40") +
+  geom_jitter(width = 0.08, height = 0, size = 3, colour = "#619CFF", alpha = 0.8) +
+  stat_summary(fun = mean, geom = "point", shape = 18, colour = "red", size = 4, alpha = 0.6) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  labs(title    = "Number of clusters per sample",
+       subtitle = sprintf("Each point = one sample  |  n = %d\nRed diamond = mean",
+                          n_samples),
+       x        = NULL,
+       y        = "Number of clusters") +
+  theme_bw() +
+  theme(axis.ticks.x = element_blank())
 
-# Display combined plot
-print(p_scatter_combined)
+print(p_cluster_count)
 
-# Save combined scatter plot with dynamic width
 ggsave(
-  filename = file.path(plots_dir, "scatter.png"),
-  plot = p_scatter_combined,
-  width = scatter_width,
-  height = scatter_height,
-  dpi = 300,
-  bg = "white"
+  filename = file.path(cluster_dir, "cluster_count_per_sample.png"),
+  plot     = p_cluster_count,
+  width    = 4,
+  height   = 4,
+  dpi      = params$plot_dpi,
+  bg       = "white"
 )
 
-# Create subdirectory for per-sample plots
-scatter_by_sample_dir <- file.path(plots_dir, "scatter_by_sample")
-dir.create(scatter_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
+# --- 2. Per-sample scatter plots (gated by plot_per_sample) ---
+# Coloured by cluster number is avoided to prevent large legends when many clusters exist.
+# Point size encodes read count; cluster number is labelled directly on each point.
+scatter_by_sample_dir <- file.path(cluster_dir, "scatter_by_sample")
 
-# Create and save individual scatter plots per sample
-for (sample in unique(cluster_summary$file_stem)) {
-  sample_data <- cluster_summary %>% filter(file_stem == sample)
-  
-  p_scatter_sample <- ggplot(sample_data, aes(x = factor(cluster_number), y = repeat_count_mean, 
-                               fill = factor(cluster_number), size = read_count)) +
-    geom_errorbar(aes(ymin = repeat_count_mean - repeat_count_sd,
-                      ymax = repeat_count_mean + repeat_count_sd),
-                  width = 0.3, alpha = 0.6, linewidth = 0.8,
-                  color = "grey40") +
-    geom_point(alpha = 0.8, shape = 21, color = "black", stroke = 0.8) +
-    geom_text(aes(label = read_count), size = 3, color = "black", fontface = "bold") +
-    scale_fill_manual(values = cluster_colors, name = "Cluster") +
-    scale_size_continuous(name = "Read count", range = c(6, 20)) +
-    labs(title = paste("Cluster centers -", sample),
-         x = "Cluster",
-         y = paste0("Mean repeat count (", params$repeat_count_method, ")")) +
-    theme_minimal() +
-    theme(axis.text.x = element_text(size = 11),
-          legend.position = "right")
-  
-  ggsave(
-    filename = file.path(scatter_by_sample_dir, paste0(sample, "-scatter.png")),
-    plot = p_scatter_sample,
-    width = max(8, nrow(sample_data) * 0.6),
-    height = 6,
-    dpi = 300,
-    bg = "white"
-  )
+if (params$plot_per_sample) {
+  dir.create(scatter_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
+
+  for (sample in unique(cluster_summary$file_stem)) {
+    sample_data <- cluster_summary %>% filter(file_stem == sample)
+
+    p_scatter_sample <- ggplot(sample_data,
+                               aes(x = factor(cluster_number), y = repeat_count_mean,
+                                   size = read_count)) +
+      geom_errorbar(aes(ymin = repeat_count_mean - repeat_count_sd,
+                        ymax = repeat_count_mean + repeat_count_sd),
+                    width = 0.3, alpha = 0.5, linewidth = 0.7, colour = "grey50") +
+      geom_point(alpha = 0.8, shape = 21, fill = "#619CFF", colour = "black", stroke = 0.8) +
+      geom_text(aes(label = read_count), size = 3, colour = "black", fontface = "bold") +
+      scale_size_continuous(name = "Read count", range = c(6, 20)) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+      labs(title = paste("Cluster centres -", sample),
+           x     = "Cluster",
+           y     = paste0("Mean repeat count (", params$repeat_count_method, ")")) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 11), legend.position = "right")
+
+    ggsave(
+      filename = file.path(scatter_by_sample_dir, paste0(sample, "-scatter.png")),
+      plot     = p_scatter_sample,
+      width    = max(8, nrow(sample_data) * 0.6),
+      height   = 6,
+      dpi      = params$plot_dpi,
+      bg       = "white"
+    )
+  }
+  message("Per-sample scatter plots saved to: ", scatter_by_sample_dir)
 }
-
-message("Scatter plots exported to: ", plots_dir)
 ```
 
 ---
 
-# Consensus Generation
+# Consensus generation
 
-Generate consensus sequences for each cluster.
+For each cluster, reads are aligned using `DECIPHER::AlignSeqs` and a consensus sequence is called at each position with `DECIPHER::ConsensusSequence`. Consensus is generated independently for four segments:
+
+- **Full sequence** — the complete read, used for variant calling
+- **Left flank** — sequence upstream of the repeat tract
+- **Mid (repeat region)** — the repositioned repeat tract only
+- **Right flank** — sequence downstream of the repeat tract
+
+**Downsampling:** Up to `consensus_downsample = `r params$consensus_downsample`` reads are used per cluster (`reads_for_consensus` in `consensus.xlsx`). For large clusters this may be a small fraction of all reads (`reads_in_cluster`). Increasing this improves consensus accuracy but slows alignment considerably for long sequences.
+
+**Consensus threshold:** `consensus_threshold = `r params$consensus_threshold`` means a base is called if ≥`r params$consensus_threshold * 100`% of reads agree at that position; otherwise `N` is recorded. Ambiguity characters are not used.
+
+Results are exported to `consensus/consensus.xlsx` (lengths and sequences in one table) and four FASTA files (`consensus_sequences.fasta`, `consensus_left_sequences.fasta`, `consensus_mid_sequences.fasta`, `consensus_right_sequences.fasta`). FASTA headers encode sample, cluster number, read count, modal repeat count, and cluster proportion.
+
+```{r t_consensus_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
 
 ```{r consensus_generation, echo=FALSE, results='hide', message=FALSE, warning=FALSE}
 # Suppress DECIPHER progress bars
@@ -739,7 +732,8 @@ if (file.exists(consensus_cache_path) && params$resume) {
           consensus_left = NA_character_,
           consensus_mid = NA_character_,
           consensus_right = NA_character_,
-          read_count = 0
+          read_count = 0,
+          n_seqs_consensus = 0L
         )
         save(cluster_consensus, file = cluster_cache_file)
         return(cluster_consensus)
@@ -755,7 +749,8 @@ if (file.exists(consensus_cache_path) && params$resume) {
           consensus_left = NA_character_,
           consensus_mid = NA_character_,
           consensus_right = NA_character_,
-          read_count = 0
+          read_count = 0,
+          n_seqs_consensus = 0L
         )
         save(cluster_consensus, file = cluster_cache_file)
         return(cluster_consensus)
@@ -826,7 +821,8 @@ if (file.exists(consensus_cache_path) && params$resume) {
         consensus_left = consensus_left,
         consensus_mid = consensus_mid,
         consensus_right = consensus_right,
-        read_count = length(valid_seqs)
+        read_count = length(valid_seqs),
+        n_seqs_consensus = length(consensus_result$input_seqs)
       )
       save(cluster_consensus, file = cluster_cache_file)
       
@@ -860,27 +856,49 @@ if (file.exists(consensus_cache_path) && params$resume) {
 }
 ```
 
+```{r t_consensus_end, echo=FALSE}
+timings["Consensus generation"] <- proc.time()["elapsed"] - .t
+```
+
 ```{r consensus_table, echo=FALSE}
 # Display consensus summary
 if (exists("consensus_summary") && !is.null(consensus_summary)) {
   
-  # Create display table with sequence lengths
-  consensus_display <- consensus_summary %>%
-    mutate(
-      full_length = nchar(consensus_full),
-      mid_length = nchar(consensus_mid),
-      left_length = nchar(consensus_left),
-      right_length = nchar(consensus_right)
+  # Single combined table: lengths then sequences, full/left/mid/right order
+  # reads_in_cluster = total reads assigned to cluster (from clustering)
+  # reads_for_consensus = reads actually used after downsampling (params$consensus_downsample)
+  consensus_export <- consensus_summary %>%
+    dplyr::left_join(
+      cluster_summary %>% dplyr::select(file_stem, cluster_number,
+                                        reads_in_cluster = read_count),
+      by = c("file_stem", "cluster_number")
     ) %>%
-    select(file_stem, cluster_number, read_count, full_length, mid_length, left_length, right_length)
-  
-  # Export to Excel
-  consensus_excel_path <- file.path(consensus_dir, "consensus_summary.xlsx")
+    dplyr::rename(reads_for_consensus = n_seqs_consensus) %>%
+    dplyr::mutate(
+      full_length_bp  = nchar(consensus_full),
+      left_length_bp  = nchar(consensus_left),
+      mid_length_bp   = nchar(consensus_mid),
+      right_length_bp = nchar(consensus_right)
+    ) %>%
+    dplyr::select(file_stem, cluster_number,
+                  reads_in_cluster, reads_for_consensus,
+                  full_length_bp, left_length_bp, mid_length_bp, right_length_bp,
+                  consensus_full, consensus_left, consensus_mid, consensus_right)
+
+  # Use lengths-only version for the inline DT table
+  consensus_display <- consensus_export %>%
+    dplyr::select(file_stem, cluster_number,
+                  reads_in_cluster, reads_for_consensus,
+                  full_length_bp, left_length_bp, mid_length_bp, right_length_bp)
+
+  # Delete existing file first so stale sheets don't persist
+  consensus_excel_path <- file.path(consensus_dir, "consensus.xlsx")
+  if (file.exists(consensus_excel_path)) file.remove(consensus_excel_path)
   write_excel_function(
-    named_list = list("Consensus Summary" = consensus_display),
+    named_list = list("consensus" = consensus_export),
     path = consensus_excel_path
   )
-  message("Consensus summary exported to: ", consensus_excel_path)
+  message("Consensus exported to: ", consensus_excel_path)
   
   # Display consensus summary table
   datatable(consensus_display,
@@ -898,16 +916,34 @@ if (exists("consensus_summary") && !is.null(consensus_summary)) {
               style = 'caption-side: top; text-align: left; font-size: 12px; font-weight: bold;',
               "Consensus Sequence Summary"
             ),
-            colnames = c("Sample", "Cluster", "Reads Used", "Full Length", "Mid Length", "Left Length", "Right Length")
+            colnames = c("Sample", "Cluster",
+                         "Reads in cluster", "Reads for consensus",
+                         "Full (bp)", "Left (bp)", "Mid (bp)", "Right (bp)")
   ) %>%
     formatStyle(columns = names(consensus_display), fontSize = '10px', fontFamily = 'Arial') %>%
-    formatStyle(columns = 0, fontSize = '10px', fontFamily = 'Arial')
-}
+    formatStyle(columns = 0, fontSize = '10px', fontFamily = 'Arial')}
 ```
 
 ---
 
-# Variant Calling
+# Variant calling
+
+Each cluster's **full consensus sequence** is aligned to the reference using global pairwise alignment (`pairwiseAlignment`, gap open = 5, gap extend = 2). Positions that differ between consensus and reference are recorded as mismatches, insertions, or deletions.
+
+**Reference repeat region:** The reference contains NNNNN in place of the CAG repeat. Any variant at a position where the reference base is N is automatically excluded from the VCF — this cleanly removes alignment noise from the repeat region without manual coordinate filtering.
+
+**Output files:**
+
+- `variant.xlsx` — summary of variant counts by type per cluster (`summary` tab) and all individual variants with reference coordinates (`all_variants` tab). Both tabs include `reads_in_cluster` and `reads_for_consensus` so the consensus provenance is traceable.
+- `variants.csv` — all variants in flat CSV format
+- `vcf_by_sample/*.vcf` — per-sample VCF with one column per cluster, for loading in IGV alongside the reference
+- `all_samples_variants.vcf` — combined multi-sample VCF with one column per sample×cluster combination
+
+**Note:** Raw variant counts (shown in the completion summary) include any remaining alignment artefacts from the repeat region boundaries. The VCF positions after N-filtering represent genuine flank variants.
+
+```{r t_variant_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
 
 ```{r variant_calling, echo=FALSE}
 # Cache variant calling results
@@ -957,15 +993,39 @@ if (file.exists(variant_cache_path) && params$resume) {
 }
 ```
 
+```{r t_variant_end, echo=FALSE}
+timings["Variant calling"] <- proc.time()["elapsed"] - .t
+```
+
 ```{r variant_table, echo=FALSE}
 if (exists("variant_results") && !is.null(variant_results) && nrow(variant_results) > 0) {
   
-  # Export summaries to Excel
-  variant_excel_path <- file.path(variants_dir, "variant_summary.xlsx")
-    write_excel_function(
+  # Export summaries to Excel — join read counts from consensus_summary
+  variant_counts <- if (exists("consensus_summary") && !is.null(consensus_summary)) {
+    consensus_summary %>%
+      dplyr::left_join(
+        cluster_summary %>% dplyr::select(file_stem, cluster_number,
+                                          reads_in_cluster = read_count),
+        by = c("file_stem", "cluster_number")
+      ) %>%
+      dplyr::rename(reads_for_consensus = n_seqs_consensus) %>%
+      dplyr::select(file_stem, cluster_number, reads_in_cluster, reads_for_consensus)
+  } else {
+    NULL
+  }
+
+  add_counts <- function(df) {
+    if (!is.null(variant_counts)) {
+      dplyr::left_join(df, variant_counts, by = c("file_stem", "cluster_number"))
+    } else df
+  }
+
+  variant_excel_path <- file.path(variants_dir, "variant.xlsx")
+  if (file.exists(variant_excel_path)) file.remove(variant_excel_path)
+  write_excel_function(
       named_list = list(
-        "Summary" = variant_summary_table,
-        "All Variants" = variant_results
+        "summary"      = add_counts(variant_summary_table),
+        "all_variants" = add_counts(variant_results)
       ),
       path = variant_excel_path
     )
@@ -1009,7 +1069,15 @@ if (exists("variant_results") && !is.null(variant_results) && nrow(variant_resul
 
 ---
 
-# Export Files
+# Export files
+
+Exports consensus sequences as FASTA files. Each FASTA header encodes key metadata in the format:
+
+`{sample}_cluster{NN}_n{read_count}_mode{repeat}_prop{proportion}_{segment}`
+
+For example: `sample1_cluster01_n31237_mode17_prop0.257_left`
+
+Four files are written — full sequence, left flank, mid (repeat region only), and right flank — allowing downstream tools (e.g. BLAST, IGV, alignment viewers) to work with each segment independently.
 
 ```{r export_consensus, echo=FALSE}
 # Check if consensus was generated
@@ -1114,17 +1182,17 @@ if (exists("consensus_summary") && !is.null(consensus_summary) && nrow(consensus
 ```{r export_variants, echo=FALSE}
 if (exists("variant_results") && !is.null(variant_results) && nrow(variant_results) > 0) {
   
-  # Prepare variant export with clear column names
-  # Check if position column exists, if not it might already be named position_on_reference
+  # Prepare variant export — rename position column in select to avoid S4 dispatch conflict
   if ("position" %in% names(variant_results)) {
     variant_export <- variant_results %>%
-      rename(position_on_reference = position) %>%
-      select(file_stem, cluster_number, position_on_reference, ref, query, variant_type)
+      dplyr::select(file_stem, cluster_number,
+                    position_on_reference = position,
+                    ref, query, variant_type)
   } else {
-    # Column might already be renamed or have different name
     variant_export <- variant_results %>%
-      select(file_stem, cluster_number, position, ref, query, variant_type) %>%
-      rename(position_on_reference = position)
+      dplyr::select(file_stem, cluster_number,
+                    position_on_reference = position_on_reference,
+                    ref, query, variant_type)
   }
   
   # Export variants to CSV
@@ -1382,27 +1450,41 @@ if (exists("variant_results") && !is.null(variant_results) && nrow(variant_resul
 
 ---
 
-# Save Results
+# Save results
+
+Saves a slim cluster assignment table (`alignment_clustered_slim`) containing only the columns added by Module 4 — `file_stem`, `qname`, `cluster_number`, `repeat_cluster`, `haplotype_cluster`. Full read-level data (sequences, alignments, repeat counts) remains in the Module 2 and 3 RData files and should be joined on `file_stem` + `qname` by downstream modules.
 
 ```{r save_outputs, echo=FALSE}
+# Slim cluster assignments: only the new columns added by Module 4.
+alignment_clustered_slim <- alignment_clustered %>%
+  dplyr::select(file_stem, qname,
+                cluster_number, repeat_cluster, haplotype_cluster)
+
 # Compile module output
 module4_output <- list(
-  alignment_clustered = alignment_clustered,
-  cluster_summary = cluster_summary,
-  consensus_summary = consensus_summary,
-  variant_results = if(exists("variant_results")) variant_results else NULL,
-  parameters = params
+  alignment_clustered_slim = alignment_clustered_slim,
+  cluster_summary          = cluster_summary,
+  consensus_summary        = consensus_summary,
+  variant_results          = if (exists("variant_results")) variant_results else NULL,
+  parameters               = params
 )
 
-# Save complete module output
+# Save module output
 output_path <- file.path(results_dir, "04_allele_calling_results.RData")
 save(module4_output, file = output_path)
-
 message("Module 4 outputs saved to: ", output_path)
+
+# Export key tables to Excel
+allele_excel_path <- file.path(params$dir_out, "04_allele_calling", "allele_calling.xlsx")
+dir.create(dirname(allele_excel_path), showWarnings = FALSE, recursive = TRUE)
+if (file.exists(allele_excel_path)) invisible(file.remove(allele_excel_path))
+
+excel_tabs <- list("cluster_summary" = cluster_summary)
+write_excel_function(named_list = excel_tabs, path = allele_excel_path)
+message("Allele calling tables exported to: ", allele_excel_path)
 ```
 
 ```{r cleanup, echo=FALSE}
-# Clean up if requested
 if (params$remove_intermediate) {
   rm(alignment_counts)
   gc()
@@ -1420,7 +1502,70 @@ Results saved to: `r output_path`
 
 ---
 
-**Session Info:**
+# Module diagnostics
+
+## Timing
+
+```{r timing_table, echo=FALSE}
+timing_df <- build_timing_table(timings)
+DT::datatable(
+  timing_df,
+  caption = "Section timing — Module 4",
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Section", "Seconds", "Elapsed (mm:ss)", "Cumulative (mm:ss)")
+) %>%
+  DT::formatStyle("section", target = "row",
+                  fontWeight = DT::styleEqual("Total", "bold"))
+```
+
+## Output objects
+
+```{r manifest_table, echo=FALSE}
+manifest <- data.frame(
+  object = names(module4_output),
+  description = c(
+    "Per-read cluster assignments (slim — join with Modules 2/3 on file_stem + qname for full data)",
+    "Per-sample/cluster summary: read counts, modal repeat, proportion, cluster boundaries",
+    "Consensus sequences and quality metrics per cluster (NULL if cluster_consensus = FALSE)",
+    "Variant calls vs reference for each cluster (NULL if call_variants = FALSE)",
+    "Pipeline parameters used in this module run"
+  ),
+  class = sapply(module4_output, function(x) if (is.null(x)) "NULL" else class(x)[1]),
+  size = sapply(module4_output, function(x) {
+    format_size(if (is.null(x)) 0 else as.numeric(object.size(x)))
+  }),
+  bytes = sapply(module4_output, function(x) {
+    if (is.null(x)) 0L else as.numeric(object.size(x))
+  }),
+  stringsAsFactors = FALSE
+)
+
+DT::datatable(
+  manifest[, c("object", "description", "class", "size")],
+  caption = sprintf("Objects saved to module4_output — RData file: %s on disk (%s)",
+                    format_size(file.size(output_path)), output_path),
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Object", "Description", "Class", "In-memory size")
+)
+```
+
+```{r diagnostics_export, echo=FALSE}
+write_excel_function(
+  named_list = list("timing" = timing_df, "manifest" = manifest),
+  path = allele_excel_path,
+  overwrite_sheet = TRUE
+)
+message(sprintf("Module 4 complete — total time: %s  |  RData: %s",
+                format_elapsed(sum(timings)), format_size(file.size(output_path))))
+```
+
+---
+
+# Session info
 
 ```{r session_info, echo=FALSE}
 sessionInfo()

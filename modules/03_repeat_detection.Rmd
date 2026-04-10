@@ -1,5 +1,6 @@
 ---
-title: "Duke Pipeline - Module 3: Repeat Detection"
+title: "Duke pipeline"
+subtitle: "Module 3: Repeat Detection"
 author: "Michael Flower"
 date: "`r Sys.Date()`"
 output: 
@@ -15,6 +16,10 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
 ```
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 3: Repeat Detection";</script>')
+```
+
 
 ```{r load_packages, message=FALSE, warning=FALSE, echo=FALSE}
 # Required packages
@@ -37,11 +42,16 @@ if (file.exists("lib/load_all.R")) {
 }
 ```
 
+```{r timing_init, echo=FALSE}
+module_start_time <- proc.time()["elapsed"]
+timings <- c()
+```
+
 ```{r create_directories, echo=FALSE}
 # Create output directories (derived from params$dir_out)
 temp_dir <- file.path(params$dir_out, "temp")
 results_dir <- file.path(params$dir_out, "module_data")
-repeat_dir <- file.path(params$dir_out, "03_repeat_detection", "repeat_detection")
+repeat_dir <- file.path(params$dir_out, "03_repeat_detection")
 plots_dir <- file.path(params$dir_out, file.path("03_repeat_detection", "plots"))  # NEW: plots directory
 
 if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
@@ -58,21 +68,30 @@ if (is.null(params$plot_detection_rate)) params$plot_detection_rate <- TRUE
 if (is.null(params$plot_histograms)) params$plot_histograms <- TRUE
 if (is.null(params$repeat_count_method)) params$repeat_count_method <- "repeat_count_full"
 if (is.null(params$na_repeat_handling)) params$na_repeat_handling <- "convert_to_zero"
+if (is.null(params$rm_flank_length_outliers)) params$rm_flank_length_outliers <- FALSE
+if (is.null(params$flank_iqr_multiplier)) params$flank_iqr_multiplier <- 1.5
+if (is.null(params$check_duplicate_readnames)) params$check_duplicate_readnames <- TRUE
+if (is.null(params$plot_dpi)) params$plot_dpi <- 150
+if (is.null(params$plot_per_sample)) params$plot_per_sample <- TRUE
+if (is.null(params$export_read_counts)) params$export_read_counts <- TRUE
 ```
 
-# Module 3: Repeat Detection
+# Overview
 
-This module identifies and counts repeat tracts in the mid sequence.
+This module identifies and counts repeat tracts in the mid sequence, performs flank length QC, and optionally filters reads with outlier combined flank lengths.
 
 **Purpose:**
 
 1. Find repeat tracts matching the target pattern (e.g., CAG)
 2. Validate repeat detection rates
 3. Count repeats using robust length-based method
-4. Quality control and basic visualisation
+4. **Flank length QC** — assess combined (left + right) flank length distribution per sample; optionally filter outlier reads before downstream analysis
+5. Count method comparison and repeat length distribution visualisation
+
+**Key parameters:** `rm_flank_length_outliers` (default `FALSE`), `flank_iqr_multiplier` (default `1.5`, standard IQR rule; only active when `rm_flank_length_outliers = TRUE`)
 
 **Input:** `02_alignment_results.RData` from Module 2  
-**Output:** `03_repeat_detection_results.RData`
+**Output:** `03_repeat_detection_results.RData`, `repeat_detection.xlsx`, `flank/` plots
 
 ---
 
@@ -112,7 +131,12 @@ Search for repeat tracts in the mid sequence (between left and right flanks).
 | Perfect at start | `r params$rpt_start_perfect_repeats` |
 | Perfect at end | `r params$rpt_end_perfect_repeats` |
 | Max gap between repeats | `r params$rpt_max_gap` |
+| Max gap between tracts | `r params$rpt_max_tract_gap` |
 | Return option | `r params$rpt_return_option` |
+
+```{r t_detect_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
 
 ```{r repeat_detection, echo=FALSE}
 message("Processing per sample: find tracts → reposition → count")
@@ -205,7 +229,11 @@ if (n_na > 0) {
 }
 ```
 
-## Detection Summary
+```{r t_detect_end, echo=FALSE}
+timings["Repeat detection"] <- proc.time()["elapsed"] - .t
+```
+
+## Detection summary
 
 ```{r repeat_detection_summary, echo=FALSE}
 # Summary statistics by sample
@@ -244,52 +272,66 @@ DT::datatable(
 
 ```{r plot_detection_rate, echo=FALSE, fig.height=6, fig.width=10, eval=params$plot_detection_rate}
 if (params$plot_detection_rate) {
-  p_detection <- ggplot(tract_summary, aes(x = file_stem, y = detection_rate)) +
-    geom_bar(stat = "identity", fill = "#619CFF") +
-    geom_text(aes(label = scales::percent(detection_rate, accuracy = 0.1)),
-              vjust = -0.5, size = 3) +
-    scale_y_continuous(labels = scales::percent, limits = c(0, 1.05)) +
-    scale_x_discrete(guide = guide_axis(angle = 45)) +
-    labs(title = "Repeat tract detection rate per sample",
-         subtitle = paste0("Pattern: ", params$rpt_pattern),
-         x = "Sample",
-         y = "Detection rate") +
-    theme_minimal()
-  
+  n_det_samples <- nrow(tract_summary)
+
+  # Shared jitter position with seed so text labels align with points
+  jitter_pos <- position_jitter(width = 0.08, height = 0, seed = 42)
+
+  p_detection <- ggplot(tract_summary, aes(x = "", y = detection_rate)) +
+    geom_boxplot(outlier.shape = NA, width = 0.35,
+                 fill = "grey92", colour = "grey40") +
+    geom_point(position = jitter_pos, size = 3,
+               colour = "#619CFF", alpha = 0.8) +
+    geom_text(aes(label = format(reads_without_repeat, big.mark = ",")),
+              position = jitter_pos, hjust = -0.25, size = 3, colour = "grey30") +
+    stat_summary(fun = mean, geom = "point", shape = 18,
+                 colour = "red", size = 4, alpha = 0.6) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.001),
+                       expand = expansion(mult = c(0.05, 0.05))) +
+    labs(title    = "Repeat tract detection rate",
+         subtitle = sprintf("Pattern: %s  |  n = %d\nPoint label = reads without repeat",
+                            params$rpt_pattern, n_det_samples),
+         x        = NULL,
+         y        = sprintf("Detection rate\n(%s tract detected)", params$rpt_pattern)) +
+    theme_bw() +
+    theme(axis.ticks.x = element_blank())
+
   print(p_detection)
-  
-  # Export plot
-  # Calculate width (capped at 50 inches)
-  n_samples <- length(unique(tract_summary$file_stem))
-  plot_width <- min(50, max(8, n_samples * 0.8))
-  
+
   ggsave(
     filename = file.path(plots_dir, "repeat_detection_rate.png"),
-    plot = p_detection,
-    width = plot_width,
-    height = 6,
-    dpi = 300,
-    bg = "white",
-    limitsize = FALSE
+    plot     = p_detection,
+    width    = 5,
+    height   = 5,
+    dpi      = params$plot_dpi,
+    bg       = "white"
   )
 }
 ```
 
 ---
 
----
+# Counting methods
 
-# Counting Methods
+Before counting, this module **refines the `mid` segment** inherited from Module 2. Module 2 defines `mid` as everything between the left and right flank alignments — this may include non-repeat sequence at either end (e.g. the terminal CAA+CAG interruption in HTT). Module 3 runs repeat tract detection within `mid` and repositions the boundaries:
+
+- Any sequence **before** the detected tract start is appended to `left`
+- Any sequence **after** the detected tract end is prepended to `right`  
+- `mid` is updated to contain **only the detected repeat tract**
+
+The repositioning is controlled by your parameters — in particular, `rpt_end_perfect_repeats = `r params$rpt_end_perfect_repeats`` requires the tract to end with `r params$rpt_end_perfect_repeats` perfect `r params$rpt_pattern` unit(s), so terminal interruptions (e.g. CAACAG in HTT) are correctly excluded from `mid` and moved into `right`. All three counting methods below operate on this repositioned `mid`.
 
 The pipeline calculates three counting methods for all reads:
 
 **1. repeat_count_full** (Default - Most robust)
 - Formula: Tract length ÷ pattern length (rounded to nearest integer)
+- Includes all bases in the repositioned tract — gap bases from within-tract interruptions (allowed by `rpt_max_gap = `r params$rpt_max_gap``) contribute to the length
 - Best for: Oxford Nanopore data with sequencing errors
 - Example: 63 bp CAG tract ÷ 3 bp = 21 repeats
 
 **2. repeat_count_match** (Stringent)
-- Formula: Count only perfect pattern matches
+- Formula: Count only perfect pattern matches within the repositioned tract
+- Excludes gap bases — reads with within-tract interruptions will give a lower count than repeat_count_full
 - Best for: High-accuracy data (PacBio HiFi, Illumina)
 - Example: Requires exact CAG CAG CAG... (no interruptions)
 
@@ -300,159 +342,891 @@ The pipeline calculates three counting methods for all reads:
 
 **Current method:** `r params$repeat_count_method`
 
-All three methods are calculated and available in the output data.
+All three methods are calculated and available in the output data. Discordance between `repeat_count_full` and `repeat_count_match` indicates reads with within-tract interruptions (gaps permitted by `rpt_max_gap`).
+
+---
+
+## Count method comparison
+
+```{r count_method_comparison, echo=FALSE, fig.height=5, fig.width=12}
+# compute_cmc defined here — used in this chunk and in flank_qc_post below
+compute_cmc <- function(df) {
+  df %>%
+    group_by(file_stem) %>%
+    dplyr::summarise(
+      n_reads                        = n(),
+      mean_repeat_count_full         = mean(repeat_count_full,  na.rm = TRUE),
+      mean_repeat_count_match        = mean(repeat_count_match, na.rm = TRUE),
+      median_repeat_count_full       = median(repeat_count_full,  na.rm = TRUE),
+      median_repeat_count_match      = median(repeat_count_match, na.rm = TRUE),
+      mean_diff_full_minus_match     = mean(repeat_count_full - repeat_count_match, na.rm = TRUE),
+      concordance_pct_reads_agreeing = mean(round(repeat_count_full) == repeat_count_match,
+                                            na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+# Baseline comparison on unfiltered alignment_counts
+count_method_comparison <- compute_cmc(alignment_counts)
+n_cmc <- nrow(count_method_comparison)
+
+lm_cmc  <- lm(mean_repeat_count_match ~ mean_repeat_count_full, data = count_method_comparison)
+lm_coef <- coef(lm_cmc)
+lm_r2   <- summary(lm_cmc)$r.squared
+eq_label <- sprintf("y = %.3fx + %.2f\nR\u00b2 = %.4f", lm_coef[2], lm_coef[1], lm_r2)
+
+ax_min <- min(c(count_method_comparison$mean_repeat_count_full,
+                count_method_comparison$mean_repeat_count_match), na.rm = TRUE)
+ax_max <- max(c(count_method_comparison$mean_repeat_count_full,
+                count_method_comparison$mean_repeat_count_match), na.rm = TRUE)
+ax_pad <- (ax_max - ax_min) * 0.05
+
+p_method_scatter <- ggplot(count_method_comparison,
+                            aes(x = mean_repeat_count_full, y = mean_repeat_count_match)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_smooth(method = "lm", se = TRUE, colour = "#619CFF", fill = "#619CFF",
+              alpha = 0.15, formula = y ~ x) +
+  geom_point(size = 3, alpha = 0.8, colour = "grey30") +
+  annotate("text", x = ax_min + ax_pad, y = ax_max - ax_pad,
+           label = eq_label, hjust = 0, vjust = 1, size = 3.5) +
+  scale_x_continuous(limits = c(ax_min - ax_pad, ax_max + ax_pad)) +
+  scale_y_continuous(limits = c(ax_min - ax_pad, ax_max + ax_pad)) +
+  labs(title    = "Count method comparison: full vs match",
+       subtitle = sprintf(
+         "repeat_count_full (length / %d bp) vs repeat_count_match (exact)\nDashed = identity | Blue = regression | n = %d samples",
+         nchar(params$rpt_pattern), n_cmc),
+       x = "Mean repeat count (repeat_count_full — length-based)",
+       y = "Mean repeat count (repeat_count_match — exact)") +
+  theme_bw() +
+  coord_fixed()
+
+p_method_conc <- ggplot(count_method_comparison,
+                         aes(x = "", y = concordance_pct_reads_agreeing)) +
+  geom_boxplot(outlier.shape = NA, width = 0.35, fill = "grey92", colour = "grey40") +
+  geom_jitter(width = 0.08, height = 0, size = 3, alpha = 0.8, colour = "grey30") +
+  stat_summary(fun = mean, geom = "point", shape = 18, colour = "red", size = 4, alpha = 0.6) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1),
+                     expand = expansion(mult = c(0.02, 0.02))) +
+  labs(title    = "Method concordance per sample",
+       subtitle = sprintf("round(full) == match | Red = mean | n = %d", n_cmc),
+       x = NULL, y = "Concordance") +
+  theme_bw() +
+  theme(axis.ticks.x = element_blank())
+
+if (requireNamespace("patchwork", quietly = TRUE)) {
+  library(patchwork)
+  p_method_combined <- p_method_scatter + p_method_conc + plot_layout(widths = c(2, 1))
+  print(p_method_combined)
+  ggsave(file.path(plots_dir, "count_method_comparison.png"), p_method_combined,
+         width = 12, height = 5, dpi = params$plot_dpi, bg = "white")
+} else {
+  print(p_method_scatter); print(p_method_conc)
+}
+
+mean_conc <- mean(count_method_comparison$concordance_pct_reads_agreeing, na.rm = TRUE)
+if (mean_conc >= 0.95) {
+  message(sprintf("High concordance (mean = %.1f%%): repeat_count_match appropriate.",
+                  100 * mean_conc))
+} else if (mean_conc >= 0.85) {
+  message(sprintf("Moderate concordance (mean = %.1f%%): consider repeat_count_full.",
+                  100 * mean_conc))
+} else {
+  message(sprintf("Low concordance (mean = %.1f%%): use repeat_count_full.",
+                  100 * mean_conc))
+}
+```
+
+---
+
+# Flank length QC
+
+The left and right flank lengths reflect the Module 3 repeat tract repositioning. Total combined flank length (left + right) should be stable per allele — the repeat is the primary source of read-to-read variation. Variation in total flank length indicates chimeras, truncated reads, or alignment boundary shifts.
+
+**Flank length filtering:** controlled by `rm_flank_length_outliers` (default `FALSE`) and `flank_iqr_multiplier`. If enabled, reads with outlier combined flank lengths are removed from `alignment_counts` here and the filtered table propagates to all downstream modules (4-7). Review the plots and sweep table below before enabling — the effect on the count method comparison immediately below shows whether outlier reads cluster at particular repeat lengths.
+
+```{r t_flank_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r flank_qc, echo=FALSE, fig.height=4, fig.width=6}
+flank_dir <- file.path(params$dir_out, "03_repeat_detection", "plots", "flank")
+dir.create(flank_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Capture read count BEFORE any flank filtering — used in post-filter read count plot
+n_reads_before_flank_filter <- nrow(alignment_counts)
+
+# IQR multiplier — read from params, fall back to 1.5 if not set
+iqr_mult <- if (!is.null(params$flank_iqr_multiplier)) params$flank_iqr_multiplier else 1.5
+
+# Combined flank length + repeat count per read (before any filtering)
+flank_qc_data <- alignment_counts %>%
+  dplyr::filter(!is.na(mid), mid != "") %>%
+  dplyr::mutate(
+    left_length  = nchar(left),
+    right_length = nchar(right),
+    flank_total  = left_length + right_length,
+    repeat_count = .data[[params$repeat_count_method]]
+  )
+
+# Per-sample summary of combined flank length
+flank_summary <- flank_qc_data %>%
+  dplyr::group_by(file_stem) %>%
+  dplyr::summarise(
+    n_reads              = n(),
+    flank_mean_bp        = round(mean(flank_total,  na.rm = TRUE), 0),
+    flank_sd_bp          = round(sd(flank_total,    na.rm = TRUE), 1),
+    flank_iqr_bp         = round(IQR(flank_total,   na.rm = TRUE), 1),
+    flank_modal_bp       = as.numeric(names(which.max(table(flank_total)))),
+    flank_pct_at_modal   = round(100 * sum(flank_total == flank_modal_bp) / n(), 1),
+    flank_min_bp         = min(flank_total, na.rm = TRUE),
+    flank_max_bp         = max(flank_total, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+DT::datatable(
+  flank_summary,
+  caption  = "Combined flank length (left + right) per sample — flank_pct_at_modal = % of reads at most common combined length",
+  options  = list(pageLength = 25, scrollX = TRUE, dom = 'ft'),
+  rownames = FALSE,
+  class    = 'cell-border stripe compact'
+) %>%
+  DT::formatStyle(columns = colnames(flank_summary), fontSize = '85%')
+
+# Cohort-level IQR plot — one point per sample, for Module 5 calibration
+p_flank_iqr <- ggplot(flank_summary, aes(x = "", y = flank_iqr_bp)) +
+  geom_boxplot(outlier.shape = NA, width = 0.35, fill = "#619CFF", alpha = 0.6) +
+  geom_jitter(width = 0.08, height = 0, size = 2.5, alpha = 0.8, colour = "grey30") +
+  stat_summary(fun = mean, geom = "point", shape = 18, colour = "red", size = 4, alpha = 0.6) +
+  labs(title    = "Per-sample combined flank IQR",
+       subtitle = sprintf("n = %d | red = mean | informs Module 5 filter",
+                          nrow(flank_summary)),
+       x = NULL,
+       y = "Within-sample IQR of (left + right) bp") +
+  theme_bw() +
+  theme(axis.ticks.x = element_blank())
+
+print(p_flank_iqr)
+
+ggsave(
+  filename = file.path(flank_dir, "flank_length_iqr.png"),
+  plot     = p_flank_iqr,
+  width    = 4,
+  height   = 4,
+  dpi      = params$plot_dpi,
+  bg       = "white"
+)
+
+# Per-sample box+whisker of actual combined flank lengths with downsampled points
+# Cohort-level combined flank distribution: one point per sample (modal flank length)
+# with the current IQR filter threshold shown as dotted lines.
+# Reads outside the dotted lines would be removed by the filter.
+
+# Per-sample modal and filter thresholds
+# Always compute 1.5x IQR (standard reference) plus the user-set multiplier
+filter_active <- isTRUE(params$rm_flank_length_outliers)
+show_custom   <- filter_active && (abs(iqr_mult - 1.5) > 0.01)  # show custom line only if different from 1.5
+
+flank_thresholds <- flank_qc_data %>%
+  dplyr::group_by(file_stem) %>%
+  dplyr::summarise(
+    modal_flank    = as.numeric(names(which.max(table(flank_total)))),
+    modal_repeat   = as.numeric(names(which.max(table(repeat_count)))),
+    fq1            = quantile(flank_total, 0.25, na.rm = TRUE),
+    fq3            = quantile(flank_total, 0.75, na.rm = TRUE),
+    fiqr           = IQR(flank_total, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    ref_thresh_lo    = fq1 - 1.5    * fiqr,
+    ref_thresh_hi    = fq3 + 1.5    * fiqr,
+    custom_thresh_lo = fq1 - iqr_mult * fiqr,
+    custom_thresh_hi = fq3 + iqr_mult * fiqr
+  )
+
+mean_ref_lo    <- mean(flank_thresholds$ref_thresh_lo,    na.rm = TRUE)
+mean_ref_hi    <- mean(flank_thresholds$ref_thresh_hi,    na.rm = TRUE)
+mean_custom_lo <- mean(flank_thresholds$custom_thresh_lo, na.rm = TRUE)
+mean_custom_hi <- mean(flank_thresholds$custom_thresh_hi, na.rm = TRUE)
+
+# Subtitle describes what lines are shown
+filter_label <- if (!filter_active) {
+  "filter disabled — lines shown for reference only"
+} else if (show_custom) {
+  sprintf("grey dashed = 1.5 x IQR | blue dashed = user setting (%.1f x IQR)", iqr_mult)
+} else {
+  sprintf("blue dashed = %.1f x IQR (active filter)", iqr_mult)
+}
+
+# Per-sample % within each threshold (computed on all reads, not downsampled)
+flank_pct <- flank_qc_data %>%
+  dplyr::left_join(flank_thresholds %>%
+                     dplyr::select(file_stem, ref_thresh_lo, ref_thresh_hi,
+                                   custom_thresh_lo, custom_thresh_hi),
+                   by = "file_stem") %>%
+  dplyr::group_by(file_stem) %>%
+  dplyr::summarise(
+    n_reads        = n(),
+    pct_within_ref = round(100 * mean(flank_total >= ref_thresh_lo &
+                                       flank_total <= ref_thresh_hi), 1),
+    pct_within_custom = round(100 * mean(flank_total >= custom_thresh_lo &
+                                          flank_total <= custom_thresh_hi), 1),
+    .groups = "drop"
+  )
+
+# Join onto flank_thresholds for the cohort plot
+flank_thresholds <- flank_thresholds %>%
+  dplyr::left_join(flank_pct %>%
+                     dplyr::select(file_stem, pct_within_ref, pct_within_custom),
+                   by = "file_stem")
+
+# Cohort repeat vs flank scatter: one point per sample (modal repeat, modal flank)
+# % within 1.5x IQR labelled next to each point
+p_flank_box <- ggplot(flank_thresholds, aes(x = modal_repeat, y = modal_flank)) +
+  geom_hline(yintercept = mean_ref_lo, linetype = "dashed",
+             colour = "grey50", linewidth = 0.7, alpha = 0.7) +
+  geom_hline(yintercept = mean_ref_hi, linetype = "dashed",
+             colour = "grey50", linewidth = 0.7, alpha = 0.7) +
+  { if (show_custom) list(
+      geom_hline(yintercept = mean_custom_lo, linetype = "dashed",
+                 colour = "steelblue", linewidth = 0.8, alpha = 0.7),
+      geom_hline(yintercept = mean_custom_hi, linetype = "dashed",
+                 colour = "steelblue", linewidth = 0.8, alpha = 0.7),
+      annotate("text", x = -Inf, y = mean_custom_hi,
+               label = sprintf("%.1f x IQR", iqr_mult),
+               vjust = -0.4, hjust = -0.1, size = 3, colour = "steelblue"),
+      annotate("text", x = -Inf, y = mean_custom_lo,
+               label = sprintf("%.1f x IQR", iqr_mult),
+               vjust = 1.3, hjust = -0.1, size = 3, colour = "steelblue")
+  )} +
+  annotate("text", x = -Inf, y = mean_ref_hi,
+           label = "1.5 x IQR", vjust = -0.4, hjust = -0.1,
+           size = 3, colour = "grey50") +
+  annotate("text", x = -Inf, y = mean_ref_lo,
+           label = "1.5 x IQR", vjust = 1.3, hjust = -0.1,
+           size = 3, colour = "grey50") +
+  geom_point(aes(colour = pct_within_ref), size = 3, alpha = 0.9) +
+  scale_colour_gradient(low = "#E41A1C", high = "#4DAF4A",
+                        name = "% within\n1.5 x IQR",
+                        limits = c(0, 100),
+                        breaks = c(0, 25, 50, 75, 100),
+                        labels = function(x) paste0(x, "%")) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  labs(title    = "Modal repeat vs modal combined flank length",
+       subtitle = sprintf("n = %d samples | colour = %% within 1.5 x IQR | %s",
+                          nrow(flank_thresholds), filter_label),
+       x        = sprintf("Modal repeat length (%s, CAG units)", params$repeat_count_method),
+       y        = "Modal combined flank length (left + right, bp)") +
+  theme_bw()
+
+print(p_flank_box)
+
+ggsave(
+  filename = file.path(flank_dir, "flank_length_distribution.png"),
+  plot     = p_flank_box,
+  width    = 6,
+  height   = 5,
+  dpi      = params$plot_dpi,
+  bg       = "white"
+)
+
+# Per-sample repeat vs flank scatter — saved to directory, gated by plot_per_sample
+flank_box_dir <- file.path(flank_dir, "flank_boxplot_by_sample")
+dir.create(flank_box_dir, showWarnings = FALSE, recursive = TRUE)
+
+if (params$plot_per_sample) {
+  max_pts <- 5000
+  for (samp in unique(flank_qc_data$file_stem)) {
+    samp_data <- flank_qc_data %>%
+      dplyr::filter(file_stem == samp)
+    n_samp    <- nrow(samp_data)
+
+    samp_thresh <- flank_thresholds %>% dplyr::filter(file_stem == samp)
+
+    # Flag reads by zone — computed on all reads for accurate percentages
+    samp_data <- samp_data %>%
+      dplyr::mutate(
+        outlier_ref = flank_total < samp_thresh$ref_thresh_lo |
+                      flank_total > samp_thresh$ref_thresh_hi,
+        outlier_custom = if (show_custom) {
+          flank_total < samp_thresh$custom_thresh_lo |
+          flank_total > samp_thresh$custom_thresh_hi
+        } else outlier_ref,
+        point_cat = dplyr::case_when(
+          !outlier_ref    ~ "within 1.5 x IQR",
+          !outlier_custom ~ sprintf("%.1f-1.5 x IQR", iqr_mult),
+          TRUE            ~ "outlier"
+        )
+      )
+
+    # Count per zone for annotation (all reads, not downsampled)
+    zone_counts <- samp_data %>%
+      dplyr::count(point_cat) %>%
+      dplyr::mutate(pct = round(100 * n / sum(n), 1),
+                    label = sprintf("%s: %s (%.1f%%)", point_cat,
+                                    format(n, big.mark = ","), pct))
+
+    corner_label <- paste(zone_counts$label, collapse = "\n")
+
+    samp_plot <- samp_data %>%
+      dplyr::slice_sample(n = min(max_pts, n_samp))
+
+    pt_colours <- c("within 1.5 x IQR" = "grey60", "outlier" = "#E41A1C")
+    if (show_custom)
+      pt_colours[sprintf("%.1f-1.5 x IQR", iqr_mult)] <- "#FF7F00"
+
+    p_samp <- ggplot(samp_plot, aes(x = repeat_count, y = flank_total, colour = point_cat)) +
+      geom_hline(yintercept = samp_thresh$ref_thresh_lo, linetype = "dashed",
+                 colour = "grey50", linewidth = 0.7, alpha = 0.7) +
+      geom_hline(yintercept = samp_thresh$ref_thresh_hi, linetype = "dashed",
+                 colour = "grey50", linewidth = 0.7, alpha = 0.7) +
+      { if (show_custom) list(
+          geom_hline(yintercept = samp_thresh$custom_thresh_lo, linetype = "dashed",
+                     colour = "steelblue", linewidth = 0.7, alpha = 0.7),
+          geom_hline(yintercept = samp_thresh$custom_thresh_hi, linetype = "dashed",
+                     colour = "steelblue", linewidth = 0.7, alpha = 0.7)
+      )} +
+      geom_point(size = 0.6, alpha = 0.4) +
+      annotate("text", x = Inf, y = Inf, label = corner_label,
+               hjust = 1.05, vjust = 1.3, size = 2.8, colour = "grey20") +
+      scale_colour_manual(values = pt_colours, name = NULL) +
+      scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) +
+      labs(title    = paste("Repeat vs flank length —", samp),
+           subtitle = sprintf("n = %s | IQR = %.1f bp | %s",
+                              format(n_samp, big.mark = ","),
+                              samp_thresh$fiqr, filter_label),
+           x = sprintf("Repeat length (%s, CAG units)", params$repeat_count_method),
+           y = "Combined flank length (left + right, bp)") +
+      theme_bw() +
+      theme(legend.position = "top")
+
+    ggsave(
+      filename = file.path(flank_box_dir, paste0(samp, "-flank_scatter.png")),
+      plot     = p_samp,
+      width    = 6, height   = 5,
+      dpi      = params$plot_dpi,
+      bg       = "white"
+    )
+  }
+  message("Per-sample repeat vs flank scatter plots saved to: ", flank_box_dir)
+}
+
+# Deviation category table — per sample, how far do reads fall from the modal flank length?
+# Helps diagnose whether variability is biological (small, e.g. polyproline variation)
+# or technical (large, e.g. chimeras, truncated reads, boundary shifts)
+flank_deviation <- flank_qc_data %>%
+  dplyr::group_by(file_stem) %>%
+  dplyr::mutate(modal = as.numeric(names(which.max(table(flank_total)))),
+                dev   = abs(flank_total - modal)) %>%
+  dplyr::summarise(
+    n_reads       = n(),
+    modal_bp      = modal[1],
+    at_modal      = sum(dev == 0),
+    within_10bp   = sum(dev > 0  & dev <= 10),
+    within_50bp   = sum(dev > 10 & dev <= 50),
+    over_50bp     = sum(dev > 50),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(dplyr::across(c(at_modal, within_10bp, within_50bp, over_50bp),
+    ~ sprintf("%s (%.1f%%)", format(., big.mark = ","), 100 * . / n_reads),
+    .names = "{.col}"))
+
+DT::datatable(
+  flank_deviation,
+  caption  = "Combined flank length deviation from per-sample modal — large deviations suggest chimeras or alignment issues",
+  options  = list(pageLength = 25, scrollX = TRUE, dom = 'ft'),
+  rownames = FALSE,
+  class    = 'cell-border stripe compact',
+  colnames = c("Sample", "Reads", "Modal (bp)",
+               "At modal", "1-10 bp off", "11-50 bp off", ">50 bp off")
+) %>%
+  DT::formatStyle(columns = colnames(flank_deviation), fontSize = '85%')
+multipliers <- c(1.0, 1.5, 2.0, 3.0, 5.0, 10.0)
+iqr_mult    <- if (!is.null(params$flank_iqr_multiplier)) params$flank_iqr_multiplier else 1.5
+
+sweep_long <- dplyr::bind_rows(lapply(multipliers, function(mult) {
+  flank_qc_data %>%
+    dplyr::group_by(file_stem) %>%
+    dplyr::mutate(
+      fq1     = quantile(flank_total, 0.25),
+      fq3     = quantile(flank_total, 0.75),
+      outlier = flank_total < fq1 - mult * (fq3 - fq1) |
+                flank_total > fq3 + mult * (fq3 - fq1)
+    ) %>%
+    dplyr::summarise(pct_removed = round(mean(outlier) * 100, 1), .groups = "drop") %>%
+    dplyr::mutate(flank_iqr_multiplier = mult)
+}))
+
+# Wide table for export
+sweep_df <- sweep_long %>%
+  tidyr::pivot_wider(names_from  = flank_iqr_multiplier,
+                     values_from = pct_removed,
+                     names_prefix = "x") %>%
+  dplyr::rename_with(~ paste0(.x, "_pct_removed"), -file_stem)
+
+DT::datatable(
+  sweep_df,
+  caption  = "% reads removed (combined flank) per sample at each IQR multiplier — higher multiplier removes fewer reads",
+  options  = list(pageLength = 25, dom = 'ft'),
+  rownames = FALSE,
+  class    = 'cell-border stripe compact'
+) %>%
+  DT::formatStyle(columns = colnames(sweep_df), fontSize = '85%')
+
+# Sweep line plot
+sweep_mean <- sweep_long %>%
+  dplyr::group_by(flank_iqr_multiplier) %>%
+  dplyr::summarise(mean_pct = mean(pct_removed), .groups = "drop")
+
+mean_flank_iqr <- mean(flank_summary$flank_iqr_bp, na.rm = TRUE)
+
+show_custom_sweep <- abs(iqr_mult - 1.5) > 0.01
+
+p_sweep <- ggplot(sweep_long,
+                  aes(x = flank_iqr_multiplier, y = pct_removed, group = file_stem)) +
+  # Always: 1.5x reference vline (blue, matching CMC overlay)
+  geom_vline(xintercept = 1.5, linetype = "dashed", colour = "#619CFF",
+             linewidth = 0.8, alpha = 0.8) +
+  # User multiplier vline (orange) only if different from 1.5
+  { if (show_custom_sweep)
+      geom_vline(xintercept = iqr_mult, linetype = "dashed", colour = "#E07B39",
+                 linewidth = 0.8, alpha = 0.8) } +
+  geom_line(colour = "grey60", linewidth = 0.6, alpha = 0.7) +
+  geom_point(colour = "grey60", size = 1.5, alpha = 0.7) +
+  geom_line(data = sweep_mean, aes(x = flank_iqr_multiplier, y = mean_pct, group = 1),
+            colour = "red", linewidth = 1.2, alpha = 0.6, inherit.aes = FALSE) +
+  geom_point(data = sweep_mean, aes(x = flank_iqr_multiplier, y = mean_pct),
+             colour = "red", size = 3, shape = 18, alpha = 0.6, inherit.aes = FALSE) +
+  annotate("text", x = max(multipliers), y = Inf,
+           label = sprintf("Mean IQR: %.1f bp", mean_flank_iqr),
+           hjust = 1, vjust = 1.3, size = 3, colour = "grey30") +
+  # Labels on vlines
+  annotate("text", x = 1.5, y = Inf,
+           label = "1.5 x", hjust = -0.15, vjust = 1.3, size = 3, colour = "#619CFF") +
+  { if (show_custom_sweep)
+      annotate("text", x = iqr_mult, y = Inf,
+               label = sprintf("%.1f x", iqr_mult),
+               hjust = -0.15, vjust = 1.3, size = 3, colour = "#E07B39") } +
+  scale_x_continuous(breaks = multipliers) +
+  scale_y_continuous(limits = c(0, NA),
+                     labels = scales::label_number(accuracy = 1)) +
+  labs(title    = "Flank outlier filter: % reads removed vs IQR multiplier",
+       subtitle = sprintf(
+         "Grey = samples (n=%d) | Red = mean | Blue = 1.5 x IQR%s | flat = IQR \u2248 0",
+         nrow(flank_summary),
+         if (show_custom_sweep) sprintf(" | Orange = %.1f x IQR (user setting)", iqr_mult) else ""),
+       x = "IQR multiplier (higher = removes fewer reads)",
+       y = "% reads removed") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p_sweep)
+
+ggsave(
+  filename = file.path(flank_dir, "flank_iqr_sweep.png"),
+  plot     = p_sweep,
+  width    = 6,
+  height   = 4,
+  dpi      = params$plot_dpi,
+  bg       = "white"
+)
+
+# Interpretation note
+mean_flank_iqr <- mean(flank_summary$flank_iqr_bp, na.rm = TRUE)
+message(sprintf("Combined flank: mean IQR = %.1f bp, mean length = %.0f bp",
+                mean_flank_iqr, mean(flank_summary$flank_mean_bp, na.rm = TRUE)))
+
+if (mean_flank_iqr < 2) {
+  message(sprintf(
+    "Note: Very low combined flank IQR (%.1f bp). ", mean_flank_iqr),
+    "The standard 1.5 x IQR filter will remove all non-modal reads regardless of multiplier. ",
+    "See the sweep plot above — flat curves confirm this. ",
+    "Consider leaving rm_flank_length_outliers = FALSE for this data.")
+}
+
+# Apply flank length filter to alignment_counts if enabled
+# This filtered table feeds into clustering and all downstream modules
+if (isTRUE(params$rm_flank_length_outliers)) {
+  n_before <- nrow(alignment_counts)
+
+  flank_fences <- flank_qc_data %>%
+    dplyr::group_by(file_stem) %>%
+    dplyr::summarise(
+      fq1  = quantile(flank_total, 0.25, na.rm = TRUE),
+      fq3  = quantile(flank_total, 0.75, na.rm = TRUE),
+      fiqr = IQR(flank_total, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::mutate(
+      fence_lo = fq1 - iqr_mult * fiqr,
+      fence_hi = fq3 + iqr_mult * fiqr
+    )
+
+  alignment_counts <- alignment_counts %>%
+    dplyr::mutate(
+      left_length  = nchar(left),
+      right_length = nchar(right),
+      flank_total  = left_length + right_length
+    ) %>%
+    dplyr::left_join(flank_fences %>% dplyr::select(file_stem, fence_lo, fence_hi,
+                                                     fiqr),
+                     by = "file_stem") %>%
+    dplyr::filter(
+      fiqr == 0 |  # skip filter if IQR = 0 (fence would be at modal only)
+      (flank_total >= fence_lo & flank_total <= fence_hi)
+    ) %>%
+    dplyr::select(-left_length, -right_length, -flank_total,
+                  -fence_lo, -fence_hi, -fiqr)
+
+  n_after   <- nrow(alignment_counts)
+  n_removed <- n_before - n_after
+  message(sprintf(
+    "Flank filter applied (%s x IQR): removed %s reads (%.1f%%) from alignment_counts.",
+    iqr_mult, format(n_removed, big.mark = ","),
+    100 * n_removed / n_before))
+  message("Filtered data propagates to count method comparison below and to Modules 4-7.")
+} else {
+  message("rm_flank_length_outliers = FALSE: all reads retained. Review the plots above before enabling.")
+}
+```
+
+```{r t_flank_end, echo=FALSE}
+timings["Flank QC"] <- proc.time()["elapsed"] - .t
+```
+
+## Read counts and count method comparison after flank QC
+
+```{r flank_qc_post, echo=FALSE, fig.height=5, fig.width=12}
+# Read count before / after flank filter — same style as Module 2 filtering_stages.png
+n_before_flank <- n_reads_before_flank_filter   # captured before filter was applied
+n_after_flank  <- nrow(alignment_counts)
+n_removed_flank <- n_before_flank - n_after_flank
+flank_filter_summary <- dplyr::tibble(
+  file_stem        = unique(flank_qc_data$file_stem)
+) %>%
+  dplyr::left_join(
+    flank_qc_data %>% dplyr::count(file_stem, name = "before_filter"),
+    by = "file_stem"
+  ) %>%
+  dplyr::left_join(
+    alignment_counts %>% dplyr::count(file_stem, name = "after_filter"),
+    by = "file_stem"
+  ) %>%
+  dplyr::mutate(after_filter = dplyr::coalesce(after_filter, 0L),
+                reads_removed = before_filter - after_filter,
+                pct_removed   = round(100 * reads_removed / before_filter, 1))
+
+DT::datatable(
+  flank_filter_summary,
+  caption  = "Read counts before and after flank length filter",
+  options  = list(pageLength = 25, scrollX = TRUE, dom = 'ft'),
+  rownames = FALSE,
+  class    = 'cell-border stripe compact'
+) %>%
+  DT::formatStyle(columns = colnames(flank_filter_summary), fontSize = '85%')
+
+# Connected dot plot
+n_samp_flank <- nrow(flank_filter_summary)
+point_size   <- if (n_samp_flank <= 50) 2.5 else 1.5
+point_alpha  <- if (n_samp_flank <= 50) 0.8 else max(0.2, 1 - n_samp_flank / 500)
+line_alpha   <- if (n_samp_flank <= 50) 0.5 else max(0.1, 0.5 - n_samp_flank / 1000)
+
+flank_filter_long <- flank_filter_summary %>%
+  tidyr::pivot_longer(cols = c(before_filter, after_filter),
+                      names_to = "stage", values_to = "read_count") %>%
+  dplyr::mutate(
+    stage     = factor(stage,
+                       levels = c("before_filter", "after_filter"),
+                       labels = c("Before\nflank filter", "After\nflank filter")),
+    stage_num = as.numeric(stage),
+    changed   = reads_removed > 0
+  )
+
+set.seed(123)
+jitter_flank <- data.frame(
+  file_stem = unique(flank_filter_long$file_stem),
+  x_offset  = runif(n_samp_flank, -0.12, 0.12)
+)
+flank_filter_long <- flank_filter_long %>%
+  dplyr::left_join(jitter_flank, by = "file_stem") %>%
+  dplyr::mutate(x_pos = stage_num + x_offset)
+
+p_flank_filter <- ggplot(flank_filter_long) +
+  geom_boxplot(aes(x = stage_num, y = read_count, group = stage_num),
+               outlier.shape = NA, width = 0.3, fill = "grey90", colour = "grey40") +
+  geom_line(aes(x = x_pos, y = read_count, group = file_stem, colour = changed),
+            linewidth = 0.4, alpha = line_alpha) +
+  geom_point(aes(x = x_pos, y = read_count, colour = changed),
+             size = point_size, alpha = point_alpha) +
+  stat_summary(aes(x = stage_num, y = read_count, group = stage_num),
+               fun = mean, geom = "point", shape = 18,
+               colour = "red", size = 4, alpha = 0.6) +
+  scale_colour_manual(
+    values = c("FALSE" = "grey50", "TRUE" = "#E07B39"),
+    labels = c("FALSE" = "Unchanged", "TRUE" = "Reads removed"),
+    name   = NULL
+  ) +
+  scale_x_continuous(breaks = 1:2,
+                     labels = c("Before\nflank filter", "After\nflank filter"),
+                     limits = c(0.6, 2.4)) +
+  scale_y_log10(labels = scales::comma) +
+  labs(title    = "Read counts before and after flank length filter",
+       subtitle = if (n_removed_flank == 0) {
+         "No reads removed — flank filter not applied or IQR = 0 for all samples"
+       } else {
+         sprintf("%s reads removed cohort-wide (%.1f%%) using %.1f x IQR threshold",
+                 format(n_removed_flank, big.mark = ","),
+                 100 * n_removed_flank / n_before_flank,
+                 iqr_mult)
+       },
+       x = NULL, y = "Read count (log10 scale)") +
+  theme_bw()
+
+if (!any(flank_filter_summary$reads_removed > 0))
+  p_flank_filter <- p_flank_filter + guides(colour = "none")
+
+print(p_flank_filter)
+ggsave(file.path(flank_dir, "flank_filter_reads.png"), p_flank_filter,
+       width = 6, height = 5, dpi = params$plot_dpi, bg = "white")
+
+# Count method comparison with IQR filter series overlaid
+# Always computed for all three series regardless of whether filter is applied.
+# If no filter applied, the series will overlap — that itself is informative.
+cmc_all <- compute_cmc(alignment_counts)   # current (post-filter if filter on, else all reads)
+
+# Compute 1.5x and custom filtered versions from the unfiltered flank_qc_data
+compute_cmc_filtered <- function(df, mult) {
+  df %>%
+    dplyr::group_by(file_stem) %>%
+    dplyr::mutate(
+      fq1  = quantile(flank_total, 0.25, na.rm = TRUE),
+      fq3  = quantile(flank_total, 0.75, na.rm = TRUE),
+      fiqr = fq3 - fq1,
+      keep = fiqr == 0 | (flank_total >= fq1 - mult * fiqr & flank_total <= fq3 + mult * fiqr)
+    ) %>%
+    dplyr::filter(keep) %>%
+    dplyr::ungroup() %>%
+    compute_cmc()
+}
+
+cmc_ref    <- compute_cmc_filtered(flank_qc_data, 1.5)
+cmc_custom <- if (abs(iqr_mult - 1.5) > 0.01) compute_cmc_filtered(flank_qc_data, iqr_mult) else NULL
+
+# Build labelled long table for overlaid plot
+series_list <- list(
+  dplyr::mutate(compute_cmc(flank_qc_data), series = "All reads"),
+  dplyr::mutate(cmc_ref,                    series = "1.5 x IQR filtered")
+)
+if (!is.null(cmc_custom))
+  series_list[[3]] <- dplyr::mutate(cmc_custom,
+                                    series = sprintf("%.1f x IQR filtered", iqr_mult))
+
+cmc_overlay <- dplyr::bind_rows(series_list) %>%
+  dplyr::mutate(series = factor(series, levels = sapply(series_list, function(x) x$series[1])))
+
+series_colours <- c("All reads"          = "grey40",
+                    "1.5 x IQR filtered" = "#619CFF")
+if (!is.null(cmc_custom))
+  series_colours[sprintf("%.1f x IQR filtered", iqr_mult)] <- "#E07B39"
+
+# Axis limits across all series
+ax_all_min <- min(c(cmc_overlay$mean_repeat_count_full,
+                    cmc_overlay$mean_repeat_count_match), na.rm = TRUE)
+ax_all_max <- max(c(cmc_overlay$mean_repeat_count_full,
+                    cmc_overlay$mean_repeat_count_match), na.rm = TRUE)
+ax_all_pad <- (ax_all_max - ax_all_min) * 0.05
+
+p_cmc_overlay <- ggplot(cmc_overlay,
+                         aes(x = mean_repeat_count_full, y = mean_repeat_count_match,
+                             colour = series, fill = series)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.1, linewidth = 0.8, formula = y ~ x) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  scale_colour_manual(values = series_colours, name = NULL) +
+  scale_fill_manual(values  = series_colours, name = NULL) +
+  scale_x_continuous(limits = c(ax_all_min - ax_all_pad, ax_all_max + ax_all_pad)) +
+  scale_y_continuous(limits = c(ax_all_min - ax_all_pad, ax_all_max + ax_all_pad)) +
+  labs(title    = "Count method comparison: effect of flank IQR filter",
+       subtitle = sprintf(
+         "Dashed = identity | Shaded = 95%% CI | n = %d samples%s",
+         nrow(cmc_all),
+         if (is.null(cmc_custom)) "" else
+           sprintf(" | Orange = %.1f x IQR (user setting)", iqr_mult)),
+       x = "Mean repeat count (repeat_count_full)",
+       y = "Mean repeat count (repeat_count_match)") +
+  theme_bw() +
+  theme(legend.position = "top") +
+  coord_fixed()
+
+print(p_cmc_overlay)
+ggsave(file.path(flank_dir, "count_method_comparison_post_filter.png"), p_cmc_overlay,
+       width = 7, height = 7, dpi = params$plot_dpi, bg = "white")
+
+if (n_removed_flank == 0) {
+  message("Flank filter not applied — all three series overlap (this is expected).")
+} else {
+  message(sprintf("Overlay shows effect of filtering on count method agreement (%s reads removed).",
+                  format(n_removed_flank, big.mark = ",")))
+}
+
+# Update count_method_comparison to post-filter version for Excel export
+count_method_comparison <- cmc_all
+```
+
 
 ---
 
 # Visualise distributions
 
-Basic visualisations of repeat count distributions.
-
 ## Repeat count histograms
 
-```{r plot_histograms, echo=FALSE, fig.height=6, fig.width=12, eval=params$plot_histograms}
+Per-sample histograms are saved to `plots/repeat_histogram_by_sample/` (one file per sample). They are not shown inline as they do not scale to large cohorts.
+
+```{r plot_histograms, echo=FALSE, eval=params$plot_histograms}
 if (params$plot_histograms) {
-  # Get sample count
   n_samples <- length(unique(alignment_counts$file_stem))
-  
-  # Only create combined faceted plot for reasonable numbers of samples
-  if (n_samples <= 100) {
-    # Combined faceted histogram
-    p_histogram_facet <- ggplot(alignment_counts, aes(x = repeat_count)) +
-      geom_histogram(binwidth = params$histogram_binwidth, 
-                     fill = "#619CFF", colour = "black", alpha = 0.7) +
-      facet_wrap(~ file_stem, scales = "free_y") +
-      scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
-      labs(title = "Repeat count distribution per sample",
-           subtitle = "Length-based counting method (tract length ÷ pattern length)",
-           x = "Repeat count",
-           y = "Number of reads") +
-      theme_minimal() +
-      theme(strip.text = element_text(face = "bold"))
-    
-    print(p_histogram_facet)
-    
-    # Save faceted plot
-    ncol_facet <- ceiling(sqrt(n_samples))
-    nrow_facet <- ceiling(n_samples / ncol_facet)
-    
-    # Cap dimensions at 48 inches (safety margin below ggplot2's 50" limit)
-    plot_width <- min(48, max(12, ncol_facet * 4))
-    plot_height <- min(48, max(6, nrow_facet * 3))
-    
-    ggsave(
-      filename = file.path(plots_dir, "repeat_histogram.png"),
-      plot = p_histogram_facet,
-      width = plot_width,
-      height = plot_height,
-      dpi = 300,
-      bg = "white"
-    )
-    
-  } else {
-    # Too many samples for combined plot
-    message("Note: ", n_samples, " samples detected (>100).")
-    message("  Skipping combined histogram (would be too large and unreadable).")
-    message("  Generating individual plots per sample instead.")
-  }
-  
-  # Create subdirectory for per-sample plots
-  histogram_by_sample_dir <- file.path(plots_dir, "repeat_histogram_by_sample")
-  dir.create(histogram_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
-  
-  # Individual histograms per sample (always generated)
-  message("Generating individual histograms for ", n_samples, " samples...")
-  for (sample in unique(alignment_counts$file_stem)) {
-    sample_data <- alignment_counts %>% filter(file_stem == sample)
-    
-    p_histogram_sample <- ggplot(sample_data, aes(x = repeat_count)) +
-      geom_histogram(binwidth = params$histogram_binwidth,
-                     fill = "#619CFF", colour = "black", alpha = 0.7) +
-      scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
-      labs(title = paste("Repeat count distribution -", sample),
-           x = "Repeat count",
-           y = "Number of reads") +
-      theme_minimal()
-    
-    ggsave(
-      filename = file.path(histogram_by_sample_dir, paste0(sample, "-repeat_histogram.png")),
-      plot = p_histogram_sample,
-      width = 10,
-      height = 6,
-      dpi = 300,
-      bg = "white"
-    )
+
+  # Per-sample histograms (gated by plot_per_sample)
+  if (params$plot_per_sample) {
+    histogram_by_sample_dir <- file.path(plots_dir, "repeat_histogram_by_sample")
+    dir.create(histogram_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
+
+    message("Generating individual histograms for ", n_samples, " samples...")
+    for (sample in unique(alignment_counts$file_stem)) {
+      plot_path <- file.path(histogram_by_sample_dir, paste0(sample, "-repeat_histogram.png"))
+      if (file.exists(plot_path) && params$resume) next
+
+      sample_data <- alignment_counts %>% filter(file_stem == sample)
+
+      p_histogram_sample <- ggplot(sample_data, aes(x = repeat_count)) +
+        geom_histogram(binwidth = params$histogram_binwidth,
+                       fill = "#619CFF", colour = "black", alpha = 0.7) +
+        scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+        labs(title = paste("Repeat count distribution -", sample),
+             x     = "Repeat count",
+             y     = "Number of reads") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+      ggsave(
+        filename = plot_path,
+        plot     = p_histogram_sample,
+        width    = 10,
+        height   = 6,
+        dpi      = params$plot_dpi,
+        bg       = "white"
+      )
+    }
+
+    message("Per-sample histograms saved to: ", histogram_by_sample_dir)
   }
 }
 ```
 
-## Violin plot
-
 ## Distribution visualisation
 
-**Important:** Samples are typically **bimodal** (two alleles with different repeat counts). 
-Mean ± SD is misleading for bimodal distributions - it falls between the peaks and doesn't represent either allele!
+**Important:** Samples are typically **bimodal** (two alleles with different repeat counts). Mean ± SD is misleading for bimodal distributions — it falls between the peaks and doesn't represent either allele. Use the heatmap and ridge plots below to visually identify alleles. Formal allele calling is in Module 4.
 
-```{r plot_distributions, echo=FALSE, fig.height=8, fig.width=12}
-# Violin plot shows the actual distribution shape (bimodal structure visible)
-p_violin <- ggplot(alignment_counts, aes(x = file_stem, y = repeat_count)) +
-  geom_violin(fill = "#619CFF", alpha = 0.6, scale = "width") +
-  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.8) +
-  stat_summary(fun = median, geom = "point", size = 3, colour = "red") +
-  scale_x_discrete(guide = guide_axis(angle = 45)) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 15)) +
-  labs(title = "Repeat count distribution per sample",
-       subtitle = "Violin plot shows distribution shape (bimodal for diploid samples)\nBoxplot shows quartiles, red dot = median",
-       x = "Sample",
-       y = "Repeat count") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(size = 10))
-
-print(p_violin)
-
-# Calculate width (capped at 50 inches)
+```{r plot_distributions, echo=FALSE, fig.height=6, fig.width=12}
 n_samples <- length(unique(alignment_counts$file_stem))
-plot_width <- min(50, max(10, n_samples * 0.8))
+
+# Build ordered sample index (used by heatmap and lookup table)
+repeat_summary_scatter <- alignment_counts %>%
+  group_by(file_stem) %>%
+  dplyr::summarise(
+    median_rc = median(repeat_count, na.rm = TRUE),
+    q25_rc    = quantile(repeat_count, 0.25, na.rm = TRUE),
+    q75_rc    = quantile(repeat_count, 0.75, na.rm = TRUE),
+    .groups   = "drop"
+  ) %>%
+  dplyr::arrange(median_rc) %>%
+  dplyr::mutate(sample_idx = seq_len(n()))
+
+# --- Heatmap: distribution across all samples ---
+# Samples on x (indexed by median order — no crowded labels)
+# Fill = % of reads in each repeat count bin, normalised per sample
+heatmap_bin_width <- max(1, params$histogram_binwidth)
+
+heatmap_data <- alignment_counts %>%
+  dplyr::mutate(rc_bin = floor(repeat_count / heatmap_bin_width) * heatmap_bin_width) %>%
+  dplyr::count(file_stem, rc_bin) %>%
+  dplyr::group_by(file_stem) %>%
+  dplyr::mutate(frac = n / sum(n)) %>%
+  dplyr::ungroup() %>%
+  dplyr::left_join(
+    repeat_summary_scatter %>% dplyr::select(file_stem, sample_idx),
+    by = "file_stem"
+  )
+# Note: tiles are only drawn where reads exist — white space = no reads at that
+# repeat count for that sample, which is informative and should remain white.
+
+p_heatmap <- ggplot(heatmap_data, aes(x = sample_idx, y = rc_bin, fill = frac)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma", name = "% of reads",
+                       labels = scales::percent_format(accuracy = 0.1)) +
+  scale_x_continuous(
+    breaks = if (n_samples <= 20) seq_len(n_samples) else
+               scales::pretty_breaks(n = 5)(seq_len(n_samples)),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10), expand = c(0, 0)) +
+  labs(title    = "Repeat count distribution heatmap",
+       subtitle = sprintf(
+         "Samples ordered by median repeat count  |  Fill = %% of reads  |  n = %d samples  |  See heatmap_sample_index in repeat_detection.xlsx",
+         n_samples),
+       x        = "Sample index (ordered by median repeat count)",
+       y        = "Repeat count") +
+  theme_bw() +
+  theme(panel.grid  = element_blank(),
+        axis.text.x = element_text(size = 8))
+
+print(p_heatmap)
 
 ggsave(
-  filename = file.path(plots_dir, "repeat_violin.png"),
-  plot = p_violin,
-  width = plot_width,
-  height = 8,
-  dpi = 300,
-  bg = "white",
+  filename  = file.path(plots_dir, "repeat_distribution_heatmap.png"),
+  plot      = p_heatmap,
+  width     = min(50, max(10, n_samples * 0.12 + 6)),
+  height    = 6,
+  dpi       = params$plot_dpi,
+  bg        = "white",
   limitsize = FALSE
 )
 
-# Create subdirectory for per-sample plots
-violin_by_sample_dir <- file.path(plots_dir, "repeat_violin_by_sample")
-dir.create(violin_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
+# Per-sample violin plots (gated by plot_per_sample)
+if (params$plot_per_sample) {
+  violin_by_sample_dir <- file.path(plots_dir, "repeat_violin_by_sample")
+  dir.create(violin_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
 
-# Individual violin plots per sample
-for (sample in unique(alignment_counts$file_stem)) {
-  sample_data <- alignment_counts %>% filter(file_stem == sample)
-  
-  p_violin_sample <- ggplot(sample_data, aes(x = 1, y = repeat_count)) +
-    geom_violin(fill = "#619CFF", alpha = 0.6, scale = "width", width = 0.8) +
-    geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.8, fill = "white") +
-    stat_summary(fun = median, geom = "point", size = 4, colour = "red") +
-    scale_y_continuous(breaks = scales::pretty_breaks(n = 15)) +
-    labs(title = paste("Repeat count distribution -", sample),
-         subtitle = "Violin shows distribution shape (bimodal for diploid), boxplot shows quartiles, red dot = median",
-         x = "",
-         y = "Repeat count") +
-    theme_minimal() +
-    theme(axis.text.x = element_blank(),
-          axis.ticks.x = element_blank())
-  
-  ggsave(
-    filename = file.path(violin_by_sample_dir, paste0(sample, "-repeat_violin.png")),
-    plot = p_violin_sample,
-    width = 6,
-    height = 8,
-    dpi = 300,
-    bg = "white"
-  )
+  for (sample in unique(alignment_counts$file_stem)) {
+    plot_path <- file.path(violin_by_sample_dir, paste0(sample, "-repeat_violin.png"))
+    if (file.exists(plot_path) && params$resume) next
+
+    sample_data <- alignment_counts %>% filter(file_stem == sample)
+
+    p_violin_sample <- ggplot(sample_data, aes(x = 1, y = repeat_count)) +
+      geom_violin(fill = "#619CFF", alpha = 0.6, scale = "width", width = 0.8) +
+      geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.8, fill = "white") +
+      stat_summary(fun = median, geom = "point", size = 4, colour = "red", alpha = 0.6) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 15)) +
+      labs(title    = paste("Repeat count distribution -", sample),
+           subtitle = "Violin = distribution shape | Boxplot = quartiles | Red dot = median",
+           x        = "",
+           y        = "Repeat count") +
+      theme_minimal() +
+      theme(axis.text.x  = element_blank(),
+            axis.ticks.x = element_blank())
+
+    ggsave(
+      filename = plot_path,
+      plot     = p_violin_sample,
+      width    = 6,
+      height   = 8,
+      dpi      = params$plot_dpi,
+      bg       = "white"
+    )
+  }
+  message("Per-sample violin plots saved to: ", violin_by_sample_dir)
 }
 ```
 
@@ -460,63 +1234,90 @@ for (sample in unique(alignment_counts$file_stem)) {
 # Ridge plot - excellent for comparing distributions across samples
 if (requireNamespace("ggridges", quietly = TRUE)) {
   library(ggridges)
-  
-  p_ridge_all <- ggplot(alignment_counts, aes(x = repeat_count, y = file_stem, fill = file_stem)) +
-    geom_density_ridges(alpha = 0.7, scale = 2) +
+
+  n_samples <- length(unique(alignment_counts$file_stem))
+
+  # Parameters for point overlay (match analysis.Rmd ridge convention)
+  ridge_show_points        <- if (!is.null(params$ridge_show_points))        params$ridge_show_points        else TRUE
+  ridge_point_size         <- if (!is.null(params$ridge_point_size))         params$ridge_point_size         else 0.5
+  ridge_point_alpha        <- if (!is.null(params$ridge_point_alpha))        params$ridge_point_alpha        else 0.15
+  ridge_point_jitter_height <- if (!is.null(params$ridge_point_jitter_height)) params$ridge_point_jitter_height else 0.1
+
+  p_ridge_all <- ggplot(alignment_counts,
+                        aes(x = repeat_count, y = file_stem, fill = file_stem))
+
+  if (isTRUE(ridge_show_points)) {
+    p_ridge_all <- p_ridge_all +
+      stat_density_ridges(
+        geom             = "density_ridges",
+        alpha            = 0.7, scale = 2,
+        jittered_points  = TRUE,
+        point_size       = ridge_point_size,
+        point_alpha      = ridge_point_alpha,
+        position         = position_points_jitter(height = ridge_point_jitter_height)
+      )
+  } else {
+    p_ridge_all <- p_ridge_all +
+      geom_density_ridges(alpha = 0.7, scale = 2)
+  }
+
+  p_ridge_all <- p_ridge_all +
     scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
-    labs(title = "Repeat count distributions across samples",
-         subtitle = "Each ridge shows the full distribution - peaks indicate alleles",
-         x = "Repeat count",
-         y = "Sample") +
+    labs(title    = "Repeat count distributions across samples",
+         subtitle = sprintf("Each ridge = full distribution; peaks indicate alleles  |  n = %d samples",
+                            n_samples),
+         x        = "Repeat count",
+         y        = "Sample") +
     theme_minimal() +
     theme(legend.position = "none")
-  
+
   print(p_ridge_all)
-  
-  # Save combined ridge plot
-  # Calculate height (capped at 50 inches)
-  n_samples <- length(unique(alignment_counts$file_stem))
+
   plot_height <- min(50, max(8, n_samples * 0.6))
-  
+
   ggsave(
     filename = file.path(plots_dir, "repeat_density.png"),
     plot = p_ridge_all,
     width = 12,
     height = plot_height,
-    dpi = 300,
+    dpi = params$plot_dpi,
     bg = "white",
     limitsize = FALSE
   )
-  
-  # Create subdirectory for per-sample density plots
-  density_by_sample_dir <- file.path(plots_dir, "repeat_density_by_sample")
-  dir.create(density_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
-  
-  # Individual density plots per sample
-  for (sample in unique(alignment_counts$file_stem)) {
-    sample_data <- alignment_counts %>% filter(file_stem == sample)
-    
-    p_density_sample <- ggplot(sample_data, aes(x = repeat_count)) +
-      geom_density(fill = "#619CFF", alpha = 0.7, colour = "black", linewidth = 1) +
-      scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
-      labs(title = paste("Repeat count density -", sample),
-           subtitle = "Peaks indicate alleles",
-           x = "Repeat count",
-           y = "Density") +
-      theme_minimal()
-    
-    ggsave(
-      filename = file.path(density_by_sample_dir, paste0(sample, "-repeat_density.png")),
-      plot = p_density_sample,
-      width = 10,
-      height = 6,
-      dpi = 300,
-      bg = "white"
-    )
+
+  # Per-sample density plots (gated by plot_per_sample)
+  if (params$plot_per_sample) {
+    density_by_sample_dir <- file.path(plots_dir, "repeat_density_by_sample")
+    dir.create(density_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
+
+    for (sample in unique(alignment_counts$file_stem)) {
+      plot_path <- file.path(density_by_sample_dir, paste0(sample, "-repeat_density.png"))
+      if (file.exists(plot_path) && params$resume) next
+
+      sample_data <- alignment_counts %>% filter(file_stem == sample)
+
+      p_density_sample <- ggplot(sample_data, aes(x = repeat_count)) +
+        geom_density(fill = "#619CFF", alpha = 0.7, colour = "black", linewidth = 1) +
+        scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+        labs(title = paste("Repeat count density -", sample),
+             subtitle = "Peaks indicate alleles",
+             x = "Repeat count",
+             y = "Density") +
+        theme_minimal()
+
+      ggsave(
+        filename = plot_path,
+        plot = p_density_sample,
+        width = 10,
+        height = 6,
+        dpi = params$plot_dpi,
+        bg = "white"
+      )
+    }
   }
-  
+
   message("Repeat detection plots exported to: ", plots_dir)
-  
+
 } else {
   message("Install 'ggridges' package for ridge plot: install.packages('ggridges')")
 }
@@ -562,9 +1363,6 @@ DT::datatable(
                   digits = 1)
 ```
 
-**Note:** For bimodal samples (visible in plots above), mean and median fall between peaks.
-Use the **violin/ridge plots** to visually identify alleles. Formal allele calling is performed in Module 4 (clustering).
-
 ---
 
 # Save outputs
@@ -572,33 +1370,39 @@ Use the **violin/ridge plots** to visually identify alleles. Formal allele calli
 Save processed data for downstream modules.
 
 ```{r save_outputs, echo=FALSE}
-message("")
-message("================================================================================")
-message("Module 3 Complete!")
-message("================================================================================")
-message("  Total reads: ", format(nrow(alignment_counts), big.mark = ","))
-message("  Samples: ", n_distinct(alignment_counts$file_stem))
-message("  Reads with repeats: ", 
-        format(sum(!is.na(alignment_counts$repeat_count) & alignment_counts$repeat_count > 0), big.mark = ","))
-message("  Counting method: ", params$repeat_count_method)
-message("================================================================================")
-message("")
+# Slim counts table: join keys + the three columns repositioned by Module 3
+alignment_counts_slim <- alignment_counts %>%
+  dplyr::select(file_stem, qname,
+                left, mid, right,
+                repeat_count, repeat_count_full,
+                repeat_count_match, repeat_count_tracts)
 
 # Compile module output
 module3_output <- list(
-  alignment_counts = alignment_counts,
-  count_summary = clean_summary,
-  tract_summary = tract_summary,
-  parameters = params
+  alignment_counts_slim = alignment_counts_slim,
+  count_summary         = clean_summary,
+  tract_summary         = tract_summary,
+  parameters            = params
 )
 
 # Export summaries to Excel
-repeat_excel_path <- file.path(repeat_dir, "repeat_summaries.xlsx")
+repeat_excel_path <- file.path(repeat_dir, "repeat_detection.xlsx")
+
+heatmap_sample_index <- clean_summary %>%
+  dplyr::select(file_stem, median_repeats) %>%
+  dplyr::arrange(median_repeats) %>%
+  dplyr::mutate(sample_index = row_number()) %>%
+  dplyr::select(sample_index, file_stem, median_repeats)
+
 write_excel_function(
   named_list = list(
-    "Count Summary" = clean_summary,
-    "Tract Detection" = tract_summary
-  ),
+    "count_summary"           = clean_summary,
+    "tract_detection"         = tract_summary,
+    "count_method_comparison" = count_method_comparison,
+    "heatmap_sample_index"    = heatmap_sample_index,
+    "flank_summary"           = if (exists("flank_summary"))   flank_summary   else NULL,
+    "flank_iqr_sweep"         = if (exists("sweep_df"))        sweep_df        else NULL
+  ) %>% { Filter(Negate(is.null), .) },
   path = repeat_excel_path
 )
 message("Repeat summaries exported to: ", repeat_excel_path)
@@ -606,14 +1410,43 @@ message("Repeat summaries exported to: ", repeat_excel_path)
 # Save complete module output
 output_path <- file.path(results_dir, "03_repeat_detection_results.RData")
 save(module3_output, file = output_path)
-
 message("Module 3 outputs saved to: ", output_path)
 ```
 
+```{r export_read_counts, echo=FALSE}
+if (isTRUE(params$export_read_counts)) {
+
+  rc_dir <- file.path(params$dir_out, "03_repeat_detection", "read_counts")
+  if (!dir.exists(rc_dir)) dir.create(rc_dir, recursive = TRUE)
+
+  samples <- unique(alignment_counts$file_stem)
+
+  invisible(lapply(samples, function(s) {
+    out <- alignment_counts %>%
+      dplyr::filter(file_stem == s) %>%
+      dplyr::select(
+        read_id             = qname,
+        repeat_count_full,
+        repeat_count_match,
+        repeat_count_tracts
+      )
+    out_path <- file.path(rc_dir, paste0(s, ".tsv.gz"))
+    data.table::fwrite(out, file = out_path, sep = "\t", compress = "gzip")
+  }))
+
+  message(sprintf(
+    "Per-read repeat counts exported: %d samples → %s",
+    length(samples), rc_dir
+  ))
+
+} else {
+  message("export_read_counts = FALSE: per-read count files not written.")
+}
+```
+
 ```{r cleanup, echo=FALSE}
-# Clean up if requested
 if (params$remove_intermediate) {
-  rm(alignment_split, alignment_repeats, alignment_repositioned)
+  rm(alignment_split)
   gc()
 }
 ```
@@ -628,11 +1461,65 @@ Results saved to: `r output_path`
 
 ---
 
-**Next Steps:**
+# Module diagnostics
 
-- **Module 4:** Cluster reads by repeat length to identify alleles
-- **Module 5:** Analyse distributions and calculate instability metrics
-- **Module 6 (Optional):** Generate waterfall visualisations
+## Timing
+
+```{r timing_table, echo=FALSE}
+timing_df <- build_timing_table(timings)
+DT::datatable(
+  timing_df,
+  caption = "Section timing — Module 3",
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Section", "Seconds", "Elapsed (mm:ss)", "Cumulative (mm:ss)")
+) %>%
+  DT::formatStyle("section", target = "row",
+                  fontWeight = DT::styleEqual("Total", "bold"))
+```
+
+## Output objects
+
+```{r manifest_table, echo=FALSE}
+manifest <- data.frame(
+  object = names(module3_output),
+  description = c(
+    "Per-read repeat counts with repositioned left/mid/right sequences (slim — join with Module 2 for full data)",
+    "Per-sample repeat count summary statistics (mean, median, SD, detection rate)",
+    "Per-sample repeat tract detection rates and tract structure statistics",
+    "Pipeline parameters used in this module run"
+  ),
+  class = sapply(module3_output, function(x) if (is.null(x)) "NULL" else class(x)[1]),
+  size = sapply(module3_output, function(x) {
+    format_size(if (is.null(x)) 0 else as.numeric(object.size(x)))
+  }),
+  bytes = sapply(module3_output, function(x) {
+    if (is.null(x)) 0L else as.numeric(object.size(x))
+  }),
+  stringsAsFactors = FALSE
+)
+
+DT::datatable(
+  manifest[, c("object", "description", "class", "size")],
+  caption = sprintf("Objects saved to module3_output — RData file: %s on disk (%s)",
+                    format_size(file.size(output_path)), output_path),
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Object", "Description", "Class", "In-memory size")
+)
+```
+
+```{r diagnostics_export, echo=FALSE}
+write_excel_function(
+  named_list = list("timing" = timing_df, "manifest" = manifest),
+  path = repeat_excel_path,
+  overwrite_sheet = TRUE
+)
+message(sprintf("Module 3 complete — total time: %s  |  RData: %s",
+                format_elapsed(sum(timings)), format_size(file.size(output_path))))
+```
 
 ---
 

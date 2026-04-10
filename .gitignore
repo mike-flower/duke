@@ -6,8 +6,8 @@
 .Rapp.history
 
 # Exclude specific files
-duke_run_local.R
-duke_run_local-fs.R
+/scripts/duke_run_local.R
+/scripts/duke_run_local-fs.R
 
 # Exclude specific folders
 /demo/

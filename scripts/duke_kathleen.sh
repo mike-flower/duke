@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #$ -S /bin/bash
-#$ -N duke_01_160c_2G_24h
-#$ -l h_rt=24:00:00
+#$ -N duke_160c_2G_48h
+#$ -l h_rt=48:00:00
 #$ -pe mpi 160
 #$ -l mem=2G
 #$ -wd /home/skgtmdf/Scratch/bin/duke
@@ -11,89 +11,28 @@
 #$ -m bea
 
 # ==============================================================================
-# Duke Pipeline - Old Kathleen Job Script (CLI Version)
-# ==============================================================================
-# 
-# This script runs Duke using the command-line interface (duke_cli.R)
-# Edit the parameters in the ./duke command below
-#
-# Cluster: Old Kathleen (UCL) - Being phased out
-# Scheduler: Grid Engine (SGE)
-# Parallel environment: mpi (distributed)
-# Cores: 80 (2 nodes × 40 cores)
-# Memory: 4GB per core = 320GB total
-# Runtime: 48 hours
-#
-# CRITICAL NOTES:
-# - Old Kathleen requires -pe mpi (not -pe smp)
-# - Request cores in multiples of 40 (node size)
-# - No tmpfs support (tmpdir not available)
-# - Being replaced by New Kathleen (Slurm)
-#
-# Expected performance (80 cores):
-#   ~1000 samples: 15-18 hours
-#   ~2000 samples: 30-36 hours
-#
-# For memory issues with very large datasets, see:
-#   duke_kathleen_160c_80t_cli.sh (requests 160 cores, uses 80 threads)
-#
-# ==============================================================================
-# SUBMISSION INSTRUCTIONS:
-# ==============================================================================
-#
-# 1. Make this script executable (one-time):
-#    chmod +x duke_kathleen.sh
-#
-# 2. Edit parameters in the ./duke command below
-#
-# 3. Submit the job:
-#    qsub duke_kathleen.sh
-#
-# 4. Monitor the job:
-#    qstat -u $USER
-#
-# 5. Cancel job if needed:
-#    qdel <JOB_ID>
-#
+# Duke Pipeline - Old Kathleen Job Script
+# Config: 160 cores requested, 80 threads used (2G/core = 320GB total)
+# See README.md for resource guidance and Kathleen-specific notes
 # ==============================================================================
 
-# Load required modules
+# Environment
 module purge
 module load r/recommended
 module load samtools/1.11/gnu-4.9.2
-
-# Set R library path
 export R_LIBS_USER=~/R/library
-
-# Add minimap2 to PATH
 export PATH=$HOME/Scratch/bin/minimap2:$PATH
-
-# Create logs directory if it doesn't exist
 mkdir -p logs
 
-# Verify modules loaded
-echo "=== Loaded Modules ==="
-module list
+# Version check
+echo "R:        $(R --version | head -1)"
+echo "samtools: $(samtools --version | head -1)"
+echo "minimap2: $(minimap2 --version)"
 echo ""
-echo "R version:"
-R --version | head -1
-echo ""
-echo "samtools version:"
-samtools --version | head -1
-echo ""
-echo "minimap2 version:"
-minimap2 --version
-echo ""
-
-# Change to Duke root directory (parent of scripts/)
-cd ~/Scratch/bin/duke
 
 # ==============================================================================
-# EDIT PARAMETERS BELOW
+# EDIT PATHS BELOW
 # ==============================================================================
-
-# Run Duke with CLI
-# Edit these paths for your analysis:
 
 ./duke \
   --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
@@ -105,43 +44,3 @@ cd ~/Scratch/bin/duke
   --resume TRUE \
   --remove_intermediate TRUE \
   --cleanup_temp FALSE
-
-# ==============================================================================
-# COMMON CUSTOMISATIONS
-# ==============================================================================
-
-# Without adapter trimming:
-# ./duke \
-#   --dir_data ~/Scratch/data/my_experiment \
-#   --dir_out ~/Scratch/results/my_results \
-#   --path_ref ~/Scratch/refs/HTTset20/HTTset20.fasta \
-#   --trim FALSE \
-#   --threads 80
-
-# Force re-run all modules:
-# ./duke --resume FALSE ...
-
-# Run specific modules only:
-# ./duke --run_modules 5,6,7 --resume TRUE ...
-
-# Custom repeat parameters:
-# ./duke --rpt_pattern CTG --rpt_max_mismatch 1 ...
-
-# ==============================================================================
-# MEMORY TROUBLESHOOTING
-# ==============================================================================
-
-# If you encounter "Cannot allocate memory" errors with large datasets,
-# use the memory-optimized version instead:
-#   qsub duke_kathleen_160c_80t_cli.sh
-#
-# That script requests 160 cores but uses only 80 threads, providing
-# a large memory buffer (320GB / 80 threads = 4GB per thread)
-
-# ==============================================================================
-# END OF SCRIPT
-# ==============================================================================
-
-echo ""
-echo "Duke pipeline complete!"
-echo "Results in: ~/Scratch/results/my_results"

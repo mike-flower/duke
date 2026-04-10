@@ -11,9 +11,10 @@ cluster_by_repeat_length <- function(values, cluster_max = 10, cluster_downsampl
   non_na_index <- which(!is.na(values))
   non_na_values <- values[non_na_index]
   
-  # Exit early if not enough variation
+  # Exit early if not enough variation — return all reads in cluster 1
+  # Named by position (not by value) to match the output format of the full path
   if (length(unique(non_na_values)) < 2) {
-    return(setNames(rep(1, length(values)), values))
+    return(setNames(rep(1L, length(values)), seq_along(values)))
   }
   
   # Report dataset size
@@ -33,15 +34,14 @@ cluster_by_repeat_length <- function(values, cluster_max = 10, cluster_downsampl
   
   # Auto-detect optimal number of clusters using GMM or silhouette
   
-  # Attempt GMM (suppress verbose output)
+  # Attempt GMM (suppress verbose output with capture.output to avoid connection leaks)
   gmm <- tryCatch({
-    sink(tempfile())  # Suppress "fitting" messages
-    result <- Mclust(optimisation_values, G = 1:cluster_max, verbose = FALSE)
-    sink()
+    capture.output(
+      result <- Mclust(optimisation_values, G = 1:cluster_max, verbose = FALSE)
+    )
     result
   },
     error = function(e) {
-      sink()  # Restore if error
       message("  GMM failed: ", conditionMessage(e), ". Falling back to silhouette-based k-means.")
       return(NULL)
     }

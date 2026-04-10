@@ -94,6 +94,9 @@ option_list <- list(
               help="Downsample to N reads per sample (e.g., 1000) [default: NA = disabled]",
               metavar="N"),
   
+  make_option("--check_duplicate_readnames", type="logical", default=TRUE,
+              help="Check for duplicate read names and keep longest copy. Safe to set FALSE for PacBio CCS data [default: %default]"),
+  
   # ===========================================================================
   # Adapter trimming
   # ===========================================================================
@@ -177,6 +180,20 @@ option_list <- list(
   make_option("--na_repeat_handling", type="character", default="convert_to_zero",
               help="Handle NA repeats: convert_to_zero/filter/flag_only [default: %default]",
               metavar="METHOD"),
+
+  make_option("--export_read_counts", type="logical", default=TRUE,
+              help="Export per-read repeat counts to gzipped TSV files in 03_repeat_detection/read_counts/ [default: %default]"),
+
+  # ===========================================================================
+  # Flank length QC & filtering (Module 3)
+  # ===========================================================================
+  
+  make_option("--rm_flank_length_outliers", type="logical", default=FALSE,
+              help="Remove reads with outlier combined flank lengths in Module 3 (applies to all downstream modules) [default: %default]"),
+  
+  make_option("--flank_iqr_multiplier", type="double", default=1.5,
+              help="IQR multiplier for combined flank length outlier detection (1.5=standard, 3.0=relaxed for long-read amplicons) [default: %default]",
+              metavar="N"),
   
   # ===========================================================================
   # Clustering
@@ -232,6 +249,9 @@ option_list <- list(
   
   # ===========================================================================
   # Waterfall plots (Module 5)
+  
+  # ===========================================================================
+  # Waterfall plots (Module 5)
   # ===========================================================================
   
   make_option("--waterfall", type="logical", default=TRUE,
@@ -240,15 +260,12 @@ option_list <- list(
   make_option("--waterfall_downsample", type="integer", default=1000,
               help="Max reads per waterfall plot [default: %default]", metavar="N"),
   
-  make_option("--waterfall_rm_flank_length_outliers", type="logical", default=TRUE,
-              help="Remove flank length outliers from waterfall [default: %default]"),
-  
   make_option("--waterfall_y_axis_labels", type="character", default="auto",
               help="Waterfall y-axis labels: auto/all/integer [default: %default]",
               metavar="OPTION"),
   
-  make_option("--waterfall_per_cluster", type="logical", default=TRUE,
-              help="Generate per-cluster waterfall plots [default: %default]"),
+  make_option("--waterfall_per_cluster", type="logical", default=FALSE,
+              help="Generate per-cluster waterfall plots (creates many files for large datasets) [default: %default]"),
   
   make_option("--dna_colours", type="character",
               default="A=darkgreen,C=blue,T=red,G=black,-=lightgrey,N=grey",
@@ -298,6 +315,17 @@ option_list <- list(
               metavar="METRICS"),
   
   # ===========================================================================
+  # Plot output control
+  # ===========================================================================
+  
+  make_option("--plot_dpi", type="integer", default=150,
+              help="Resolution for diagnostic plot output (150=screen, 300=print) [default: %default]",
+              metavar="N"),
+  
+  make_option("--plot_per_sample", type="logical", default=TRUE,
+              help="Generate per-sample plot files. Consider FALSE for large datasets (>50 samples) [default: %default]"),
+  
+  # ===========================================================================
   # Runtime settings
   # ===========================================================================
   
@@ -325,14 +353,8 @@ option_list <- list(
               help="Modules to run (comma-separated, e.g., '1,2,3' or '5,6,7') [default: %default]",
               metavar="MODULES"),
   
-  make_option("--log_dir", type="character", default="logs",
-              help="Log directory [default: %default]", metavar="PATH"),
-  
   make_option("--dry_run", type="logical", default=FALSE,
-              help="Show configuration without running [default: %default]"),
-  
-  make_option("--verbose", type="logical", default=TRUE,
-              help="Verbose output [default: %default]")
+              help="Show configuration without running [default: %default]")
 )
 
 parser <- OptionParser(
@@ -358,18 +380,6 @@ if (is.null(args$dir_out)) {
        "Usage: Rscript duke_cli.R --dir_data /path/to/data --dir_out /path/to/output\n")
 }
 
-# ==============================================================================
-# Validate Required Arguments
-# ==============================================================================
-
-if (is.null(args$dir_data)) {
-  stop("Error: --dir_data is required\n")
-}
-
-if (is.null(args$dir_out)) {
-  stop("Error: --dir_out is required\n")
-}
-
 if (is.null(args$path_ref)) {
   stop("Error: --path_ref is required\n  Specify reference FASTA file with: --path_ref /path/to/reference.fasta\n")
 }
@@ -390,9 +400,7 @@ run_modules <- as.integer(strsplit(args$run_modules, ",")[[1]])
 if (any(run_modules < 1 | run_modules > 7)) {
   stop("Error: --run_modules must contain values between 1-7\n")
 }
-if (args$verbose) {
-  cat("Modules to run:", paste(run_modules, collapse=", "), "\n")
-}
+cat("Modules to run:", paste(run_modules, collapse=", "), "\n")
 
 dna_colours_parsed <- c()
 if (!is.null(args$dna_colours)) {
@@ -424,7 +432,7 @@ if (is.null(args$path_settings)) {
   for (p in possible) {
     if (file.exists(p)) {
       args$path_settings <- p
-      if (args$verbose) cat("Auto-detected settings:", p, "\n")
+      cat("Auto-detected settings:", p, "\n")
       break
     }
   }
@@ -464,6 +472,8 @@ params <- list(
   rpt_return_option = args$rpt_return_option,
   repeat_count_method = args$repeat_count_method,
   na_repeat_handling = args$na_repeat_handling,
+  rm_flank_length_outliers = args$rm_flank_length_outliers,
+  flank_iqr_multiplier = args$flank_iqr_multiplier,
   cluster = args$cluster,
   cluster_by = cluster_by_parsed,
   haplotype_cluster_max = args$haplotype_cluster_max,
@@ -479,7 +489,6 @@ params <- list(
   call_variants = args$call_variants,
   waterfall = args$waterfall,
   waterfall_downsample = args$waterfall_downsample,
-  waterfall_rm_flank_length_outliers = args$waterfall_rm_flank_length_outliers,
   waterfall_y_axis_labels = args$waterfall_y_axis_labels,
   waterfall_per_cluster = args$waterfall_per_cluster,
   dna_colours = dna_colours_parsed,
@@ -494,6 +503,11 @@ params <- list(
   repeat_histogram_binwidth = args$repeat_histogram_binwidth,
   repeat_scatter = args$repeat_scatter,
   repeat_distribution_metrics = repeat_distribution_metrics,
+  check_duplicate_readnames = args$check_duplicate_readnames,
+  plot_dpi = args$plot_dpi,
+  plot_per_sample = args$plot_per_sample,
+  export_read_counts = args$export_read_counts,
+  run_modules = run_modules,
   threads = args$threads,
   resume = args$resume,
   remove_intermediate = args$remove_intermediate,
@@ -504,7 +518,7 @@ params <- list(
 # Setup Logging (EXACTLY matches duke_run.R)
 # ==============================================================================
 
-log_dir <- file.path(getwd(), args$log_dir)
+log_dir <- file.path(getwd(), "logs")
 if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
 
 log_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -565,6 +579,7 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "r2_pattern", params$r2_pattern))
   cat(sprintf("%-35s: %s\n", "select_one_of_pair", params$select_one_of_pair))
   cat(sprintf("%-35s: %s\n", "downsample", if(is.na(params$downsample)) "NA (disabled)" else params$downsample))
+  cat(sprintf("%-35s: %s\n", "check_duplicate_readnames", params$check_duplicate_readnames))
   
   cat("\n═══════════════════════════════════════════════════════════════\n")
   cat("ADAPTER TRIMMING\n")
@@ -594,6 +609,9 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "rpt_return_option", params$rpt_return_option))
   cat(sprintf("%-35s: %s\n", "repeat_count_method", params$repeat_count_method))
   cat(sprintf("%-35s: %s\n", "na_repeat_handling", params$na_repeat_handling))
+  cat(sprintf("%-35s: %s\n", "export_read_counts", params$export_read_counts))
+  cat(sprintf("%-35s: %s\n", "rm_flank_length_outliers", params$rm_flank_length_outliers))
+  cat(sprintf("%-35s: %s\n", "flank_iqr_multiplier", params$flank_iqr_multiplier))
   
   cat("\n═══════════════════════════════════════════════════════════════\n")
   cat("CLUSTERING\n")
@@ -623,7 +641,6 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "waterfall", params$waterfall))
   cat(sprintf("%-35s: %s\n", "waterfall_downsample", 
               if(is.na(params$waterfall_downsample)) "NA (plot all)" else params$waterfall_downsample))
-  cat(sprintf("%-35s: %s\n", "waterfall_rm_flank_length_outliers", params$waterfall_rm_flank_length_outliers))
   cat(sprintf("%-35s: %s\n", "waterfall_y_axis_labels", params$waterfall_y_axis_labels))
   cat(sprintf("%-35s: %s\n", "waterfall_per_cluster", params$waterfall_per_cluster))
   
@@ -646,6 +663,17 @@ if (args$dry_run) {
               paste(params$repeat_distribution_metrics, collapse = ", ")))
   
   cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("MODULE 1 OPTIONS\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "check_duplicate_readnames", params$check_duplicate_readnames))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
+  cat("PLOT OUTPUT CONTROL\n")
+  cat("═══════════════════════════════════════════════════════════════\n\n")
+  cat(sprintf("%-35s: %s\n", "plot_dpi", params$plot_dpi))
+  cat(sprintf("%-35s: %s\n", "plot_per_sample", params$plot_per_sample))
+  
+  cat("\n═══════════════════════════════════════════════════════════════\n")
   cat("RUNTIME AND EXECUTION\n")
   cat("═══════════════════════════════════════════════════════════════\n\n")
   cat(sprintf("%-35s: %s\n", "threads", params$threads))
@@ -654,7 +682,6 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "cleanup_temp", params$cleanup_temp))
   cat(sprintf("%-35s: %s\n", "run_modules", paste(run_modules, collapse = ", ")))
   cat(sprintf("%-35s: %s\n", "log_dir", log_dir))
-  cat(sprintf("%-35s: %s\n", "verbose", args$verbose))
   
   cat("\n═══════════════════════════════════════════════════════════════\n")
   cat("EXECUTION PLAN\n")
@@ -727,32 +754,36 @@ tryCatch({
   
   output_files <- c("01_import_qc_results.RData", "02_alignment_results.RData",
                     "03_repeat_detection_results.RData", "04_allele_calling_results.RData",
-                    "05_waterfall_results.RData", "06_range_analysis_results.RData",
-                    "07_repeat_visualisation_results.RData")
-  
+                    NA,                                  # Module 5 — plot-only, no resume check
+                    "06_range_analysis_results.RData",
+                    NA)                                  # Module 7 — plot-only, no resume check
+
   # Only run selected modules
   for (mod in run_modules) {
     cat("\n-----------------------------------------------------------------\n")
     cat("Module", mod, ":", module_names[mod], "\n")
     cat("-----------------------------------------------------------------\n\n")
-    
-    output <- file.path(params$dir_out, "module_data", output_files[mod])
-    
+
     # Skip Module 5 if waterfall disabled
     if (mod == 5 && !params$waterfall) {
       cat("Skipping Module 5 (waterfall = FALSE)...\n")
       next
     }
-    
-    # Skip if resume enabled and output exists
-    if (params$resume && file.exists(output)) {
-      cat("Skipping Module", mod, "(results found)...\n")
-    } else {
-      rmarkdown::render(rmd_files[mod], output_dir = params$dir_out, 
-                        params = params, envir = new.env(),
-                        knit_root_dir = getwd())
-      cat("\nModule", mod, "complete!\n")
+
+    # Skip if resume enabled and this module has a checkable output file that exists
+    output_file <- output_files[mod]
+    if (params$resume && !is.na(output_file)) {
+      output <- file.path(params$dir_out, "module_data", output_file)
+      if (file.exists(output)) {
+        cat("Skipping Module", mod, "(results found)...\n")
+        next
+      }
     }
+
+    rmarkdown::render(rmd_files[mod], output_dir = params$dir_out,
+                      params = params, envir = new.env(),
+                      knit_root_dir = getwd())
+    cat("\nModule", mod, "complete!\n")
   }
   
   # Cleanup

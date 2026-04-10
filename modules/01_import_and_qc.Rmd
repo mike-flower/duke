@@ -1,5 +1,6 @@
 ---
-title: "Duke Pipeline - Module 1: Import and QC"
+title: "Duke pipeline"
+subtitle: "Module 1: Import and QC"
 author: "Michael Flower"
 date: "`r Sys.Date()`"
 output: 
@@ -14,6 +15,10 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = FALSE)
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 1: Import and QC";</script>')
 ```
 
 # Overview
@@ -36,20 +41,6 @@ This module handles:
 
 
 ```{r load_packages, message=FALSE, warning=FALSE, echo=FALSE}
-# Set working directory to where this Rmd is located
-# This needs to happen BEFORE sourcing lib/load_all.R
-# if (interactive()) {
-#   setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
-# } else {
-#   # When rendering via rmarkdown::render()
-#   # The working directory should already be set by duke_run.R
-#   # But we can also try to detect the Rmd location
-#   rmd_path <- knitr::current_input(dir = TRUE)
-#   if (!is.null(rmd_path) && rmd_path != "") {
-#     setwd(rmd_path)
-#   }
-# }
-
 # Required packages
 required_packages <- c("ShortRead", "Biostrings", "Rsamtools", "pbapply", 
                       "dplyr", "tidyr", "data.table", "stringr", "ggplot2",
@@ -63,7 +54,7 @@ invisible(lapply(required_packages, library, character.only = TRUE))
 ```{r create_directories, echo=FALSE}
 # Create output directories
 temp_dir <- file.path(params$dir_out, "temp")
-qc_dir <- file.path(params$dir_out, file.path("01_import_qc", "qc"))
+qc_dir    <- file.path(params$dir_out, "01_import_qc")
 plots_dir <- file.path(params$dir_out, file.path("01_import_qc", "plots"))  # NEW: plots directory
 
 if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
@@ -80,6 +71,12 @@ if (file.exists("lib/load_all.R")) {
 } else {
   stop("Cannot find lib/load_all.R")
 }
+```
+
+```{r timing_init, echo=FALSE}
+# Initialise section timing
+module_start_time <- proc.time()["elapsed"]
+timings <- c()
 ```
 
 ---
@@ -198,49 +195,8 @@ if (!is.na(params$select_one_of_pair)) {
 }
 ```
 
-```{r sequencing_import_functions, echo=FALSE}
-# Function to import fastq including quality data
-fastq_import <- function(path) {
-  readfastq_file <- readFastq(path)
-  read_names <- as.character(ShortRead::id(readfastq_file))
-  # Strip tags from read names by keeping only the first field before the first space
-  clean_read_names <- sapply(strsplit(read_names, " "), `[`, 1)
-  quality_scaled_dnastringset <- 
-      QualityScaledDNAStringSet(sread(readfastq_file), as(quality(readfastq_file), "PhredQuality"))
-  names(quality_scaled_dnastringset) <- clean_read_names
-  return(quality_scaled_dnastringset)
-}
-
-# Function to import fasta
-fasta_import <- function(path) {
-  readDNAStringSet(path, format = "fasta")
-}
-
-# Function to import bam
-bam_import <- function(path) {
-  bam_file <- BamFile(path)
-  bam_data <- scanBam(bam_file)
-  bam_sequences <- bam_data[[1]]$seq
-  bam_qualities <- bam_data[[1]]$qual
-  bam_read_names <- bam_data[[1]]$qname
-  quality_scaled_dnastringset <-
-    QualityScaledDNAStringSet(bam_sequences, bam_qualities)
-  names(quality_scaled_dnastringset) <- bam_read_names
-  return(quality_scaled_dnastringset)
-}
-
-# Function to import sequencing files
-import_sequencing <- function(path, format) {
-  if (format == "fastq" || format == "fastq.gz") {
-    return(fastq_import(path))
-  } else if (format == "fasta" || format == "fa") {
-    return(fasta_import(path))
-  } else if (format == "bam") {
-    return(bam_import(path))
-  } else {
-    stop("Unsupported file format")
-  }
-}
+```{r t_import_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
 ```
 
 ```{r sequencing_import, echo=FALSE}
@@ -255,28 +211,43 @@ seq <- apply_fn(file_stem_vector, function(file_stem, file_details) {
 seq <- extract_apply_fn_result(seq)
 ```
 
+```{r t_import_end, echo=FALSE}
+timings["Import"] <- proc.time()["elapsed"] - .t
+```
+
 ---
 
 # Check for duplicate read names
 
 Some sequencing technologies may contain duplicate read names. This section identifies duplicates and retains only the longest instance of each duplicated read.
 
-```{r select_unique_readnames, echo=FALSE, message=FALSE, results='hide'}
-# Find duplicate read names and select the longest
-my_path <- file.path(temp_dir, "01_unique_readname_result.RData")
-if (file.exists(my_path) && params$resume) {
-  load(my_path)
-} else {
-  unique_readname_result <- apply_fn(seq, select_longest_duplicate_readname)
-  unique_readname_result <- extract_apply_fn_result(unique_readname_result)
-  save(unique_readname_result, file = my_path)
-}
-
-# Make new sequencing file
-seq_unique <- lapply(unique_readname_result, "[[", "dna_stringset")
+```{r t_dedup_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
 ```
 
-```{r count_read_names, echo=FALSE}
+```{r select_unique_readnames, echo=FALSE, message=FALSE, results='hide'}
+if (params$check_duplicate_readnames) {
+  # Find duplicate read names and select the longest
+  my_path <- file.path(temp_dir, "01_unique_readname_result.RData")
+  if (file.exists(my_path) && params$resume) {
+    load(my_path)
+  } else {
+    unique_readname_result <- apply_fn(seq, select_longest_duplicate_readname)
+    unique_readname_result <- extract_apply_fn_result(unique_readname_result)
+    save(unique_readname_result, file = my_path)
+  }
+  seq_unique <- lapply(unique_readname_result, "[[", "dna_stringset")
+} else {
+  message("⊗ Duplicate read name check skipped (check_duplicate_readnames = FALSE)")
+  seq_unique <- seq
+}
+```
+
+```{r t_dedup_end, echo=FALSE}
+timings["Duplicate names"] <- proc.time()["elapsed"] - .t
+```
+
+```{r count_read_names, echo=FALSE, eval=params$check_duplicate_readnames}
 # Read name counts
 read_name_count <- lapply(file_stem_vector, function(file_stem, unique_readname_result) {
   unique_readname_result[[file_stem]][["read_name_count"]] %>%
@@ -299,98 +270,217 @@ total_readnames <- read_name_count %>%
 read_name_count_summary <- read_name_count_summary %>%
   left_join(total_readnames, by = join_by(file_stem)) %>%
   dplyr::mutate(proportion = n_readnames / total_readnames)
+
+# Flag: are any duplicates present across all samples?
+has_any_duplicates <- any(read_name_count_summary$count > 1)
 ```
 
 ## Duplicate read names
 
-```{r plot_read_name_count, fig.height=8, fig.width=12, echo=FALSE}
-p_duplicates <- ggplot(read_name_count_summary, aes(x = file_stem, y = proportion)) +
-  geom_bar(aes(fill = as.factor(count)),
-           stat = "identity", position = "stack", colour = "black") +
-  scale_x_discrete(labels = function(x) stringr::str_wrap(gsub("(.{50})", "\\1\n", x), width = 50),
-                   guide = guide_axis(angle = 70)) +
-  scale_y_continuous(breaks = pretty_breaks()) +
-  labs(x = "File stem",
-       y = "Proportion of reads",
-       fill = "Read name\ncount") +
-  theme_bw()
+```{r plot_read_name_count, echo=FALSE, results='asis', eval=params$check_duplicate_readnames}
+n_samp       <- length(unique(read_name_count_summary$file_stem))
+total_reads  <- scales::comma(sum(total_readnames$total_readnames))
 
-print(p_duplicates)
+if (!has_any_duplicates) {
 
-# Export plot
-# Calculate width with cap at 50 inches (ggplot2 limit)
-n_samples <- length(unique(read_name_count_summary$file_stem))
-plot_width <- min(50, max(10, n_samples * 0.8))
+  cat(sprintf(
+    "\n\n✓ **No duplicate read names detected** across %d sample%s (%s total reads).\n\n",
+    n_samp, ifelse(n_samp == 1, "", "s"), total_reads
+  ))
 
-ggsave(
-  filename = file.path(plots_dir, "read_name_duplicates.png"),
-  plot = p_duplicates,
-  width = plot_width,
-  height = 8,
-  dpi = 300,
-  bg = "white",
-  limitsize = FALSE
-)
+} else {
+
+  # Per-sample duplication rate
+  dup_rates <- read_name_count_summary %>%
+    dplyr::filter(count > 1) %>%
+    group_by(file_stem) %>%
+    dplyr::summarise(pct_duplicated = sum(proportion) * 100, .groups = "drop")
+
+  all_samples <- data.frame(file_stem = unique(read_name_count_summary$file_stem))
+  dup_rates <- all_samples %>%
+    left_join(dup_rates, by = "file_stem") %>%
+    dplyr::mutate(pct_duplicated = replace_na(pct_duplicated, 0))
+
+  mean_dup <- mean(dup_rates$pct_duplicated)
+  sd_dup   <- if (nrow(dup_rates) > 1) sd(dup_rates$pct_duplicated) else 0
+  dup_rates <- dup_rates %>%
+    dplyr::mutate(outlier = sd_dup > 0 & abs(pct_duplicated - mean_dup) > 2 * sd_dup)
+
+  n_bins <- max(5, min(30, ceiling(sqrt(nrow(dup_rates)))))
+
+  p_duplicates <- ggplot(dup_rates, aes(x = pct_duplicated)) +
+    geom_histogram(bins = n_bins, fill = "#619CFF", colour = "white", alpha = 0.85) +
+    geom_rug(aes(colour = outlier), sides = "b", linewidth = 0.8, alpha = 0.8) +
+    scale_colour_manual(values = c("FALSE" = "#619CFF", "TRUE" = "red"), guide = "none") +
+    scale_x_continuous(labels = function(x) paste0(x, "%")) +
+    labs(title = "Duplicate read name rate across samples",
+         subtitle = sprintf("%d sample%s  |  mean %.2f%%  |  range %.2f–%.2f%%",
+                            n_samp, ifelse(n_samp == 1, "", "s"),
+                            mean_dup, min(dup_rates$pct_duplicated),
+                            max(dup_rates$pct_duplicated)),
+         x = "% reads with duplicate names per sample",
+         y = "Number of samples") +
+    theme_bw()
+
+  print(p_duplicates)
+
+  # List outlier samples
+  outlier_df <- dplyr::filter(dup_rates, outlier)
+  if (nrow(outlier_df) > 0) {
+    cat("\n\n**Outlier samples (>2 SD from mean duplication rate):**\n\n")
+    for (i in seq_len(nrow(outlier_df))) {
+      cat(sprintf("- %s: %.2f%% duplicated\n",
+                  outlier_df$file_stem[i], outlier_df$pct_duplicated[i]))
+    }
+    cat("\n\n")
+  }
+
+  plot_path <- file.path(plots_dir, "read_name_duplicates.png")
+  if (!file.exists(plot_path) || !params$resume) {
+    ggsave(filename = plot_path, plot = p_duplicates,
+           width = 10, height = 6, dpi = params$plot_dpi, bg = "white")
+  }
+}
 ```
 
 ---
 
-# Read count comparison
-
 ```{r count_original_vs_unique_readnames, echo=FALSE}
-# Compare read count
-readcount_unique_readnames <- 
-  compare_read_count(dna_stringset1 = seq,
-                     dna_stringset2 = seq_unique,
-                     name1 = "original",
-                     name2 = "unique_read_name")
+# Compare read count (only meaningful when duplicate check ran)
+if (params$check_duplicate_readnames) {
+  readcount_unique_readnames <- 
+    compare_read_count(dna_stringset1 = seq,
+                       dna_stringset2 = seq_unique,
+                       name1 = "original",
+                       name2 = "unique_read_name")
+}
 
-# Remove previous sequencing file
+# Remove previous sequencing file (always, regardless of duplicate check)
 if (params$remove_intermediate) rm(seq)
 ```
 
 ## Read count comparison
 
-```{r plot_original_vs_unique_readnames, echo=FALSE, fig.height=8, fig.width=12}
-# Long format
-readcount_unique_readnames_long <- readcount_unique_readnames %>%
-  pivot_longer(!file_stem, names_to = "dataset", values_to = "read_count")
+```{r plot_original_vs_unique_readnames, echo=FALSE, results='asis', eval=params$check_duplicate_readnames}
+n_samp <- nrow(readcount_unique_readnames)
 
-# Plot
-p_unique_reads <- ggplot(readcount_unique_readnames_long, aes(x = file_stem, y = read_count)) +
-  facet_grid(rows = vars(dataset),
-             labeller = as_labeller(c("original" = "Original",
-                                      "unique_read_name" = "Unique read\nnames"))) +
-  geom_bar(stat = "identity") +
-  geom_text(aes(label = scales::comma(read_count)),
-            angle = 70, vjust = -0.25, hjust = -0.25, size = 2) +
-  scale_x_discrete(labels = function(x) stringr::str_wrap(gsub("(.{50})", "\\1\n", x), width = 50),
-                   guide = guide_axis(angle = 70)) +
-  scale_y_continuous(breaks = pretty_breaks(),
-                     expand = expansion(mult = c(NA, 0.3))) +
-  labs(x = "File stem",
-       y = "Read count") +
+# Build long format with numeric stage position (needed for consistent jitter)
+comparison_long <- readcount_unique_readnames %>%
+  pivot_longer(!file_stem, names_to = "stage", values_to = "read_count") %>%
+  dplyr::mutate(
+    stage     = factor(stage,
+                       levels = c("original", "unique_read_name"),
+                       labels = c("Before\ndeduplication", "After\ndeduplication")),
+    stage_num = as.numeric(stage)
+  )
+
+# Pre-compute a single consistent horizontal jitter offset per sample
+# so the connecting line between Before and After is perfectly vertical
+set.seed(123)
+jitter_df <- data.frame(
+  file_stem = unique(comparison_long$file_stem),
+  x_offset  = runif(n_samp, -0.12, 0.12)
+)
+comparison_long <- comparison_long %>%
+  left_join(jitter_df, by = "file_stem") %>%
+  dplyr::mutate(x_pos = stage_num + x_offset)
+
+# Flag samples where reads were actually removed
+change_lookup <- readcount_unique_readnames %>%
+  dplyr::mutate(changed = unique_read_name < original) %>%
+  dplyr::select(file_stem, changed)
+comparison_long <- comparison_long %>%
+  left_join(change_lookup, by = "file_stem")
+
+# Scale point/line aesthetics to N
+point_size  <- if (n_samp <= 50) 2.5 else 1.5
+point_alpha <- if (n_samp <= 50) 0.8  else max(0.2, 1 - n_samp / 500)
+line_alpha  <- if (n_samp <= 50) 0.5  else max(0.1, 0.5 - n_samp / 1000)
+
+# Subtitle
+if (has_any_duplicates) {
+  reads_lost  <- sum(readcount_unique_readnames$original - readcount_unique_readnames$unique_read_name)
+  pct_lost    <- reads_lost / sum(readcount_unique_readnames$original) * 100
+  plot_subtitle <- sprintf("%d sample%s  |  %s reads removed (%.2f%% of total)",
+                           n_samp, ifelse(n_samp == 1, "", "s"),
+                           scales::comma(reads_lost), pct_lost)
+} else {
+  plot_subtitle <- sprintf("%d sample%s  |  no reads removed",
+                           n_samp, ifelse(n_samp == 1, "", "s"))
+}
+
+stage_labels <- levels(comparison_long$stage)
+
+p_dedup <- ggplot(comparison_long) +
+  # Boxplot summarises the distribution at each stage
+  geom_boxplot(aes(x = stage_num, y = read_count, group = stage_num),
+               outlier.shape = NA, width = 0.3,
+               fill = "grey92", colour = "grey40", linewidth = 0.6) +
+  # Lines connect the same sample across stages — vertical when jitter is consistent
+  geom_line(aes(x = x_pos, y = read_count, group = file_stem, colour = changed),
+            linewidth = 0.4, alpha = line_alpha) +
+  # Points overlaid on box
+  geom_point(aes(x = x_pos, y = read_count, colour = changed),
+             size = point_size, alpha = point_alpha) +
+  # Mean diamond
+  stat_summary(aes(x = stage_num, y = read_count, group = stage_num),
+               fun = mean, geom = "point", shape = 18,
+               colour = "red", size = 4, alpha = 0.6) +
+  scale_colour_manual(
+    values = c("FALSE" = "grey50", "TRUE" = "red"),
+    labels = c("FALSE" = "Unchanged",  "TRUE" = "Reads removed"),
+    name   = NULL
+  ) +
+  scale_x_continuous(breaks = 1:2, labels = stage_labels, limits = c(0.6, 2.4)) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title    = "Read counts before and after duplicate read name removal",
+       subtitle = plot_subtitle,
+       x = NULL,
+       y = "Read count per sample") +
   theme_bw()
 
-print(p_unique_reads)
+# Suppress legend when all samples are unchanged (would only show one entry)
+if (!has_any_duplicates) p_dedup <- p_dedup + guides(colour = "none")
 
-# Export plot
-# Calculate width with cap at 50 inches
-n_samples <- length(unique(readcount_unique_readnames_long$file_stem))
-plot_width <- min(50, max(10, n_samples * 0.8))
+print(p_dedup)
 
-ggsave(
-  filename = file.path(plots_dir, "unique_read_names.png"),
-  plot = p_unique_reads,
-  width = plot_width,
-  height = 8,
-  dpi = 300,
-  bg = "white",
-  limitsize = FALSE
-)
+# Summary message / outlier list
+if (!has_any_duplicates) {
+  cat(sprintf(
+    "\n\n✓ **No reads removed**: all read names unique across all %d sample%s.\n\n",
+    n_samp, ifelse(n_samp == 1, "", "s")
+  ))
+} else {
+  removed_df <- readcount_unique_readnames %>%
+    dplyr::mutate(
+      reads_removed = original - unique_read_name,
+      pct_removed   = reads_removed / original * 100
+    )
+  mean_rem <- mean(removed_df$pct_removed)
+  sd_rem   <- if (nrow(removed_df) > 1) sd(removed_df$pct_removed) else 0
+  removed_df <- removed_df %>%
+    dplyr::mutate(outlier = sd_rem > 0 & abs(pct_removed - mean_rem) > 2 * sd_rem)
+
+  outlier_df <- dplyr::filter(removed_df, outlier)
+  if (nrow(outlier_df) > 0) {
+    cat("\n\n**Outlier samples (>2 SD from mean removal rate):**\n\n")
+    for (i in seq_len(nrow(outlier_df))) {
+      cat(sprintf("- %s: %.2f%% removed (%s reads)\n",
+                  outlier_df$file_stem[i], outlier_df$pct_removed[i],
+                  scales::comma(outlier_df$reads_removed[i])))
+    }
+    cat("\n\n")
+  }
+}
+
+plot_path <- file.path(plots_dir, "unique_read_names.png")
+if (!file.exists(plot_path) || !params$resume) {
+  ggsave(filename = plot_path, plot = p_dedup,
+         width = 8, height = 6, dpi = params$plot_dpi, bg = "white")
+}
 ```
 
-```{r table_original_vs_unique_readnames, echo=FALSE}
+```{r table_original_vs_unique_readnames, echo=FALSE, eval=params$check_duplicate_readnames}
 # Display table
 DT::datatable(
   readcount_unique_readnames,
@@ -423,6 +513,10 @@ write_excel_function(named_list = list("readcount_unique_readnames" = readcount_
 
 Optionally downsample reads for faster processing and visualisation.
 
+```{r t_downsample_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
 ```{r downsample, echo=FALSE}
 # Downsample
 if (!is.null(params$downsample) && !is.na(params$downsample)) {
@@ -433,6 +527,10 @@ if (!is.null(params$downsample) && !is.na(params$downsample)) {
 } else {
   seq_sample <- seq_unique
 }
+```
+
+```{r t_downsample_end, echo=FALSE}
+timings["Downsampling"] <- proc.time()["elapsed"] - .t
 ```
 
 ```{r downsample_read_counts, echo=FALSE}
@@ -446,44 +544,128 @@ read_count_sample <-
 
 ## Downsampling reads
 
-```{r plot_downsample_read_counts, echo=FALSE, fig.height=8, fig.width=12}
-# Long format
-read_count_sample_long <- read_count_sample %>%
-  pivot_longer(!file_stem, names_to = "dataset", values_to = "read_count")
+```{r plot_downsample_read_counts, echo=FALSE, results='asis'}
+n_samp <- nrow(read_count_sample)
 
-# Plot
-p_filtered_counts <- ggplot(read_count_sample_long, aes(x = file_stem, y = read_count)) +
-  facet_grid(rows = vars(dataset),
-             labeller = as_labeller(c("original" = "Original",
-                                      "sample" = "Sampled reads")),
-             scales = "free_y") +
-  geom_bar(stat = "identity") +
-  geom_text(aes(label = scales::comma(read_count)),
-            angle = 70, vjust = -0.25, hjust = -0.25, size = 2) +
-  scale_x_discrete(labels = function(x) stringr::str_wrap(gsub("(.{50})", "\\1\n", x), width = 50),
-                   guide = guide_axis(angle = 70)) +
-  scale_y_continuous(breaks = pretty_breaks(),
-                     expand = expansion(mult = c(NA, 0.3))) +
-  labs(x = "File stem",
-       y = "Read count") +
+# Build long format with numeric stage position
+counts_long <- read_count_sample %>%
+  pivot_longer(!file_stem, names_to = "stage", values_to = "read_count") %>%
+  dplyr::mutate(
+    stage     = factor(stage,
+                       levels = c("original", "sample"),
+                       labels = c("Before\ndownsampling", "After\ndownsampling")),
+    stage_num = as.numeric(stage)
+  )
+
+# Pre-compute a single consistent horizontal jitter offset per sample
+set.seed(123)
+jitter_df <- data.frame(
+  file_stem = unique(counts_long$file_stem),
+  x_offset  = runif(n_samp, -0.12, 0.12)
+)
+counts_long <- counts_long %>%
+  left_join(jitter_df, by = "file_stem") %>%
+  dplyr::mutate(x_pos = stage_num + x_offset)
+
+# Flag samples where reads were actually removed by downsampling
+change_lookup <- read_count_sample %>%
+  dplyr::mutate(changed = sample < original) %>%
+  dplyr::select(file_stem, changed)
+counts_long <- counts_long %>%
+  left_join(change_lookup, by = "file_stem")
+
+# Downsampling info
+downsample_applied <- !is.null(params$downsample) && !is.na(params$downsample)
+n_downsampled      <- sum(change_lookup$changed)
+
+# Summary stats (on original counts)
+mean_count <- mean(read_count_sample$original)
+sd_count   <- if (n_samp > 1) sd(read_count_sample$original) else 0
+
+subtitle <- sprintf(
+  "%d sample%s  |  mean %s  |  SD %s  |  range %s \u2013 %s",
+  n_samp, ifelse(n_samp == 1, "", "s"),
+  scales::comma(round(mean_count)),
+  scales::comma(round(sd_count)),
+  scales::comma(min(read_count_sample$original)),
+  scales::comma(max(read_count_sample$original))
+)
+if (downsample_applied) {
+  subtitle <- paste0(
+    subtitle,
+    sprintf("\nDownsample threshold: %s  \u2014  %d sample%s affected",
+            scales::comma(params$downsample), n_downsampled,
+            ifelse(n_downsampled == 1, "", "s"))
+  )
+} else {
+  subtitle <- paste0(subtitle, "\nNo downsampling applied")
+}
+
+# Scale point/line aesthetics to N
+point_size  <- if (n_samp <= 50) 2.5 else 1.5
+point_alpha <- if (n_samp <= 50) 0.8  else max(0.2, 1 - n_samp / 500)
+line_alpha  <- if (n_samp <= 50) 0.5  else max(0.1, 0.5 - n_samp / 1000)
+
+stage_labels <- levels(counts_long$stage)
+
+p_filtered_counts <- ggplot(counts_long) +
+  geom_boxplot(aes(x = stage_num, y = read_count, group = stage_num),
+               outlier.shape = NA, width = 0.3,
+               fill = "grey92", colour = "grey40", linewidth = 0.6) +
+  geom_line(aes(x = x_pos, y = read_count, group = file_stem, colour = changed),
+            linewidth = 0.4, alpha = line_alpha) +
+  geom_point(aes(x = x_pos, y = read_count, colour = changed),
+             size = point_size, alpha = point_alpha) +
+  stat_summary(aes(x = stage_num, y = read_count, group = stage_num),
+               fun = mean, geom = "point", shape = 18,
+               colour = "red", size = 4, alpha = 0.6) +
+  scale_colour_manual(
+    values = c("FALSE" = "grey50", "TRUE" = "red"),
+    labels = c("FALSE" = "Unchanged", "TRUE" = "Downsampled"),
+    name   = NULL
+  ) +
+  scale_x_continuous(breaks = 1:2, labels = stage_labels, limits = c(0.6, 2.4)) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title    = "Read counts before and after downsampling",
+       subtitle = subtitle,
+       x = NULL,
+       y = "Read count per sample") +
   theme_bw()
+
+# Horizontal downsample threshold line
+if (downsample_applied) {
+  p_filtered_counts <- p_filtered_counts +
+    geom_hline(yintercept = params$downsample, colour = "red", alpha = 0.7,
+               linetype = "dashed", linewidth = 0.8) +
+    annotate("text", x = 2.35, y = params$downsample,
+             label = sprintf("Threshold\n(%s)", scales::comma(params$downsample)),
+             vjust = -0.2, hjust = 1, colour = "red", size = 3, alpha = 0.7)
+}
+
+# Suppress legend when nothing was downsampled
+if (n_downsampled == 0) p_filtered_counts <- p_filtered_counts + guides(colour = "none")
 
 print(p_filtered_counts)
 
-# Export plot
-# Calculate width with cap at 50 inches
-n_samples <- length(unique(read_count_sample_long$file_stem))
-plot_width <- min(50, max(10, n_samples * 0.8))
+# List outlier samples (those downsampled) below plot
+if (n_downsampled > 0) {
+  downsampled_df <- change_lookup %>% dplyr::filter(changed) %>%
+    left_join(read_count_sample, by = "file_stem")
+  cat("\n\n**Samples affected by downsampling:**\n\n")
+  for (i in seq_len(nrow(downsampled_df))) {
+    cat(sprintf("- %s: %s \u2192 %s reads\n",
+                downsampled_df$file_stem[i],
+                scales::comma(downsampled_df$original[i]),
+                scales::comma(downsampled_df$sample[i])))
+  }
+  cat("\n\n")
+}
 
-ggsave(
-  filename = file.path(plots_dir, "read_counts_filtered.png"),
-  plot = p_filtered_counts,
-  width = plot_width,
-  height = 8,
-  dpi = 300,
-  bg = "white",
-  limitsize = FALSE
-)
+plot_path <- file.path(plots_dir, "read_counts_filtered.png")
+if (!file.exists(plot_path) || !params$resume) {
+  ggsave(filename = plot_path, plot = p_filtered_counts,
+         width = 8, height = 6, dpi = params$plot_dpi, bg = "white")
+}
 ```
 
 ```{r table_downsample_read_counts, echo=FALSE}
@@ -521,6 +703,10 @@ if (params$remove_intermediate) rm(seq_unique)
 # Quality
 
 Calculate read quality metrics and length distributions.
+
+```{r t_qc_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
 
 ```{r qc, echo=FALSE}
 # Quality and length of each read
@@ -577,6 +763,10 @@ sequencing_qc_summary <-
                      .groups = "drop")
 ```
 
+```{r t_qc_end, echo=FALSE}
+timings["QC metrics"] <- proc.time()["elapsed"] - .t
+```
+
 ## QC metrics
 
 ```{r qc_plot, echo=FALSE, message=FALSE}
@@ -608,39 +798,9 @@ ggsave(
   plot = p_qc_scatter,
   width = 12,
   height = 6,
-  dpi = 300,
+  dpi = params$plot_dpi,
   bg = "white"
 )
-
-# Create subdirectory for per-sample plots
-quality_by_sample_dir <- file.path(plots_dir, "quality_vs_length_by_sample")
-dir.create(quality_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
-
-# Individual per-sample plots
-for (sample in unique(filtered_read_summary$file_stem)) {
-  sample_data <- filtered_read_summary %>% filter(file_stem == sample)
-  
-  p_sample <- ggplot(sample_data, aes(x = mean_length, y = mean_phred_plot)) +
-    geom_point(aes(size = read_count), 
-               fill = "skyblue", colour = "black", shape = 21, alpha = 0.75) +
-    geom_smooth(se = FALSE) +
-    scale_x_continuous(breaks = pretty_breaks()) +
-    scale_y_continuous(breaks = pretty_breaks()) +
-    labs(title = paste("Read quality vs length -", sample),
-         x = "Mean read length (bp)",
-         y = "Mean phred score",
-         size = "Read count") +
-    theme_minimal()
-  
-  ggsave(
-    filename = file.path(quality_by_sample_dir, paste0(sample, "-quality_vs_length.png")),
-    plot = p_sample,
-    width = 8,
-    height = 6,
-    dpi = 300,
-    bg = "white"
-  )
-}
 ```
 
 ```{r qc_table, echo=FALSE}
@@ -791,6 +951,10 @@ if (params$trim && !is.null(params$path_trim_patterns) && !is.na(params$path_tri
 }
 ```
 
+```{r t_trim_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
 ```{r trim, echo=FALSE, message=FALSE, results='hide'}
 # Run trim function (only if adapters provided)
 my_path <- file.path(temp_dir, "02_trim_result.RData")
@@ -830,9 +994,14 @@ if (length(combined_trim_sequences) > 0) {
 if (params$remove_intermediate) rm(seq_sample)
 ```
 
+```{r t_trim_end, echo=FALSE}
+timings["Adapter trimming"] <- proc.time()["elapsed"] - .t
+```
+
 ## Proportion of reads trimmed
 
 ```{r trim_proportion, echo=FALSE}
+if (length(combined_trim_sequences) > 0) {
 # Extract trim locations
 trim_locations <- lapply(file_stem_vector, function(my_file_stem, trim_result) {
   trim_result[[my_file_stem]]$trim_locations %>%
@@ -881,45 +1050,44 @@ mean_trim <- count_trimmed %>%
 # Reorder trim_pattern_name by mean count
 count_trimmed <- count_trimmed %>%
   dplyr::mutate(trim_pattern_name = factor(trim_pattern_name, levels = mean_trim$trim_pattern_name))
+} # end if (length(combined_trim_sequences) > 0)
 ```
 
 ```{r trim_proportion_plot, echo=FALSE}
-# Calculate appropriate number of decimals based on data range
-proportion_range <- max(count_trimmed$proportion) - min(count_trimmed$proportion)
-n_decimals <- if (proportion_range < 0.01) {
-  4  # Very small differences
-} else if (proportion_range < 0.1) {
-  3  # Small differences
-} else if (proportion_range < 1) {
-  2  # Moderate differences
-} else {
-  1  # Large differences
-}
+if (length(combined_trim_sequences) > 0) {
 
 p_trim_prop <- ggplot(count_trimmed, aes(x = trim_pattern_name, y = proportion)) +
-  stat_summary(fun = mean, geom = "bar", fill = "lightblue", colour = "black") +
-  geom_jitter(height = 0, width = 0.1, alpha = 0.5, size = 3) +
-  stat_summary(fun = mean, geom = "text", show.legend = FALSE, colour = "black", size = 4,
-               vjust = -0.5,
-               aes(label = after_stat(sprintf(paste0("%.", n_decimals, "f"), y)))) +
+  geom_boxplot(outlier.shape = NA, width = 0.4,
+               fill = "grey92", colour = "grey40") +
+  geom_jitter(height = 0, width = 0.1, alpha = 0.6, size = 2.5, colour = "grey40") +
+  stat_summary(fun = mean, geom = "point", shape = 18,
+               colour = "red", size = 4, alpha = 0.6) +
+  stat_summary(fun = mean, geom = "text",
+               aes(label = scales::percent(after_stat(y), accuracy = 0.1)),
+               colour = "red", size = 3.5, vjust = -1.2, alpha = 0.7) +
   scale_x_discrete(guide = guide_axis(angle = 75)) +
-  scale_y_continuous(breaks = pretty_breaks(),
-                     expand = expansion(mult = c(0.2))) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     breaks = scales::pretty_breaks(n = 6),
+                     expand = expansion(mult = c(0.1, 0.12))) +
   labs(x = "Trim sequence",
-       y = "Proportion of reads") +
-  theme_minimal()
+       y = "Proportion of reads trimmed") +
+  theme_bw()
 
 print(p_trim_prop)
 
 # Export plot
-ggsave(
-  filename = file.path(plots_dir, "adapter_trimming_proportion.png"),
-  plot = p_trim_prop,
-  width = 10,
-  height = 6,
-  dpi = 300,
-  bg = "white"
-)
+plot_path <- file.path(plots_dir, "adapter_trimming_proportion.png")
+if (!file.exists(plot_path) || !params$resume) {
+  ggsave(
+    filename = plot_path,
+    plot = p_trim_prop,
+    width = 10,
+    height = 6,
+    dpi = params$plot_dpi,
+    bg = "white"
+  )
+}
+} # end if (length(combined_trim_sequences) > 0)
 ```
 
 ## Trimming quality summary
@@ -939,6 +1107,7 @@ Compare trim length statistics to `adapter_length`:
 ### Summary by adapter
 
 ```{r trim_summary_by_adapter, echo=FALSE}
+if (length(combined_trim_sequences) > 0) {
 # Comprehensive summary by adapter
 trim_by_adapter <- trim_locations %>%
   filter(trim == TRUE) %>%
@@ -998,11 +1167,13 @@ DT::datatable(
 ) %>%
   DT::formatStyle(columns = colnames(trim_by_adapter), fontSize = '85%') %>%
   DT::formatRound(columns = c('median_trim_length', 'mean_trim_length', 'sd_trim_length', 'proportion'), digits = 2)
+} # end if (length(combined_trim_sequences) > 0)
 ```
 
 ### Summary by sample
 
 ```{r trim_summary_by_sample, echo=FALSE}
+if (length(combined_trim_sequences) > 0) {
 # Comprehensive summary by sample
 trim_by_sample <- trim_locations %>%
   filter(trim == TRUE) %>%
@@ -1076,11 +1247,13 @@ write_excel_function(
   path = file.path(qc_dir, "qc.xlsx"),
   overwrite_sheet = TRUE
 )
+} # end if (length(combined_trim_sequences) > 0)
 ```
 
 ### Trim length distribution
 
 ```{r trim_length_plot, echo=FALSE}
+if (length(combined_trim_sequences) > 0) {
 # Use trim_by_sample for plotting
 if (nrow(trim_by_sample) > 0) {
   # Calculate mean trim length for each adapter (for ordering x-axis)
@@ -1097,8 +1270,8 @@ if (nrow(trim_by_sample) > 0) {
   p_trim_length <- ggplot(plot_data, aes(x = trim_pattern_name, y = mean_trim_length)) +
     geom_boxplot(outlier.shape = NA, alpha = 0.3) +
     geom_jitter(height = 0, width = 0.1, alpha = 0.5, size = 3) +
-    stat_summary(fun = mean, geom = "point", shape = 18, colour = "red", size = 4) +
-    stat_summary(fun = mean, geom = "text", colour = "red", size = 3.5,
+    stat_summary(fun = mean, geom = "point", shape = 18, colour = "red", size = 4, alpha = 0.6) +
+    stat_summary(fun = mean, geom = "text", colour = "red", size = 3.5, alpha = 0.7,
                  angle = 45, vjust = -0.5, hjust = -0.25,
                  aes(label = after_stat(round(y, 1)))) +
     geom_point(aes(y = adapter_length), colour = "blue", shape = 3, size = 3) +
@@ -1114,17 +1287,21 @@ if (nrow(trim_by_sample) > 0) {
   print(p_trim_length)
   
   # Export plot
-  ggsave(
-    filename = file.path(plots_dir, "trim_length_distribution.png"),
-    plot = p_trim_length,
-    width = 10,
-    height = 6,
-    dpi = 300,
-    bg = "white"
-  )
+  plot_path <- file.path(plots_dir, "trim_length_distribution.png")
+  if (!file.exists(plot_path) || !params$resume) {
+    ggsave(
+      filename = plot_path,
+      plot = p_trim_length,
+      width = 10,
+      height = 6,
+      dpi = params$plot_dpi,
+      bg = "white"
+    )
+  }
 }
 
 message("All QC plots exported to: ", plots_dir)
+} # end if (length(combined_trim_sequences) > 0)
 ```
 
 ---
@@ -1173,13 +1350,13 @@ write_excel_function(named_list = list("final_summary" = final_summary),
 ```{r save_output, echo=FALSE}
 # Compile module output
 module1_output <- list(
-  sequences = seq_trim,
-  file_details = file_details,
-  qc_summary = sequencing_qc_summary,
-  trim_summary = count_trimmed,
-  trim_by_adapter = trim_by_adapter,
-  trim_by_sample = trim_by_sample,
-  final_summary = final_summary
+  sequences        = seq_trim,
+  file_details     = file_details,
+  qc_summary       = sequencing_qc_summary,
+  trim_summary     = if (exists("count_trimmed")) count_trimmed else NULL,
+  trim_by_adapter  = if (exists("trim_by_adapter")) trim_by_adapter else NULL,
+  trim_by_sample   = if (exists("trim_by_sample")) trim_by_sample else NULL,
+  final_summary    = final_summary
 )
 
 # Create results directory
@@ -1198,6 +1375,81 @@ Results saved to: `r output_path`
 - **`r length(seq_trim)`** samples processed
 - **`r format(sum(final_summary$n_reads), big.mark = ",")`** total reads
 - Mean reads per sample: **`r format(round(mean(final_summary$n_reads)), big.mark = ",")`**
+
+---
+
+# Module diagnostics
+
+## Timing
+
+```{r timing_table, echo=FALSE}
+timing_df <- build_timing_table(timings)
+
+DT::datatable(
+  timing_df,
+  caption = "Section timing — Module 1",
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Section", "Seconds", "Elapsed (mm:ss)", "Cumulative (mm:ss)")
+) %>%
+  DT::formatStyle(
+    "section",
+    target = "row",
+    fontWeight = DT::styleEqual("Total", "bold")
+  )
+```
+
+## Output objects
+
+```{r manifest_table, echo=FALSE}
+rdata_mb <- round(file.size(output_path) / 1024^2, 2)
+
+manifest <- data.frame(
+  object = names(module1_output),
+  description = c(
+    "Trimmed sequences ready for alignment (named list of XStringSet, one per sample)",
+    "Input file metadata: names, formats, paths, paired-end status",
+    "Per-sample QC metrics: read count, mean/median length, Phred quality",
+    "Read counts by adapter and sample (NULL if trimming disabled)",
+    "Trimming statistics per adapter across all samples (NULL if trimming disabled)",
+    "Trimming statistics per adapter per sample (NULL if trimming disabled)",
+    "Final read counts and mean lengths after all processing steps"
+  ),
+  class = sapply(module1_output, function(x) if (is.null(x)) "NULL" else class(x)[1]),
+  size = sapply(module1_output, function(x) {
+    format_size(if (is.null(x)) 0 else as.numeric(object.size(x)))
+  }),
+  bytes = sapply(module1_output, function(x) {
+    if (is.null(x)) 0L else as.numeric(object.size(x))
+  }),
+  stringsAsFactors = FALSE
+)
+
+DT::datatable(
+  manifest[, c("object", "description", "class", "size")],
+  caption = sprintf("Objects saved to module1_output — RData file: %s on disk (%s)",
+                    format_size(file.size(output_path)), output_path),
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Object", "Description", "Class", "In-memory size")
+)
+```
+
+```{r diagnostics_export, echo=FALSE}
+write_excel_function(
+  named_list = list(
+    "timing"   = timing_df,
+    "manifest" = manifest
+  ),
+  path = file.path(qc_dir, "qc.xlsx"),
+  overwrite_sheet = TRUE
+)
+
+message(sprintf("Module 1 complete — total time: %s  |  RData: %s",
+                format_elapsed(sum(timings)), format_size(file.size(output_path))))
+```
 
 ---
 

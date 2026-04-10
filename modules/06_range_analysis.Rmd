@@ -1,5 +1,6 @@
 ---
-title: "Duke Pipeline - Module 6: Range Analysis"
+title: "Duke pipeline"
+subtitle: "Module 6: Range analysis"
 author: "Michael Flower"
 date: "`r Sys.Date()`"
 output: 
@@ -13,7 +14,14 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = FALSE)
+# Suppress pbapply/pbmcapply progress bars globally
+pbapply::pboptions(type = "none")
+options(pbmcapply.use_pb = FALSE)
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 6: Range analysis";</script>')
 ```
 
 ```{r load_packages, echo=FALSE, message=FALSE}
@@ -28,7 +36,7 @@ invisible(lapply(required_packages, library, character.only = TRUE))
 
 ```{r create_directories, echo=FALSE}
 # Create output directory
-range_dir <- file.path(params$dir_out, "06_range_analysis", "range_analysis")
+range_dir <- file.path(params$dir_out, "06_range_analysis")
 
 if (!dir.exists(range_dir)) dir.create(range_dir, recursive = TRUE)
 ```
@@ -44,19 +52,28 @@ if (file.exists("lib/load_all.R")) {
 }
 ```
 
+```{r timing_init, echo=FALSE}
+module_start_time <- proc.time()["elapsed"]
+timings <- c()
+```
+
 ---
 
-# Module 6: Range Analysis & Instability Metrics
 
-Analyze repeat length distributions within user-defined ranges and calculate instability metrics relative to control samples.
+# Overview
+
+**Module 6: Range analysis & instability metrics**
+
+Analyses repeat length distributions within user-defined ranges and calculates instability metrics relative to control samples.
+
+**Input:** Repeat counts and cluster assignments (Modules 3 and 4), settings Excel file defining analysis ranges
 
 **Key features:**
 
-- Settings-based range definitions
+- Settings-based range definitions per sample
 - Peak detection per range
 - Distribution summaries (~30 metrics per range)
-- Group control definition
-- Instability metrics
+- Group control definition and instability metrics
 - Excel exports
 
 ---
@@ -64,17 +81,27 @@ Analyze repeat length distributions within user-defined ranges and calculate ins
 # Load data
 
 ```{r load_data, echo=FALSE}
-# Load Module 4 output (clustered data with repeat counts)
 results_dir <- file.path(params$dir_out, "module_data")
-load(file.path(results_dir, "04_allele_calling_results.RData"))
 
-# Extract clustered data
-alignment_clustered <- module4_output$alignment_clustered
+# Load Module 3 slim (repeat counts)
+module3_path <- file.path(results_dir, "03_repeat_detection_results.RData")
+if (!file.exists(module3_path)) stop("Module 3 output not found: ", module3_path)
+load(module3_path)
+counts_slim <- module3_output$alignment_counts_slim
 
-# Check data
+# Load Module 4 slim (cluster assignments)
+module4_path <- file.path(results_dir, "04_allele_calling_results.RData")
+if (!file.exists(module4_path)) stop("Module 4 output not found: ", module4_path)
+load(module4_path)
+clusters_slim <- module4_output$alignment_clustered_slim
+
+# Join: repeat counts + cluster assignments
+alignment_clustered <- counts_slim %>%
+  dplyr::left_join(clusters_slim, by = c("file_stem", "qname"))
+
 message("Loaded clustered alignment data:")
-message("  Samples: ", length(unique(alignment_clustered$file_stem)))
-message("  Total reads: ", nrow(alignment_clustered))
+message("  Samples: ",  length(unique(alignment_clustered$file_stem)))
+message("  Total reads: ", format(nrow(alignment_clustered), big.mark = ","))
 message("  Clusters: ", length(unique(alignment_clustered$cluster_number)))
 ```
 
@@ -211,7 +238,39 @@ DT::datatable(
 ) %>%
   DT::formatStyle(columns = colnames(range_summary), fontSize = '85%')
 
-# Example for first sample
+# ── Pad range names at source ───────────────────────────────────────────────
+# Ranges are named range1, range2, etc. by parse_analysis_ranges().
+# If any sample has >= 10 ranges, pad with leading zeros so they sort correctly
+# (range01, range02, ...) without needing any display-time workarounds.
+max_n_ranges <- max(settings_parsed$n_ranges, na.rm = TRUE)
+
+if (max_n_ranges >= 10) {
+  pad_width <- nchar(as.character(max_n_ranges))
+  
+  rename_range_keys <- function(lst) {
+    if (is.null(names(lst))) return(lst)
+    nums <- suppressWarnings(as.integer(gsub("^range", "", names(lst))))
+    if (anyNA(nums)) return(lst)  # leave non-standard names unchanged
+    setNames(lst, paste0("range", formatC(nums, width = pad_width, flag = "0")))
+  }
+  
+  settings_parsed <- settings_parsed %>%
+    rowwise() %>%
+    mutate(
+      ranges_list    = list(rename_range_keys(ranges_list)),
+      floor_list     = list(rename_range_keys(floor_list)),
+      max_peaks_list = list(rename_range_keys(max_peaks_list))
+    ) %>%
+    ungroup()
+  
+  message(sprintf("Range names padded to width %d (max ranges in any sample: %d)",
+                  pad_width, max_n_ranges))
+} else {
+  message(sprintf("Range names unpadded (max ranges in any sample: %d, <10)",
+                  max_n_ranges))
+}
+
+# Example for first sample (shows final padded names)
 message("\nExample range parsing for: ", settings_parsed$file_stem[1])
 for (rng in names(settings_parsed$ranges_list[[1]])) {
   r <- settings_parsed$ranges_list[[1]][[rng]]
@@ -223,11 +282,105 @@ for (rng in names(settings_parsed$ranges_list[[1]])) {
 
 ---
 
-# Comprehensive Range Summary
+# Experiment overview
 
-Build a comprehensive summary table showing all range parameters for each sample.
+```{r plot_experiment_map, echo=FALSE, fig.width=10, fig.height=5, message=FALSE}
+# Build sample map: group × time, bubble size = number of samples
+exp_map_data <- settings %>%
+  select(file_stem, group, time) %>%
+  mutate(time = suppressWarnings(as.numeric(time))) %>%
+  group_by(group, time) %>%
+  summarise(n_samples = n(), .groups = "drop")
 
-```{r comprehensive_range_summary, echo=FALSE}
+has_time <- any(!is.na(exp_map_data$time))
+
+if (has_time) {
+  p_exp_map <- ggplot(exp_map_data,
+                      aes(x = time, y = group, size = n_samples)) +
+    geom_point(colour = "steelblue", alpha = 0.7) +
+    geom_text(aes(label = n_samples), size = 3.5, colour = "white",
+              fontface = "bold") +
+    scale_size_continuous(range = c(6, 18), name = "Samples") +
+    labs(title = "Experiment map",
+         subtitle = "Each bubble = one group × time combination. Size and label = number of samples.",
+         x = "Time",
+         y = "Group") +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank())
+} else {
+  # No time data — just show sample counts per group as horizontal bars
+  p_exp_map <- ggplot(exp_map_data %>% group_by(group) %>%
+                        summarise(n_samples = sum(n_samples), .groups = "drop"),
+                      aes(x = n_samples, y = group)) +
+    geom_col(fill = "steelblue", alpha = 0.7, width = 0.6) +
+    geom_text(aes(label = n_samples), hjust = -0.3, size = 4) +
+    labs(title = "Experiment overview",
+         subtitle = "Number of samples per group (no time data provided).",
+         x = "Number of samples",
+         y = "Group") +
+    theme_bw()
+}
+
+print(p_exp_map)
+
+plots_dir <- file.path(params$dir_out, file.path("06_range_analysis", "plots"))
+if (!dir.exists(plots_dir)) dir.create(plots_dir, recursive = TRUE)
+ggsave(file.path(plots_dir, "01_experiment_map.png"),
+       p_exp_map, width = 10, height = 5, dpi = params$plot_dpi)
+
+message("Groups: ", paste(unique(settings$group), collapse = ", "))
+message("Total samples: ", nrow(settings))
+```
+
+---
+
+# Ranges per sample
+
+```{r plot_n_ranges, echo=FALSE, fig.width=8, fig.height=5}
+# Join n_ranges to group information from settings
+n_ranges_data <- settings_parsed %>%
+  select(file_stem, n_ranges)
+
+p_n_ranges <- ggplot(n_ranges_data,
+                     aes(x = factor(1), y = n_ranges)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey90", colour = "grey50",
+               width = 0.4) +
+  geom_jitter(colour = "grey40", width = 0.15, height = 0,
+              alpha = 0.7, size = 2.5) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 5,
+               colour = "red", alpha = 0.6) +
+  scale_x_discrete(labels = NULL, breaks = NULL) +
+  labs(title = "Number of analysis ranges per sample",
+       subtitle = "Box = IQR; points = samples; red diamond = mean.",
+       x = NULL,
+       y = "Number of ranges") +
+  theme_bw() +
+  theme(axis.ticks.x = element_blank())
+
+print(p_n_ranges)
+
+plots_dir <- file.path(params$dir_out, file.path("06_range_analysis", "plots"))
+if (!dir.exists(plots_dir)) dir.create(plots_dir, recursive = TRUE)
+ggsave(file.path(plots_dir, "02_n_ranges_per_sample.png"),
+       p_n_ranges, width = 8, height = 5, dpi = params$plot_dpi)
+
+message("Ranges per sample:")
+message("  Min: ",  min(n_ranges_data$n_ranges))
+message("  Max: ",  max(n_ranges_data$n_ranges))
+message("  Mean: ", round(mean(n_ranges_data$n_ranges), 1))
+```
+
+---
+
+# Range summary
+
+Build a summary table showing all range parameters for each sample.
+
+```{r t_range_summary_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r comprehensive_range_summary, echo=FALSE, message=FALSE}
 message("\n=== Building Comprehensive Range Summary ===")
 
 # Build comprehensive range summary for each sample and range
@@ -334,46 +487,10 @@ comprehensive_range_summary <- comprehensive_range_summary %>%
 message("  Rows created: ", nrow(comprehensive_range_summary))
 message("  Samples: ", length(unique(comprehensive_range_summary$file_stem)))
 message("  Ranges: ", length(unique(comprehensive_range_summary$analysis_range_name)))
+```
 
-# Display initial table (before peaks are added)
-DT::datatable(
-  comprehensive_range_summary,
-  caption = "Comprehensive Range Summary - Configuration and Boundaries",
-  extensions = 'Buttons',
-  options = list(
-    pageLength = 20,
-    scrollX = TRUE,
-    scrollY = "600px",
-    dom = 'Bfrtip',
-    buttons = list(
-      'copy',
-      list(extend = 'csv', filename = 'range_summary_configuration'),
-      list(extend = 'excel', filename = 'range_summary_configuration'),
-      'colvis'
-    ),
-    columnDefs = list(
-      list(width = '120px', targets = 0)
-    )
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact hover',
-  style = 'bootstrap'
-) %>%
-  DT::formatRound(
-    columns = c('settings_min', 'settings_max', 'analysis_min', 'analysis_max',
-                'observed_min', 'observed_max', 'manual_control_repeat_length'),
-    digits = 1
-  ) %>%
-  DT::formatStyle(
-    'manual_control_repeat_length',
-    backgroundColor = DT::styleEqual(NA, 'white', default = '#fff3cd'),
-    fontWeight = 'bold'
-  ) %>%
-  DT::formatStyle(
-    columns = colnames(comprehensive_range_summary),
-    fontSize = '10px'
-  )
+```{r t_range_summary_end, echo=FALSE}
+timings["Range summary"] <- proc.time()["elapsed"] - .t
 ```
 
 **Column descriptions:**
@@ -391,11 +508,16 @@ DT::datatable(
 
 Detect modal peaks within each analysis range for each sample.
 
-```{r peak_detection, echo=FALSE}
+```{r t_peaks_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r peak_detection, echo=FALSE, message=FALSE}
 # Get unique file stems that have settings
 file_stems_with_settings <- settings_parsed$file_stem
 
 # Peak detection per sample and range
+suppressMessages({
 modal_peaks_list <- apply_fn(file_stems_with_settings, function(my_file_stem) {
   
   # Get sample data
@@ -474,6 +596,7 @@ modal_peaks_list <- apply_fn(file_stems_with_settings, function(my_file_stem) {
 
 # Combine all results
 modal_peaks_list <- extract_apply_fn_result(modal_peaks_list)
+})
 
 modal_peaks <- bind_rows(modal_peaks_list) %>%
   relocate(file_stem, analysis_range_name)
@@ -491,7 +614,11 @@ datatable(modal_peaks,
   formatStyle(columns = colnames(modal_peaks), fontSize = '10px')
 ```
 
-```{r add_peaks_to_comprehensive_summary, echo=FALSE}
+```{r t_peaks_end, echo=FALSE}
+timings["Peak detection"] <- proc.time()["elapsed"] - .t
+```
+
+```{r add_peaks_to_comprehensive_summary, echo=FALSE, message=FALSE}
 # Add detected peaks to comprehensive summary
 message("\n=== Adding Peaks to Comprehensive Summary ===")
 
@@ -552,155 +679,52 @@ peak_freq_cols <- grep("^peak[0-9]+_frequency$", peak_cols, value = TRUE)
 
 message("  Peak columns in table: ", paste(peak_cols, collapse = ", "))
 
-# Display updated table with peaks
-dt_table <- DT::datatable(
-  comprehensive_range_summary,
-  caption = "Comprehensive Range Summary - With Detected Peaks",
-  extensions = c('Buttons', 'FixedColumns'),
-  options = list(
-    pageLength = 20,
-    scrollX = TRUE,
-    scrollY = "650px",
-    dom = 'Bfrtip',
-    buttons = list(
-      'copy',
-      list(extend = 'csv', filename = 'range_summary_with_peaks'),
-      list(extend = 'excel', filename = 'range_summary_with_peaks'),
-      'colvis'
-    ),
-    fixedColumns = list(leftColumns = 2),
-    columnDefs = list(
-      list(width = '110px', targets = 0:1)
-    )
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact hover',
-  style = 'bootstrap'
-)
-
-# Format numeric columns
-numeric_cols <- c('settings_min', 'settings_max', 'analysis_min', 'analysis_max',
-                  'observed_min', 'observed_max', 'manual_control_repeat_length')
-numeric_cols <- c(numeric_cols, peak_length_cols)
-numeric_cols <- numeric_cols[numeric_cols %in% colnames(comprehensive_range_summary)]
-
-dt_table <- dt_table %>%
-  DT::formatRound(columns = numeric_cols, digits = 1)
-
-# Highlight peak1 (most important) if it exists
-if ("peak1_length" %in% colnames(comprehensive_range_summary)) {
-  dt_table <- dt_table %>%
-    DT::formatStyle(
-      c('peak1_length', 'peak1_frequency'),
-      fontWeight = 'bold',
-      backgroundColor = '#e3f2fd'
-    )
-}
-
-# Highlight peak2 if it exists
-if ("peak2_length" %in% colnames(comprehensive_range_summary)) {
-  dt_table <- dt_table %>%
-    DT::formatStyle(
-      c('peak2_length', 'peak2_frequency'),
-      backgroundColor = '#f0f0f0'
-    )
-}
-
-# Highlight manual controls
-dt_table <- dt_table %>%
-  DT::formatStyle(
-    'manual_control_repeat_length',
-    backgroundColor = DT::styleEqual(NA, 'white', default = '#fff3cd')
-  ) %>%
-  DT::formatStyle(
-    columns = colnames(comprehensive_range_summary),
-    fontSize = '10px'
-  )
-
-dt_table
 ```
 
-```{r plot_peaks, echo=FALSE, fig.width=12, fig.height=10}
+```{r plot_peaks, echo=FALSE, fig.width=12, fig.height=7, message=FALSE}
 # Create plots directory
 plots_dir <- file.path(params$dir_out, file.path("06_range_analysis", "plots"))
 if (!dir.exists(plots_dir)) dir.create(plots_dir, recursive = TRUE)
 
-# Plot: Modal peaks with range windows shown as rectangles
-# Prepare range boundaries for each sample
-range_boxes <- modal_peaks %>%
-  select(file_stem, analysis_range_name, range_min, range_max) %>%
-  distinct() %>%
-  # Create x-positions for rectangles
-  mutate(sample_num = as.numeric(factor(file_stem, levels = unique(file_stem))))
-
-# === RANGE BOUNDARY CACHING FOR EFFICIENT LOOKUPS ===
-# Cache range boundaries to avoid repeated filtering in plotting loops
-# Handles per-sample specific ranges correctly
-message("\n=== CACHING RANGE BOUNDARIES ===")
+# Cache range boundaries for efficient per-sample lookups
 range_boundaries_cache <- modal_peaks %>%
   select(file_stem, analysis_range_name, range_min, range_max) %>%
   distinct()
 
-# Create fast lookup function
-get_range_boundaries <- function(sample, range_name) {
-  range_boundaries_cache %>%
-    filter(file_stem == sample, analysis_range_name == range_name) %>%
-    slice(1)
-}
-
 message(sprintf("Cached %d unique sample-range combinations", nrow(range_boundaries_cache)))
-message("Example: Sample-specific ranges are preserved")
-if (nrow(range_boundaries_cache) > 2) {
-  message(sprintf("  %s / %s: [%d-%d]", 
-                  range_boundaries_cache$file_stem[1],
-                  range_boundaries_cache$analysis_range_name[1],
-                  range_boundaries_cache$range_min[1],
-                  range_boundaries_cache$range_max[1]))
-  message(sprintf("  %s / %s: [%d-%d]", 
-                  range_boundaries_cache$file_stem[2],
-                  range_boundaries_cache$analysis_range_name[2],
-                  range_boundaries_cache$range_min[2],
-                  range_boundaries_cache$range_max[2]))
-}
-message("================================\n")
 
 
-p_peaks <- ggplot() +
-  # Add shaded rectangles showing the range windows
-  geom_rect(data = range_boxes,
-            aes(xmin = sample_num - 0.4, xmax = sample_num + 0.4,
-                ymin = range_min, ymax = range_max,
-                fill = analysis_range_name),
-            alpha = 0.15) +
-  # Add the actual peak points on top
-  geom_point(data = modal_peaks %>% filter(!is.na(modal_length)),
-             aes(x = as.numeric(factor(file_stem, levels = unique(file_stem))),
-                 y = modal_length,
-                 colour = analysis_range_name,
-                 shape = factor(peak_rank)),
-             size = 4, alpha = 0.9) +
-  scale_x_continuous(breaks = 1:length(unique(modal_peaks$file_stem)),
-                    labels = unique(modal_peaks$file_stem)) +
-  labs(title = "Modal Peaks Detected",
-       subtitle = "Shaded boxes show analysis range windows; points show detected peaks",
-       x = "Sample",
-       y = "Repeat Length",
-       colour = "Analysis Range",
-       fill = "Range Window",
-       shape = "Peak Rank") +
+# Cohort plot: box+jitter per range, one point per sample, red mean diamond
+# Note: range names (range1, range2, etc.) may have different boundaries in
+# different samples — this plot shows the cohort distribution of peak values
+# detected within each user-defined range window.
+peak_cohort_data <- modal_peaks %>%
+  filter(!is.na(modal_length), peak_rank == 1) %>%
+  left_join(select(settings, file_stem, group), by = "file_stem")
+
+p_peaks <- ggplot(peak_cohort_data,
+                  aes(x = analysis_range_name, y = modal_length)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey90", colour = "grey50",
+               width = 0.6) +
+  geom_jitter(colour = "grey40", width = 0.2, height = 0,
+              alpha = 0.7, size = 2) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4,
+               colour = "red", alpha = 0.6) +
+  labs(title = "Modal peak length by analysis range",
+       subtitle = "Box = IQR; points = samples; red diamond = mean.\nNote: the same range name may span different boundaries in different samples.",
+       x = "Analysis range",
+       y = "Modal length (repeats)") +
   theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "right")
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 print(p_peaks)
-ggsave(file.path(plots_dir, "01_modal_peaks.png"), 
-       p_peaks, width = 12, height = 7, dpi = 300)
+ggsave(file.path(plots_dir, "03_modal_peaks.png"),
+       p_peaks, width = 12, height = 7, dpi = params$plot_dpi)
 
 # Generate individual peak plots by sample
 message("\nGenerating individual peak plots by sample...")
 
-modal_peaks_by_sample_dir <- file.path(plots_dir, "01_modal_peaks_by_sample")
+modal_peaks_by_sample_dir <- file.path(plots_dir, "03_modal_peaks_by_sample")
 if (!dir.exists(modal_peaks_by_sample_dir)) {
   dir.create(modal_peaks_by_sample_dir, recursive = TRUE)
 }
@@ -719,12 +743,11 @@ for (my_sample in unique(modal_peaks$file_stem)) {
   
   # Create peak plot for this sample
   p_sample_peaks <- ggplot() +
-    # Range windows as shaded rectangles
+    # Range windows as shaded rectangles — uniform grey fill, no colour legend
     geom_rect(data = sample_boxes,
               aes(xmin = range_min, xmax = range_max,
-                  ymin = y_position - 0.4, ymax = y_position + 0.4,
-                  fill = analysis_range_name),
-              alpha = 0.2) +
+                  ymin = y_position - 0.4, ymax = y_position + 0.4),
+              fill = "grey80", alpha = 0.4) +
     # Detected peaks as points
     geom_point(data = sample_peaks %>% filter(!is.na(modal_length)),
                aes(x = modal_length, 
@@ -738,16 +761,16 @@ for (my_sample in unique(modal_peaks$file_stem)) {
                   y = match(analysis_range_name, sample_boxes$analysis_range_name),
                   label = paste0(modal_length, " (", modal_frequency, ")")),
               vjust = -1.2, hjust = -0.1, angle = 45, size = 3) +
-    scale_y_continuous(breaks = sample_boxes$y_position,
-                      labels = sample_boxes$analysis_range_name) +
+    scale_y_reverse(breaks = sample_boxes$y_position,
+                    labels = sample_boxes$analysis_range_name) +
     scale_shape_manual(values = c("1" = 16, "2" = 17, "3" = 15),
-                      name = "Peak Rank") +
-    scale_size_continuous(range = c(3, 8), name = "Frequency") +
-    labs(title = paste0("Modal Peaks - ", my_sample),
-         subtitle = "Shaded regions = analysis ranges; Points = detected peaks; Numbers = (length, frequency)",
-         x = "Repeat Length",
-         y = "Analysis Range",
-         fill = "Analysis Range") +
+                      name = "Peak rank
+(1 = main)") +
+    scale_size_continuous(range = c(3, 8), name = "Read count") +
+    labs(title = paste0("Modal peaks - ", my_sample),
+         subtitle = "Shaded regions = analysis range windows; Points = detected peaks; Labels = length (frequency)",
+         x = "Repeat length",
+         y = "Analysis range") +
     theme_bw() +
     theme(legend.position = "right",
           panel.grid.major.y = element_blank())
@@ -755,7 +778,7 @@ for (my_sample in unique(modal_peaks$file_stem)) {
   ggsave(file.path(modal_peaks_by_sample_dir, 
                   paste0(my_sample, "-modal_peaks.png")),
          p_sample_peaks, width = 12, height = max(4, nrow(sample_boxes) * 1.5), 
-         dpi = 300)
+         dpi = params$plot_dpi)
 }
 
 message("  Individual peak plots saved to: ", modal_peaks_by_sample_dir)
@@ -763,9 +786,9 @@ message("  Individual peak plots saved to: ", modal_peaks_by_sample_dir)
 
 ---
 
-# Distribution summaries
+# Distribution summary
 
-Calculate comprehensive distribution statistics for each range and sample.
+Calculate distribution statistics for each range and sample.
 
 **Range boundary columns:**
 
@@ -785,8 +808,13 @@ Low-frequency repeat lengths can be filtered before calculating statistics to re
 
 **Example:** If `floor_threshold = 3`, any repeat length appearing <3 times is excluded. If you have 5000 reads total but 200 are low-frequency singletons/doubletons, then `n_reads_used = 4800`.
 
-```{r distribution_summaries, echo=FALSE}
+```{r t_dist_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r distribution_summaries, echo=FALSE, message=FALSE}
 # Calculate distribution summaries
+suppressMessages({
 distribution_summary_list <- apply_fn(file_stems_with_settings, function(my_file_stem) {
   
   # Get sample data
@@ -856,6 +884,7 @@ distribution_summary_list <- apply_fn(file_stems_with_settings, function(my_file
 
 # Combine all summaries
 distribution_summary_list <- extract_apply_fn_result(distribution_summary_list)
+})
 
 distribution_summary <- bind_rows(distribution_summary_list) %>%
   relocate(file_stem, analysis_range_name)
@@ -888,183 +917,209 @@ datatable(distribution_summary[, key_cols],
   formatStyle(columns = key_cols, fontSize = '10px')
 ```
 
-```{r plot_distributions, echo=FALSE, fig.width=10, fig.height=8}
+```{r t_dist_end, echo=FALSE}
+timings["Distribution summaries"] <- proc.time()["elapsed"] - .t
+```
+
+```{r plot_distributions, echo=FALSE, fig.width=10, fig.height=8, message=FALSE}
 # --- Clean non-finite values (NaN, Inf, -Inf) before plotting ---
 # Edge-case samples (e.g. all reads at modal → tail_balance = 0/0 = NaN,
 # mean ≈ 0 → CV = Inf) cause ggplot to fail when computing axis breaks.
 distribution_summary <- distribution_summary %>%
   mutate(across(where(is.numeric), ~ifelse(is.finite(.) | is.na(.), ., NA_real_)))
 
-# Plot 1: Modal vs mean lengths per sample
+# ── Plot 02: Modal vs Mean (faceted by range, each point = one sample) ─────────
+# Compute per-range lm stats for annotation
+modal_mean_lm <- distribution_summary %>%
+  group_by(analysis_range_name) %>%
+  summarise(
+    slope     = tryCatch({coef(lm(mean_length ~ modal_length, data = cur_data()))[2]}, error = function(e) NA_real_),
+    intercept = tryCatch({coef(lm(mean_length ~ modal_length, data = cur_data()))[1]}, error = function(e) NA_real_),
+    r2        = tryCatch({summary(lm(mean_length ~ modal_length, data = cur_data()))$r.squared}, error = function(e) NA_real_),
+    x_pos = max(modal_length, na.rm = TRUE),
+    y_pos = min(mean_length,  na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    sign_str = ifelse(!is.na(intercept), ifelse(intercept >= 0, " + ", " - "), ""),
+    abs_icpt = ifelse(!is.na(intercept), abs(round(intercept, 2)), NA_real_),
+    label    = ifelse(!is.na(slope),
+                      paste0("y = ", round(slope, 2), "x", sign_str, abs_icpt,
+                             "\nR² = ", round(r2, 3)),
+                      NA_character_)
+  )
+
 p_modal_mean <- ggplot(distribution_summary,
-                       aes(x = modal_length, y = mean_length, colour = analysis_range_name)) +
+                       aes(x = modal_length, y = mean_length)) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +
-  geom_point(size = 3, alpha = 0.7) +
-  labs(title = "Modal vs Mean Repeat Lengths",
-       subtitle = "Points near diagonal indicate symmetric distributions",
-       x = "Modal Length (repeats)",
-       y = "Mean Length (repeats)",
-       colour = "Analysis Range") +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8, colour = "#4393C3") +
+  geom_point(size = 3, alpha = 0.75, colour = "grey30") +
+  geom_text(data = modal_mean_lm %>% filter(!is.na(label)),
+            aes(x = x_pos, y = y_pos, label = label),
+            colour = "grey20", size = 2.8, hjust = 1, vjust = 0, inherit.aes = FALSE) +
+  facet_wrap(~ analysis_range_name, scales = "free") +
+  labs(title = "Modal vs mean repeat lengths by range",
+       subtitle = paste0("Each point = one sample. Blue line = lm fit across all samples; dashed = identity.",
+                         "\nNote: the same range name may span different boundaries in different samples."),
+       x = "Modal length (repeats)",
+       y = "Mean length (repeats)") +
   theme_bw() +
-  theme(legend.position = "right")
-
+  theme(strip.text = element_text(size = 8))
 print(p_modal_mean)
-ggsave(file.path(plots_dir, "02_modal_vs_mean.png"),
-       p_modal_mean, width = 10, height = 6, dpi = 300)
+ggsave(file.path(plots_dir, "04_modal_vs_mean.png"),
+       p_modal_mean, width = 16, height = 12, dpi = params$plot_dpi)
 
-# Plot 2: Distribution spread (SD) per sample with range windows
+# ── Plot 03: Distribution spread (SD) by range ──────────────────────────────────
 p_spread <- ggplot(distribution_summary,
-                   aes(x = file_stem, y = sd, fill = analysis_range_name)) +
-  geom_col(position = "dodge", alpha = 0.8) +
-  labs(title = "Distribution Spread by Sample",
-       subtitle = "Standard deviation of repeat lengths",
-       x = "Sample",
-       y = "Standard Deviation",
-       fill = "Analysis Range") +
+                   aes(x = analysis_range_name, y = sd)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey90", colour = "grey50", width = 0.6) +
+  geom_jitter(colour = "grey40", width = 0.2, height = 0, alpha = 0.7, size = 2) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4,
+               colour = "red", alpha = 0.6) +
+  labs(title = "Distribution spread by analysis range",
+       subtitle = "Standard deviation per range. Box = IQR; points = samples; red diamond = mean.",
+       x = "Analysis range",
+       y = "Standard deviation") +
   theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "right")
-
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 print(p_spread)
-ggsave(file.path(plots_dir, "03_spread_by_sample.png"),
-       p_spread, width = 10, height = 6, dpi = 300)
+ggsave(file.path(plots_dir, "05_spread_by_range.png"),
+       p_spread, width = 12, height = 6, dpi = params$plot_dpi)
 
-# Plot 3: Filtering effect
+# ── Plot 04: Floor filtering effect by range ─────────────────────────────────────
 filtering_data <- distribution_summary %>%
   filter(n_reads_total > 0) %>%
   mutate(pct_filtered = ((n_reads_total - n_reads_used) / n_reads_total) * 100)
 
 p_filtering <- ggplot(filtering_data,
-                      aes(x = file_stem, y = pct_filtered, fill = analysis_range_name)) +
-  geom_col(position = "dodge", alpha = 0.8) +
-  labs(title = "Floor Filtering Effect",
-       subtitle = "Percentage of reads filtered out (floor threshold shown in table)",
-       x = "Sample",
-       y = "% Reads Filtered",
-       fill = "Analysis Range") +
+                      aes(x = analysis_range_name, y = pct_filtered)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey90", colour = "grey50", width = 0.6) +
+  geom_jitter(colour = "grey40", width = 0.2, height = 0, alpha = 0.7, size = 2) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4,
+               colour = "red", alpha = 0.6) +
+  labs(title = "Floor filtering effect by analysis range",
+       subtitle = "Percentage of reads removed by floor threshold. Floor values in distribution_summary Excel tab. Box = IQR; points = samples; red diamond = mean.",
+       x = "Analysis range",
+       y = "% reads filtered") +
   theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "right")
-
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 print(p_filtering)
-ggsave(file.path(plots_dir, "04_filtering_effect.png"),
-       p_filtering, width = 10, height = 6, dpi = 300)
+ggsave(file.path(plots_dir, "06_filtering_effect_by_range.png"),
+       p_filtering, width = 12, height = 6, dpi = params$plot_dpi)
 
-# NEW DISTRIBUTION PLOTS - INSERT AFTER LINE 478 (after filtering plot)
-
-# Plot 4: Tail Balance (Expansion vs Contraction Proportions)
-# Calculate balanced proportion (reads at modal length)
-tail_balance_data <- distribution_summary %>%
-  mutate(balanced_proportion = 1 - contraction_proportion - expansion_proportion) %>%
-  select(file_stem, analysis_range_name, group, 
-         contraction_proportion, balanced_proportion, expansion_proportion) %>%
-  pivot_longer(cols = c(contraction_proportion, balanced_proportion, expansion_proportion),
-               names_to = "direction",
-               values_to = "proportion") %>%
+# ── Plot 05: Tail balance by range ───────────────────────────────────────────────
+# Grouped box+jitter: contraction / at modal / expansion proportions per range
+tail_balance_long <- distribution_summary %>%
+  mutate( at_modal_proportion = 1 - contraction_proportion - expansion_proportion) %>%
+  select(file_stem, analysis_range_name, group,
+         contraction_proportion, at_modal_proportion, expansion_proportion) %>%
+  pivot_longer(
+    cols = c(contraction_proportion, at_modal_proportion, expansion_proportion),
+    names_to = "direction", values_to = "proportion"
+  ) %>%
   mutate(direction = case_when(
-    direction == "contraction_proportion" ~ "Contraction (below modal)",
-    direction == "balanced_proportion" ~ "At modal",
-    direction == "expansion_proportion" ~ "Expansion (above modal)"
+    direction == "contraction_proportion" ~ "Contraction",
+    direction == "at_modal_proportion"    ~ "At modal",
+    direction == "expansion_proportion"   ~ "Expansion"
   ),
-  # Set factor levels in REVERSE order: expansion first stacks on TOP
-  direction = factor(direction, levels = c("Expansion (above modal)", "At modal", "Contraction (below modal)")))
+  direction = factor(direction, levels = c("Contraction", "At modal", "Expansion")))
 
-p_tail_balance <- ggplot(tail_balance_data,
-                         aes(x = file_stem, y = proportion, fill = direction)) +
-  geom_col(position = "stack", alpha = 0.8) +
-  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "black") +
-  facet_grid(analysis_range_name ~ group, scales = "free_x") +
-  labs(title = "Tail Balance: Expansion vs Contraction Proportions",
-       subtitle = "Proportion of reads above, at, and below modal length (dashed line = balanced)",
-       x = "Sample",
-       y = "Proportion of Reads",
-       fill = "Direction") +
+p_tail_balance <- ggplot(tail_balance_long,
+                         aes(x = analysis_range_name, y = proportion, fill = direction)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6, width = 0.7,
+               position = position_dodge(0.8)) +
+  geom_jitter(aes(colour = direction),
+              position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+              alpha = 0.6, size = 1.5) +
   scale_fill_manual(
-    values = c("Contraction (below modal)" = "steelblue", 
-               "At modal" = "grey60",
-               "Expansion (above modal)" = "coral"),
-    # Legend reads bottom to top, but stacking is reversed in code
-    breaks = c("Contraction (below modal)", "At modal", "Expansion (above modal)")
+    values = c("Contraction" = "#2166AC", "At modal" = "#F7F7F7", "Expansion" = "#D6604D")
   ) +
+  scale_colour_manual(
+    values = c("Contraction" = "#2166AC", "At modal" = "#AAAAAA",  "Expansion" = "#D6604D")
+  ) +
+  labs(title = "Tail balance by analysis range",
+       subtitle = "Proportion of reads in contraction, at modal, and expansion tails. Box = IQR; points = samples.",
+       x = "Analysis range",
+       y = "Proportion of reads",
+       fill = "Direction", colour = "Direction") +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.position = "bottom")
-
 print(p_tail_balance)
-ggsave(file.path(plots_dir, "05_tail_balance.png"),
-       p_tail_balance, width = 14, height = 8, dpi = 300)
+ggsave(file.path(plots_dir, "07_tail_balance_by_range.png"),
+       p_tail_balance, width = 14, height = 7, dpi = params$plot_dpi)
 
-# Plot 5: Coefficient of Variation
+# ── Plot 06: Coefficient of Variation by range ───────────────────────────────────
 p_cv <- ggplot(distribution_summary,
-               aes(x = file_stem, y = coefficient_of_variation, fill = analysis_range_name)) +
-  geom_col(position = "dodge", alpha = 0.8) +
-  labs(title = "Coefficient of Variation",
-       subtitle = "Relative variability (SD / mean) - useful for comparing samples with different mean lengths",
-       x = "Sample",
-       y = "Coefficient of Variation (CV)",
-       fill = "Analysis Range") +
+               aes(x = analysis_range_name, y = coefficient_of_variation)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey90", colour = "grey50", width = 0.6) +
+  geom_jitter(colour = "grey40", width = 0.2, height = 0, alpha = 0.7, size = 2) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4,
+               colour = "red", alpha = 0.6) +
+  labs(title = "Coefficient of variation by analysis range",
+       subtitle = "Relative variability (SD / mean) per range. Box = IQR; points = samples; red diamond = mean.",
+       x = "Analysis range",
+       y = "Coefficient of variation (CV)") +
   theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "right")
-
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 print(p_cv)
-ggsave(file.path(plots_dir, "06_coefficient_of_variation.png"),
-       p_cv, width = 10, height = 6, dpi = 300)
+ggsave(file.path(plots_dir, "08_cv_by_range.png"),
+       p_cv, width = 12, height = 6, dpi = params$plot_dpi)
 
-# Plot 6: Percentile Ranges (5th-95th)
-percentile_data <- distribution_summary %>%
-  select(file_stem, analysis_range_name, group, 
-         percentile_5th, percentile_95th, modal_length)
-
-p_percentiles <- ggplot(percentile_data,
-                        aes(x = file_stem, colour = analysis_range_name)) +
-  geom_segment(aes(xend = file_stem, y = percentile_5th, yend = percentile_95th),
-               linewidth = 3, alpha = 0.6) +
-  geom_point(aes(y = modal_length), size = 3, shape = 23, fill = "white") +
-  facet_wrap(~ group, scales = "free_x", nrow = 1) +
-  labs(title = "Percentile Ranges (5th-95th) with Modal Length",
-       subtitle = "Robust measure of spread (diamond = modal length)",
-       x = "Sample",
-       y = "Repeat Length",
-       colour = "Analysis Range") +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "right")
-
-print(p_percentiles)
-ggsave(file.path(plots_dir, "07_percentile_ranges.png"),
-       p_percentiles, width = 12, height = 6, dpi = 300)
-
-# Plot 7: Distribution Shape (Skewness vs Kurtosis)
+# ── Plot 08: Skewness vs Kurtosis (faceted by range) ─────────────────────────────
 shape_data <- distribution_summary %>%
   filter(!is.na(skewness), !is.na(kurtosis))
 
 if (nrow(shape_data) > 0) {
+  # Compute per-range lm stats for annotation
+    shape_lm_stats <- shape_data %>%
+    group_by(analysis_range_name) %>%
+    summarise(
+      slope     = tryCatch({coef(lm(kurtosis ~ skewness, data = cur_data()))[2]}, error = function(e) NA_real_),
+      intercept = tryCatch({coef(lm(kurtosis ~ skewness, data = cur_data()))[1]}, error = function(e) NA_real_),
+      r2        = tryCatch({summary(lm(kurtosis ~ skewness, data = cur_data()))$r.squared}, error = function(e) NA_real_),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      sign_str = ifelse(!is.na(intercept), ifelse(intercept >= 0, " + ", " - "), ""),
+      abs_icpt = ifelse(!is.na(intercept), abs(round(intercept, 2)), NA_real_),
+      label = ifelse(!is.na(slope),
+                     paste0("y = ", round(slope, 2), "x", sign_str, abs_icpt,
+                            "\nR\u00b2 = ", round(r2, 3)),
+                     NA_character_),
+      # Inf/-Inf places label at bottom-right corner regardless of per-panel axis range
+      x_pos = Inf, y_pos = -Inf)
+
   p_shape <- ggplot(shape_data,
-                    aes(x = skewness, y = kurtosis, 
-                        colour = group, shape = analysis_range_name)) +
+                    aes(x = skewness, y = kurtosis)) +
     geom_hline(yintercept = 3, linetype = "dashed", colour = "grey50", alpha = 0.5) +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50", alpha = 0.5) +
-    geom_point(size = 4, alpha = 0.7) +
-    labs(title = "Distribution Shape: Skewness vs Kurtosis",
-         subtitle = "Reference lines: skewness=0 (symmetric), kurtosis=3 (normal)",
-         x = "Skewness (symmetry)",
-         y = "Kurtosis (tail weight)",
-         colour = "Group",
-         shape = "Analysis Range") +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 0.7) +
+    geom_point(size = 3, alpha = 0.7) +
+    geom_text(data = shape_lm_stats %>% filter(!is.na(label)),
+              aes(x = x_pos, y = y_pos, label = label),
+              colour = "grey30", size = 2.8, hjust = 1, vjust = 0, inherit.aes = FALSE) +
+    facet_wrap(~ analysis_range_name, scales = "free") +
+    labs(title = "Distribution shape: skewness vs kurtosis by range",
+         subtitle = "Each point = one sample. Reference lines: skewness=0 (symmetric), kurtosis=3 (normal). Line = lm fit.",
+         x = "Skewness",
+         y = "Kurtosis",
+  ) +
     theme_bw() +
-    theme(legend.position = "right")
-  
-  print(p_shape)
-  ggsave(file.path(plots_dir, "08_distribution_shape.png"),
-         p_shape, width = 10, height = 7, dpi = 300)
+    theme(legend.position = "bottom",
+          strip.text = element_text(size = 8))
+
+  # Save to disk only — many panels would be heavy inline
+  ggsave(file.path(plots_dir, "09_distribution_shape.png"),
+         p_shape, width = 14, height = 10, dpi = params$plot_dpi)
+  message("Distribution shape plot saved to: 09_distribution_shape.png")
 }
 
 # Plot 21: Density plots by group and time (full range + per analysis range)
 message("\nGenerating density plots by group and time...")
 
 # Create directory for density plots
-density_by_group_and_time_dir <- file.path(plots_dir, "21_density_by_group_and_time")
+density_by_group_and_time_dir <- file.path(plots_dir, "10_density_by_group_and_time")
 if (!dir.exists(density_by_group_and_time_dir)) {
   dir.create(density_by_group_and_time_dir, recursive = TRUE)
 }
@@ -1075,8 +1130,9 @@ density_data_full <- alignment_clustered %>%
     select(settings, file_stem, group, time),
     by = "file_stem"
   ) %>%
-  filter(!is.na(group), !is.na(time), !is.na(repeat_count),
-         is.finite(repeat_count)) %>%
+  filter(!is.na(group), !is.na(time),
+         !is.na(.data[[params$repeat_count_method]]),
+         is.finite(.data[[params$repeat_count_method]])) %>%
   arrange(group, time) %>%
   mutate(
     sample_label = paste0(file_stem, " (t=", time, ")"),
@@ -1121,7 +1177,8 @@ if (nrow(density_data_full) > 0) {
     # Filter data by range
     range_bounds <- range_list[[range_name]]
     density_data_range <- density_data_full %>%
-      filter(repeat_count >= range_bounds[1] & repeat_count <= range_bounds[2])
+      filter(.data[[params$repeat_count_method]] >= range_bounds[1] &
+               .data[[params$repeat_count_method]] <= range_bounds[2])
     
     if (nrow(density_data_range) == 0) {
       message("    No data in this range, skipping")
@@ -1136,16 +1193,19 @@ if (nrow(density_data_full) > 0) {
     
     # COMBINED PLOT: All groups in columns for this range
     p_density_combined <- ggplot(density_data_range, 
-                              aes(x = repeat_count, 
+                              aes(x = .data[[params$repeat_count_method]], 
                                   y = reorder(sample_label, -time_order),  # Earliest at top
                                   fill = group)) +
-      geom_density_ridges(alpha = 0.7, scale = 2, rel_min_height = 0.01) +
+      geom_density_ridges(alpha = 0.7, scale = 2, rel_min_height = 0.01,
+                          jittered_points = TRUE,
+                          position = position_points_jitter(width = 0.5, height = 0.15),
+                          point_shape = 16, point_size = 0.4, point_alpha = 0.2) +
       facet_grid(~ group, scales = "free_y") +  # Groups as COLUMNS
       scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
       labs(
-        title = paste0("Repeat Length Distribution by Group and Time - ", range_name),
+        title = paste0("Repeat length distribution by group and time - ", range_name),
         subtitle = "Samples ordered by time within each group (earliest at top)",
-        x = "Repeat Count",
+        x = "Repeat count",
         y = "Sample (Time)",
         fill = "Group"
       ) +
@@ -1156,7 +1216,8 @@ if (nrow(density_data_full) > 0) {
         axis.text.y = element_text(size = 8)
       )
     
-    print(p_density_combined)
+    # Not printed inline — saved to disk to keep HTML compact
+    # (17 ridge plots × multiple groups = significant file size)
     
     # Calculate dimensions
     n_samples_range <- length(unique(density_data_range$file_stem))
@@ -1176,7 +1237,7 @@ if (nrow(density_data_full) > 0) {
       p_density_combined,
       width = plot_width,
       height = plot_height,
-      dpi = 300,
+      dpi = params$plot_dpi,
       bg = "white",
       limitsize = FALSE
     )
@@ -1193,15 +1254,18 @@ if (nrow(density_data_full) > 0) {
       
       # Create plot for this group
       p_density_group <- ggplot(group_data, 
-                             aes(x = repeat_count, 
+                             aes(x = .data[[params$repeat_count_method]], 
                                  y = reorder(sample_label, -time_order),  # Earliest at top
                                  fill = group)) +
-        geom_density_ridges(alpha = 0.7, scale = 2, rel_min_height = 0.01) +
+        geom_density_ridges(alpha = 0.7, scale = 2, rel_min_height = 0.01,
+                            jittered_points = TRUE,
+                            position = position_points_jitter(width = 0.5, height = 0.15),
+                            point_shape = 16, point_size = 0.4, point_alpha = 0.2) +
         scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
         labs(
-          title = paste0("Repeat Length Distribution - ", my_group, " (", range_name, ")"),
+          title = paste0("Repeat length distribution - ", my_group, " (", range_name, ")"),
           subtitle = "Samples ordered by time (earliest at top)",
-          x = "Repeat Count",
+          x = "Repeat count",
           y = "Sample (Time)",
           fill = "Group"
         ) +
@@ -1227,7 +1291,7 @@ if (nrow(density_data_full) > 0) {
         p_density_group,
         width = 12,
         height = group_height,
-        dpi = 300,
+        dpi = params$plot_dpi,
         bg = "white",
         limitsize = FALSE
       )
@@ -1237,268 +1301,12 @@ if (nrow(density_data_full) > 0) {
   }
   
   message("\n  All ridge plots saved to: ", density_by_group_and_time_dir)
+  message("  (Not printed inline — open files directly to view)")
   
 } else {
   message("  Warning: No data available for ridge plots (missing group/time metadata)")
 }
 
-
-# Generate individual distribution plots by analysis range
-message("\nGenerating individual distribution plots by analysis range...")
-
-distribution_by_range_dir <- file.path(plots_dir, "distribution_by_range")
-if (!dir.exists(distribution_by_range_dir)) {
-  dir.create(distribution_by_range_dir, recursive = TRUE)
-}
-
-# Create subdirectories for specific plot types
-modal_vs_mean_by_range_dir <- file.path(plots_dir, "02_modal_vs_mean_by_range")
-if (!dir.exists(modal_vs_mean_by_range_dir)) {
-  dir.create(modal_vs_mean_by_range_dir, recursive = TRUE)
-}
-
-tail_balance_by_range_dir <- file.path(plots_dir, "05_tail_balance_by_range")
-if (!dir.exists(tail_balance_by_range_dir)) {
-  dir.create(tail_balance_by_range_dir, recursive = TRUE)
-}
-
-for (my_range in unique(distribution_summary$analysis_range_name)) {
-  tryCatch({
-  range_data <- distribution_summary %>%
-    filter(analysis_range_name == my_range)
-  
-  if (nrow(range_data) == 0) next
-  
-  # Plot 1: Modal vs Mean for this range
-  p_modal_mean_range <- ggplot(range_data,
-                               aes(x = modal_length, y = mean_length, colour = group)) +
-    geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +
-    geom_point(size = 4, alpha = 0.7) +
-    labs(title = paste0("Modal vs Mean - ", my_range),
-         subtitle = "Points near diagonal indicate symmetric distributions",
-         x = "Modal Length",
-         y = "Mean Length",
-         colour = "Group") +
-    theme_bw() +
-    theme(legend.position = "right")
-  
-  ggsave(file.path(modal_vs_mean_by_range_dir, 
-                  paste0("modal_vs_mean-", my_range, ".png")),
-         p_modal_mean_range, width = 10, height = 6, dpi = 300)
-  
-  # Plot 2: Tail balance for this range
-  tail_data_range <- range_data %>%
-    mutate(balanced_proportion = 1 - contraction_proportion - expansion_proportion) %>%
-    select(file_stem, group, contraction_proportion, balanced_proportion, expansion_proportion) %>%
-    pivot_longer(cols = c(contraction_proportion, balanced_proportion, expansion_proportion),
-                 names_to = "direction",
-                 values_to = "proportion") %>%
-    mutate(direction = case_when(
-      direction == "contraction_proportion" ~ "Contraction",
-      direction == "balanced_proportion" ~ "At modal",
-      direction == "expansion_proportion" ~ "Expansion"
-    ),
-    # Set factor levels in REVERSE order: expansion first stacks on TOP
-    direction = factor(direction, levels = c("Expansion", "At modal", "Contraction")))
-  
-  p_tail_range <- ggplot(tail_data_range,
-                         aes(x = file_stem, y = proportion, fill = direction)) +
-    geom_col(position = "stack", alpha = 0.8) +
-    geom_hline(yintercept = 0.5, linetype = "dashed", colour = "black") +
-    facet_wrap(~ group, scales = "free_x", nrow = 1) +
-    scale_fill_manual(
-      values = c("Contraction" = "steelblue", 
-                 "At modal" = "grey60",
-                 "Expansion" = "coral"),
-      breaks = c("Contraction", "At modal", "Expansion")
-    ) +
-    labs(title = paste0("Tail Balance - ", my_range),
-         subtitle = "Proportion of reads below, at, and above modal (dashed line = balanced)",
-         x = "Sample",
-         y = "Proportion",
-         fill = "Direction") +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
-  ggsave(file.path(tail_balance_by_range_dir, 
-                  paste0("tail_balance-", my_range, ".png")),
-         p_tail_range, width = 12, height = 6, dpi = 300)
-  
-  # Plot 3: Key metrics for this range
-  p_metrics_range <- ggplot(range_data,
-                            aes(x = file_stem)) +
-    geom_col(aes(y = sd, fill = "SD"), alpha = 0.8, position = "dodge") +
-    geom_point(aes(y = coefficient_of_variation * 10, colour = "CV×10"), 
-               size = 3, shape = 17) +
-    facet_wrap(~ group, scales = "free", nrow = 1) +
-    scale_y_continuous(
-      name = "Standard Deviation",
-      sec.axis = sec_axis(~./10, name = "Coefficient of Variation")
-    ) +
-    labs(title = paste0("Distribution Metrics - ", my_range),
-         x = "Sample",
-         fill = "Metric",
-         colour = "Metric") +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
-  ggsave(file.path(distribution_by_range_dir, 
-                  paste0("metrics_", my_range, ".png")),
-         p_metrics_range, width = 12, height = 6, dpi = 300)
-  }, error = function(e) {
-    message("  Warning: Could not generate plots for range ", my_range, ": ", e$message)
-  })
-}
-
-message("  Individual range plots saved to: ", distribution_by_range_dir)
-
-# Generate individual distribution plots by sample
-message("\nGenerating individual distribution plots by sample...")
-
-distribution_by_sample_dir <- file.path(plots_dir, "distribution_by_sample")
-if (!dir.exists(distribution_by_sample_dir)) {
-  dir.create(distribution_by_sample_dir, recursive = TRUE)
-}
-
-for (my_sample in unique(distribution_summary$file_stem)) {
-  tryCatch({
-  sample_data <- distribution_summary %>%
-    filter(file_stem == my_sample)
-  
-  if (nrow(sample_data) == 0) next
-  
-  # Create multi-panel plot for this sample
-  # Panel 1: Central tendency
-  central_data <- sample_data %>%
-    select(analysis_range_name, modal_length, mean_length, median_length) %>%
-    pivot_longer(cols = c(modal_length, mean_length, median_length),
-                 names_to = "metric",
-                 values_to = "value") %>%
-    mutate(metric = gsub("_length", "", metric),
-           metric = tools::toTitleCase(metric))
-  
-  p1 <- ggplot(central_data,
-              aes(x = analysis_range_name, y = value, fill = metric)) +
-    geom_col(position = "dodge", alpha = 0.8) +
-    labs(title = "Central Tendency",
-         x = "Analysis Range",
-         y = "Repeat Length",
-         fill = "Metric") +
-    theme_bw() +
-    theme(legend.position = "bottom")
-  
-  # Panel 2: Spread metrics
-  spread_data <- sample_data %>%
-    select(analysis_range_name, sd, interquartile_range, 
-           percentile_5th, percentile_95th, modal_length)
-  
-  p2 <- ggplot(spread_data,
-              aes(x = analysis_range_name)) +
-    # Show percentile range as segments (absolute positions)
-    geom_segment(aes(y = percentile_5th, yend = percentile_95th,
-                     x = as.numeric(factor(analysis_range_name)) - 0.2,
-                     xend = as.numeric(factor(analysis_range_name)) - 0.2),
-                 colour = "coral", linewidth = 4, alpha = 0.6) +
-    # Show SD as error bars around modal length
-    geom_errorbar(aes(ymin = modal_length - sd, ymax = modal_length + sd,
-                      x = as.numeric(factor(analysis_range_name)) + 0.2),
-                  width = 0.2, colour = "steelblue", linewidth = 2, alpha = 0.8) +
-    geom_point(aes(y = modal_length, 
-                   x = as.numeric(factor(analysis_range_name)) + 0.2),
-               colour = "steelblue", size = 3) +
-    scale_x_continuous(breaks = 1:length(unique(spread_data$analysis_range_name)),
-                      labels = unique(spread_data$analysis_range_name)) +
-    labs(title = "Spread Metrics",
-         subtitle = "Orange bars = 5th-95th percentile; Blue bars = SD around modal",
-         x = "Analysis Range",
-         y = "Repeat Length") +
-    theme_bw()
-  
-  # Panel 3: Tail metrics
-  tail_data <- sample_data %>%
-    mutate(balanced_proportion = 1 - contraction_proportion - expansion_proportion) %>%
-    select(analysis_range_name, contraction_proportion, balanced_proportion, expansion_proportion) %>%
-    pivot_longer(cols = c(contraction_proportion, balanced_proportion, expansion_proportion),
-                 names_to = "direction",
-                 values_to = "proportion") %>%
-    mutate(direction = case_when(
-      direction == "contraction_proportion" ~ "Contraction",
-      direction == "balanced_proportion" ~ "At modal",
-      direction == "expansion_proportion" ~ "Expansion"
-    ),
-    # Set factor levels in REVERSE order: expansion first stacks on TOP
-    direction = factor(direction, levels = c("Expansion", "At modal", "Contraction")))
-  
-  p3 <- ggplot(tail_data,
-              aes(x = analysis_range_name, y = proportion, fill = direction)) +
-    geom_col(position = "stack", alpha = 0.8) +
-    geom_hline(yintercept = 0.5, linetype = "dashed", colour = "black") +
-    scale_fill_manual(
-      values = c("Contraction" = "steelblue", 
-                 "At modal" = "grey60",
-                 "Expansion" = "coral"),
-      breaks = c("Contraction", "At modal", "Expansion")
-    ) +
-    labs(title = "Tail Balance",
-         subtitle = "Proportion of reads below, at, and above modal (dashed line = balanced)",
-         x = "Analysis Range",
-         y = "Proportion of Reads",
-         fill = "Direction") +
-    theme_bw() +
-    theme(legend.position = "bottom")
-  
-  # Panel 4: Shape metrics
-  shape_data <- sample_data %>%
-    filter(!is.na(skewness), !is.na(peak_sharpness))
-  
-  if (nrow(shape_data) > 0) {
-    shape_long <- shape_data %>%
-      select(analysis_range_name, skewness, peak_sharpness, entropy_normalised) %>%
-      pivot_longer(cols = c(skewness, peak_sharpness, entropy_normalised),
-                   names_to = "metric",
-                   values_to = "value") %>%
-      mutate(metric = gsub("_", " ", metric),
-             metric = tools::toTitleCase(metric))
-    
-    p4 <- ggplot(shape_long,
-                aes(x = analysis_range_name, y = value, fill = metric)) +
-      geom_col(position = "dodge", alpha = 0.8) +
-      labs(title = "Shape Metrics",
-           x = "Analysis Range",
-           y = "Value",
-           fill = "Metric") +
-      theme_bw() +
-      theme(legend.position = "bottom")
-  } else {
-    p4 <- ggplot() + 
-      labs(title = "Shape Metrics (not available)") + 
-      theme_void()
-  }
-  
-  # Combine all panels
-  p_combined <- cowplot::plot_grid(p1, p2, p3, p4, ncol = 2,
-                                   labels = c("A", "B", "C", "D"),
-                                   label_size = 14)
-  
-  # Add title
-  title_text <- cowplot::ggdraw() + 
-    cowplot::draw_label(paste0("Distribution Summary - ", my_sample),
-                       fontface = "bold", size = 16)
-  
-  p_final <- cowplot::plot_grid(title_text, p_combined, ncol = 1,
-                                rel_heights = c(0.05, 1))
-  
-  ggsave(file.path(distribution_by_sample_dir, 
-                  paste0(my_sample, "-distribution.png")),
-         p_final, width = 14, height = 10, dpi = 300)
-  }, error = function(e) {
-    message("  Warning: Could not generate distribution plot for ", my_sample, ": ", e$message)
-  })
-}
-
-message("  Individual sample plots saved to: ", distribution_by_sample_dir)
 
 message("\nDistribution plots saved to: ", plots_dir)
 ```
@@ -1523,7 +1331,11 @@ Group controls provide baseline reference values for calculating instability met
 - `mean_length`: Arithmetic mean (sensitive to outliers)
 - `median_length`: Median repeat length (robust middle value)
 
-```{r group_controls, echo=FALSE}
+```{r t_controls_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r group_controls, echo=FALSE, message=FALSE}
 if (params$group_control) {
   
   # Map control_setpoint_metric to column name
@@ -1629,7 +1441,8 @@ if (params$group_control) {
     filter = 'top',
     class = 'cell-border stripe compact'
   ) %>%
-    DT::formatRound(columns = colnames(group_controls)[sapply(group_controls, is.numeric)], digits = 2)
+    DT::formatRound(columns = colnames(group_controls)[sapply(group_controls, is.numeric)], digits = 2) %>%
+    DT::formatStyle(columns = colnames(group_controls), fontSize = '10px')
   
 } else {
   message("\nGroup controls disabled (group_control = FALSE)")
@@ -1637,7 +1450,11 @@ if (params$group_control) {
 }
 ```
 
-```{r add_controls_to_comprehensive_summary, echo=FALSE}
+```{r t_controls_end, echo=FALSE}
+timings["Group controls"] <- proc.time()["elapsed"] - .t
+```
+
+```{r add_controls_to_comprehensive_summary, echo=FALSE, message=FALSE}
 # Add control information to comprehensive summary
 if (params$group_control && exists("group_controls") && !is.null(group_controls)) {
   
@@ -1663,7 +1480,7 @@ if (params$group_control && exists("group_controls") && !is.null(group_controls)
   # Display final comprehensive table
   dt_final <- DT::datatable(
     comprehensive_range_summary,
-    caption = "COMPLETE: Comprehensive Range Summary - Configuration, Peaks, and Controls",
+    caption = "Range summary - configuration, peaks, and controls",
     extensions = c('Buttons', 'FixedColumns'),
     options = list(
       pageLength = 25,
@@ -1756,115 +1573,45 @@ if (params$group_control && exists("group_controls") && !is.null(group_controls)
 }
 ```
 
-```{r plot_group_controls, echo=FALSE, fig.width=12, fig.height=7}
+```{r plot_group_controls, echo=FALSE, fig.width=10, fig.height=5, message=FALSE}
 if (params$group_control && !is.null(group_controls)) {
-  
-  # Combine all control samples for plotting
-  control_samples <- bind_rows(control_samples_list)
-  
-  # Get the metric column name for plotting
-  metric_col_name <- params$control_setpoint_metric
-  
-  # Plot 1: Control setpoints with violin + jitter showing actual samples
-  p_controls <- ggplot() +
-    # Violin plot showing distribution
-    geom_violin(data = control_samples,
-                aes(x = group, y = !!sym(metric_col_name), fill = analysis_range_name),
-                position = position_dodge(0.9), alpha = 0.3, scale = "width") +
-    # Jitter showing individual control samples (horizontal spread only, no vertical jitter)
-    geom_jitter(data = control_samples,
-                aes(x = group, y = !!sym(metric_col_name), colour = analysis_range_name),
-                position = position_jitterdodge(jitter.width = 0.2, jitter.height = 0, dodge.width = 0.9),
-                alpha = 0.6, size = 2) +
-    # Mean setpoint as larger point
-    geom_point(data = group_controls,
-               aes(x = group, y = control_setpoint, fill = analysis_range_name),
-               position = position_dodge(0.9),
-               size = 4, shape = 23, colour = "black", stroke = 1) +
-    labs(title = "Group Control Setpoints with Sample Distributions",
-         subtitle = paste0("Using ", params$control_setpoint_metric, 
-                          " | Violins show distribution, points show samples at actual values, diamonds show mean setpoint"),
-         x = "Group",
-         y = paste0(tools::toTitleCase(gsub("_", " ", metric_col_name)), " (repeats)"),
-         fill = "Analysis Range",
-         colour = "Analysis Range") +
-    theme_bw() +
-    theme(legend.position = "right")
-  
-  print(p_controls)
-  ggsave(file.path(plots_dir, "09_control_setpoints.png"),
-         p_controls, width = 12, height = 7, dpi = 300)
-  
-  # Plot 2: Show all three metrics with sample distributions
-  # Prepare long-format data for all three metrics
-  controls_samples_long <- control_samples %>%
-    select(file_stem, group, analysis_range_name, 
-           modal_length, mean_length, median_length) %>%
-    pivot_longer(cols = c(modal_length, mean_length, median_length),
-                names_to = "metric",
-                values_to = "value") %>%
-    mutate(metric = gsub("_length", "", metric),
-           metric = tools::toTitleCase(metric))
-  
-  # Prepare setpoints
-  controls_setpoints_long <- group_controls %>%
-    select(group, analysis_range_name, 
-           control_modal_length, control_mean_length, control_median_length) %>%
-    pivot_longer(cols = starts_with("control_"),
-                names_to = "metric",
-                values_to = "setpoint") %>%
-    mutate(metric = gsub("control_", "", metric),
-           metric = gsub("_length", "", metric),
-           metric = tools::toTitleCase(metric))
-  
-  p_metrics_compare <- ggplot() +
-    # Violin plot
-    geom_violin(data = controls_samples_long,
-                aes(x = metric, y = value, fill = metric),
-                alpha = 0.3, scale = "width") +
-    # Individual samples (horizontal jitter only, no vertical jitter)
-    geom_jitter(data = controls_samples_long,
-                aes(x = metric, y = value, colour = metric),
-                alpha = 0.5, size = 1.5, width = 0.2, height = 0) +
-    # Mean setpoints
-    geom_point(data = controls_setpoints_long,
-               aes(x = metric, y = setpoint),
-               size = 4, shape = 23, fill = "black", colour = "white", stroke = 1) +
-    facet_grid(analysis_range_name ~ group, scales = "free_y") +
-    labs(title = "Comparison of Control Metrics with Sample Distributions",
-         subtitle = "Violins show distributions, points show samples at actual values, black diamonds show mean setpoints",
-         x = "Metric",
-         y = "Repeat Length",
-         fill = "Metric",
-         colour = "Metric") +
+
+  # ── Plot 09: Control setpoints — one point per group per range ────────────────
+  # Simple dot plot: x = range, y = setpoint, colour = group.
+  # Interpretable regardless of cohort size.
+  p_controls <- ggplot(group_controls,
+                       aes(x = analysis_range_name, y = control_setpoint,
+                           colour = group)) +
+    geom_point(size = 4, alpha = 0.85) +
+    labs(title = "Group control setpoints by analysis range",
+         subtitle = paste0("One point per group per range, using ", params$control_setpoint_metric,
+                           ". All values also exported in Excel."),
+         x = "Analysis range",
+         y = paste0(tools::toTitleCase(gsub("_", " ", params$control_setpoint_metric)),
+                    " (repeats)"),
+         colour = "Group") +
     theme_bw() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
-  print(p_metrics_compare)
-  ggsave(file.path(plots_dir, "10_control_metrics_comparison.png"),
-         p_metrics_compare, width = 12, height = 8, dpi = 300)
-  
-  # Plot 3: Sample counts per group/range
+          legend.position = "right")
+
+  print(p_controls)
+  ggsave(file.path(plots_dir, "11_control_setpoints.png"),
+         p_controls, width = 10, height = 5, dpi = params$plot_dpi)
+
+  # ── Control sample counts — inline table, no plot ─────────────────────────────
+  control_samples <- bind_rows(control_samples_list)
   sample_counts <- control_samples %>%
     group_by(group, analysis_range_name) %>%
-    summarise(n_samples = n(), .groups = "drop")
-  
-  p_counts <- ggplot(sample_counts,
-                     aes(x = group, y = n_samples, fill = analysis_range_name, label = n_samples)) +
-    geom_col(position = "dodge", alpha = 0.8) +
-    geom_text(position = position_dodge(0.9), vjust = -0.5, size = 4) +
-    labs(title = "Number of Control Samples",
-         subtitle = "Samples contributing to each group control",
-         x = "Group",
-         y = "Number of Samples",
-         fill = "Analysis Range") +
-    theme_bw() +
-    theme(legend.position = "right")
-  
-  print(p_counts)
-  ggsave(file.path(plots_dir, "11_control_sample_counts.png"),
-         p_counts, width = 10, height = 6, dpi = 300)
+    summarise(n_control_samples = n(), .groups = "drop")
+
+  DT::datatable(
+    sample_counts,
+    caption = "Control sample counts per group and range",
+    options = list(pageLength = 25, scrollX = TRUE, dom = 't'),
+    rownames = FALSE,
+    class = 'cell-border stripe compact'
+  ) %>%
+    DT::formatStyle(columns = colnames(sample_counts), fontSize = '10px')
 }
 ```
 
@@ -1883,6 +1630,7 @@ Calculate instability metrics relative to setpoints using the actual read distri
 **Control aggregation:** `r params$control_aggregation_method` of control samples
 
 **Example:** If user selects `modal_length` with `median` aggregation:
+
 - Sample setpoint = Sample's modal_length (e.g., 19)
 - Control setpoint = Median of control samples' modal_lengths (e.g., 17)
 
@@ -1892,7 +1640,11 @@ For each sample and setpoint type, we calculate:
 - **Read counts**: Number of reads at, below, and above setpoint
 - **Tail ratios**: Relative sizes of expansion and contraction tails
 
-```{r instability_metrics, echo=FALSE}
+```{r t_instability_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r instability_metrics, echo=FALSE, message=FALSE}
 # ALWAYS calculate instability metrics (at minimum, relative to sample itself)
 # If group_control = TRUE, also calculate relative to control setpoint
 
@@ -2057,7 +1809,11 @@ if (params$group_control) {
 message("  Includes relative distribution statistics: modal_diff, median_diff, mean_diff")
 ```
 
-```{r instability_display, echo=FALSE}
+```{r t_instability_end, echo=FALSE}
+timings["Instability metrics"] <- proc.time()["elapsed"] - .t
+```
+
+```{r instability_display, echo=FALSE, message=FALSE}
 if (nrow(instability_metrics) > 0) {
   
   # Display key columns including new relative distribution statistics
@@ -2091,15 +1847,13 @@ if (nrow(instability_metrics) > 0) {
 
 **Metrics explanation:**
 
-**Relative Distribution Statistics** (new):
+**Relative distribution statistics** — measure the *shift* of the distribution from the setpoint:
 
 - **modal_diff**: Difference between sample's modal_length and setpoint (modal - setpoint)
 - **median_diff**: Difference between sample's median_length and setpoint (median - setpoint)
 - **mean_diff**: Difference between sample's mean_length and setpoint (mean - setpoint)
 
-Positive values indicate expansion relative to setpoint, negative values indicate contraction.
-
-**Instability Metrics** (existing):
+**Instability metrics** — measure the *spread* of the distribution around the setpoint:
 
 - **setpoint_type**: "sample_relative" (sample's own metric value) or "control_relative" (group control)
 - **instability_index**: Mean absolute deviation from setpoint (weighted by read frequency)
@@ -2108,437 +1862,226 @@ Positive values indicate expansion relative to setpoint, negative values indicat
 - **expansion_ratio**: (reads above) / (reads at setpoint)
 - **z_score**: Standard deviations from control (control_relative only)
 
-**Key distinction:**
-- Relative distribution statistics measure the *shift* of the distribution from setpoint
-- Instability metrics measure the *spread* of the distribution around setpoint
-
 All metrics calculated from actual read distribution, not just summary statistics.
 
 ---
 
-```{r plot_instability, echo=FALSE, fig.width=12, fig.height=10}
-# Only show these plots if we have control comparisons
-if (params$group_control && any(instability_metrics$setpoint_type == "control_relative")) {
-  
-  
-  # Define facet labels for setpoint types
-  setpoint_labels <- c(
-    "sample_relative" = "Relative to Sample",
-    "control_relative" = "Relative to Control"
+```{r plot_instability, echo=FALSE, fig.width=12, fig.height=7, message=FALSE}
+# Cohort instability plots: x = analysis range, box+jitter per range, facet by group.
+# All plots scale correctly regardless of sample count.
+
+# Define setpoint type labels used across plots
+setpoint_labels <- c(
+  "sample_relative" = "Relative to Sample",
+  "control_relative" = "Relative to Control"
+)
+
+# Helper: standard box+jitter+mean-diamond layer set for instability plots
+# x aesthetic must be set in the parent ggplot() call
+instability_box_layers <- function() {
+  list(
+    geom_boxplot(outlier.shape = NA, fill = "grey90", colour = "grey50", width = 0.6),
+    geom_jitter(colour = "grey40", width = 0.2, height = 0,
+                alpha = 0.7, size = 2),
+    stat_summary(fun = mean, geom = "point", shape = 18, size = 4,
+                 colour = "red", alpha = 0.6)
   )
-  # Plot 1: Instability Index (faceted by setpoint type)
-  p_instability <- ggplot(instability_metrics,
-                          aes(x = file_stem, y = instability_index, fill = analysis_range_name)) +
-    geom_col(position = "dodge", alpha = 0.8) +
-    facet_grid(setpoint_type ~ group, scales = "free_x",
-           labeller = labeller(setpoint_type = setpoint_labels)) +
-    labs(title = "Instability Index",
-         subtitle = paste0("Mean absolute deviation from setpoint (using ", 
-                          params$control_setpoint_metric, ")"),
-         x = "Sample",
-         y = "Instability Index",
-         fill = "Analysis Range") +
+}
+
+# ── Plot 12: Instability Index by range ──────────────────────────────────────────
+p_instability <- ggplot(instability_metrics,
+                        aes(x = analysis_range_name, y = instability_index)) +
+  instability_box_layers() +
+  facet_wrap(~ setpoint_type, ncol = 1,
+             labeller = labeller(setpoint_type = setpoint_labels)) +
+  labs(title = "Instability index by analysis range",
+       subtitle = paste0("Mean absolute deviation from setpoint (using ",
+                         params$control_setpoint_metric,
+                         "). Box = IQR; points = samples; red diamond = mean."),
+       x = "Analysis range", y = "Instability index",
+) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p_instability)
+ggsave(file.path(plots_dir, "12_instability_index.png"),
+       p_instability, width = 12, height = 8, dpi = params$plot_dpi)
+
+# ── Plot 13: Expansion vs Contraction Indices by range ───────────────────────────
+exp_cont_long <- instability_metrics %>%
+  select(file_stem, analysis_range_name, group, setpoint_type,
+         expansion_index, contraction_index) %>%
+  pivot_longer(cols = c(expansion_index, contraction_index),
+               names_to = "direction", values_to = "index") %>%
+  mutate(direction = tools::toTitleCase(gsub("_index", "", direction)),
+         direction = factor(direction, levels = c("Contraction", "Expansion")))
+
+p_exp_cont <- ggplot(exp_cont_long,
+                     aes(x = analysis_range_name, y = index, fill = direction)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6, width = 0.7,
+               position = position_dodge(0.8)) +
+  geom_jitter(aes(colour = direction),
+              position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8),
+              alpha = 0.6, size = 1.5) +
+  facet_wrap(~ setpoint_type, ncol = 1,
+             labeller = labeller(setpoint_type = setpoint_labels)) +
+  scale_fill_manual(values = c("Expansion" = "coral", "Contraction" = "steelblue")) +
+  scale_colour_manual(values = c("Expansion" = "coral", "Contraction" = "steelblue")) +
+  labs(title = "Expansion vs contraction indices by range",
+       subtitle = "Mean deviation above/below setpoint. Box = IQR; points = samples.",
+       x = "Analysis range", y = "Index (repeats)",
+       fill = "Direction", colour = "Direction") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom")
+
+print(p_exp_cont)
+ggsave(file.path(plots_dir, "13_expansion_contraction.png"),
+       p_exp_cont, width = 12, height = 8, dpi = params$plot_dpi)
+
+if (params$group_control && any(instability_metrics$setpoint_type == "control_relative")) {
+
+  # ── Plot 14: Expansion Ratio by range (both setpoint types) ───────────────────
+  p_ratio <- ggplot(instability_metrics,
+                    aes(x = analysis_range_name, y = expansion_ratio)) +
+    instability_box_layers() +
+    facet_wrap(~ setpoint_type, ncol = 1,
+               labeller = labeller(setpoint_type = setpoint_labels)) +
+    labs(title = "Expansion ratio by range",
+         subtitle = "(Reads above setpoint) / (Reads at setpoint). Box = IQR; points = samples; red diamond = mean.",
+         x = "Analysis range", y = "Expansion ratio") +
     theme_bw() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
-  print(p_instability)
-  ggsave(file.path(plots_dir, "12_instability_index.png"),
-         p_instability, width = 12, height = 7, dpi = 300)
-  
-  # Plot 2: Expansion vs Contraction
-  expansion_contraction_data <- instability_metrics %>%
-    select(file_stem, analysis_range_name, group, setpoint_type, 
-           expansion_index, contraction_index) %>%
-    pivot_longer(cols = c(expansion_index, contraction_index),
-                names_to = "direction",
-                values_to = "index") %>%
-    mutate(direction = gsub("_index", "", direction),
-           direction = tools::toTitleCase(direction))
-  
-  p_exp_cont <- ggplot(expansion_contraction_data,
-                       aes(x = file_stem, y = index, fill = direction)) +
-    geom_col(position = "dodge", alpha = 0.8) +
-    geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
-    facet_grid(setpoint_type + analysis_range_name ~ group, scales = "free",
-           labeller = labeller(setpoint_type = setpoint_labels)) +
-    labs(title = "Expansion vs Contraction Indices",
-         subtitle = "Mean deviations above and below setpoint",
-         x = "Sample",
-         y = "Index (repeats)",
-         fill = "Direction") +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
-  print(p_exp_cont)
-  ggsave(file.path(plots_dir, "13_expansion_contraction.png"),
-         p_exp_cont, width = 14, height = 10, dpi = 300)
-  
-  # Plot 3: Z-scores (control setpoint only)
-  zscore_data <- instability_metrics %>%
-    filter(setpoint_type == "control_relative", !is.na(z_score))
-  
-  if (nrow(zscore_data) > 0) {
-    p_zscore <- ggplot(zscore_data,
-                       aes(x = file_stem, y = z_score, fill = analysis_range_name)) +
-      geom_col(position = "dodge", alpha = 0.8) +
-      geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
-      geom_hline(yintercept = c(-2, 2), linetype = "dotted", colour = "red", alpha = 0.5) +
-      facet_wrap(~group, scales = "free_x", nrow = 1) +
-      labs(title = "Z-Scores from Control Setpoint",
-           subtitle = "Standard deviations from control (dotted lines at ±2 SD)",
-           x = "Sample",
-           y = "Z-Score",
-           fill = "Analysis Range") +
-      theme_bw() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1),
-            legend.position = "bottom")
-    
-    print(p_zscore)
-    ggsave(file.path(plots_dir, "14_zscore.png"),
-           p_zscore, width = 12, height = 6, dpi = 300)
-  }
-  
-  # Plot 4: Expansion Ratio (control setpoint)
-  ratio_data <- instability_metrics %>%
-    filter(setpoint_type == "control_relative")
-  
-  p_ratio <- ggplot(ratio_data,
-                    aes(x = file_stem, y = expansion_ratio, fill = analysis_range_name)) +
-    geom_col(position = "dodge", alpha = 0.8) +
-    facet_wrap(~group, scales = "free_x", nrow = 1) +
-    labs(title = "Expansion Ratio (Control Setpoint)",
-         subtitle = "(Reads above control) / (Reads at control)",
-         x = "Sample",
-         y = "Expansion Ratio",
-         fill = "Analysis Range") +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
   print(p_ratio)
-  ggsave(file.path(plots_dir, "15_expansion_ratio.png"),
-         p_ratio, width = 12, height = 6, dpi = 300)
-  
+  ggsave(file.path(plots_dir, "14_expansion_ratio.png"),
+         p_ratio, width = 12, height = 8, dpi = params$plot_dpi)
 
-# NEW INSTABILITY PLOTS - INSERT AFTER LINE 1047 (after expansion ratio plot)
-
-  # Plot 5: Contraction Ratio (control setpoint)
-  p_contraction_ratio <- ggplot(ratio_data,
-                                aes(x = file_stem, y = contraction_ratio, fill = analysis_range_name)) +
-    geom_col(position = "dodge", alpha = 0.8) +
-    facet_wrap(~group, scales = "free_x", nrow = 1) +
-    labs(title = "Contraction Ratio (Control Setpoint)",
-         subtitle = "(Reads below control) / (Reads at control)",
-         x = "Sample",
-         y = "Contraction Ratio",
-         fill = "Analysis Range") +
+  # ── Plot 15: Contraction Ratio by range (both setpoint types) ─────────────────
+  p_contraction_ratio <- ggplot(instability_metrics,
+                                aes(x = analysis_range_name, y = contraction_ratio)) +
+    instability_box_layers() +
+    facet_wrap(~ setpoint_type, ncol = 1,
+               labeller = labeller(setpoint_type = setpoint_labels)) +
+    labs(title = "Contraction ratio by range",
+         subtitle = "(Reads below setpoint) / (Reads at setpoint). Box = IQR; points = samples; red diamond = mean.",
+         x = "Analysis range", y = "Contraction ratio") +
     theme_bw() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
-  print(p_contraction_ratio)
-  ggsave(file.path(plots_dir, "16_contraction_ratio.png"),
-         p_contraction_ratio, width = 12, height = 6, dpi = 300)
-  
-  # Plot 6: Total Tail Ratio (both setpoint types)
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  ggsave(file.path(plots_dir, "15_contraction_ratio.png"),
+         p_contraction_ratio, width = 12, height = 8, dpi = params$plot_dpi)
+
+  # ── Plot 17: Total Tail Ratio by range ─────────────────────────────────────────
   p_total_tail <- ggplot(instability_metrics,
-                         aes(x = file_stem, y = total_tail_ratio, fill = analysis_range_name)) +
-    geom_col(position = "dodge", alpha = 0.8) +
-    facet_grid(setpoint_type ~ group, scales = "free_x",
-           labeller = labeller(setpoint_type = setpoint_labels)) +
-    labs(title = "Total Tail Ratio",
-         subtitle = "(Reads above + Reads below) / Reads at setpoint",
-         x = "Sample",
-         y = "Total Tail Ratio",
-         fill = "Analysis Range") +
+                         aes(x = analysis_range_name, y = total_tail_ratio)) +
+    instability_box_layers() +
+    facet_wrap(~ setpoint_type, ncol = 1,
+               labeller = labeller(setpoint_type = setpoint_labels)) +
+    labs(title = "Total tail ratio by range",
+         subtitle = "(Reads above + Reads below) / Reads at setpoint. Box = IQR; points = samples; red diamond = mean.",
+         x = "Analysis range", y = "Total tail ratio") +
     theme_bw() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
-  print(p_total_tail)
-  ggsave(file.path(plots_dir, "17_total_tail_ratio.png"),
-         p_total_tail, width = 14, height = 8, dpi = 300)
-  
-  # Plot 7: Read Counts by Region (stacked bars)
-  read_counts_data <- instability_metrics %>%
-    select(file_stem, analysis_range_name, group, setpoint_type,
-           reads_below_setpoint, reads_at_setpoint, reads_above_setpoint) %>%
-    pivot_longer(cols = c(reads_below_setpoint, reads_at_setpoint, reads_above_setpoint),
-                 names_to = "region",
-                 values_to = "count") %>%
-    mutate(region = case_when(
-      region == "reads_below_setpoint" ~ "Below setpoint",
-      region == "reads_at_setpoint" ~ "At setpoint",
-      region == "reads_above_setpoint" ~ "Above setpoint"
-    ),
-    # Set factor levels: below first (bottom), at middle, above last (top)
-    # This matches legend order
-    region = factor(region, levels = c("Below setpoint", "At setpoint", "Above setpoint")))
-  
-  p_read_counts <- ggplot(read_counts_data,
-                          aes(x = file_stem, y = count, fill = region)) +
-    geom_col(position = "stack", alpha = 0.8) +
-    facet_grid(setpoint_type + analysis_range_name ~ group, scales = "free",
-           labeller = labeller(setpoint_type = setpoint_labels)) +
-    labs(title = "Read Distribution by Region Relative to Setpoint",
-         subtitle = "Absolute read counts below, at, and above setpoint",
-         x = "Sample",
-         y = "Number of Reads",
-         fill = "Region") +
-    scale_fill_manual(
-      values = c("Below setpoint" = "steelblue", 
-                 "At setpoint" = "grey70",
-                 "Above setpoint" = "coral"),
-      # Explicit breaks to ensure legend order
-      breaks = c("Below setpoint", "At setpoint", "Above setpoint")
-    ) +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom")
-  
-  print(p_read_counts)
-  ggsave(file.path(plots_dir, "18_read_counts_by_region.png"),
-         p_read_counts, width = 14, height = 10, dpi = 300)
-  
-  # Plot 7b: Read Proportions by Region (stacked bars showing proportions)
-  read_proportions_data <- instability_metrics %>%
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  ggsave(file.path(plots_dir, "16_total_tail_ratio.png"),
+         p_total_tail, width = 12, height = 8, dpi = params$plot_dpi)
+
+  # ── Plot 18/19: Read proportions by region ─────────────────────────────────────
+  # Absolute counts are exported in Excel (instability_metrics sheet).
+  # Cohort plot shows proportion above/at/below per range, box+jitter.
+  read_prop_data <- instability_metrics %>%
     mutate(
       total_reads = reads_below_setpoint + reads_at_setpoint + reads_above_setpoint,
       prop_below = reads_below_setpoint / total_reads,
-      prop_at = reads_at_setpoint / total_reads,
+      prop_at    = reads_at_setpoint    / total_reads,
       prop_above = reads_above_setpoint / total_reads
     ) %>%
     select(file_stem, analysis_range_name, group, setpoint_type,
            prop_below, prop_at, prop_above) %>%
     pivot_longer(cols = c(prop_below, prop_at, prop_above),
-                 names_to = "region",
-                 values_to = "proportion") %>%
+                 names_to = "region", values_to = "proportion") %>%
     mutate(region = case_when(
       region == "prop_below" ~ "Below setpoint",
-      region == "prop_at" ~ "At setpoint",
+      region == "prop_at"    ~ "At setpoint",
       region == "prop_above" ~ "Above setpoint"
     ),
-    # Set factor levels: below first (bottom), at middle, above last (top)
-    # This matches legend order
     region = factor(region, levels = c("Below setpoint", "At setpoint", "Above setpoint")))
-  
-  p_read_proportions <- ggplot(read_proportions_data,
-                               aes(x = file_stem, y = proportion, fill = region)) +
-    geom_col(position = "stack", alpha = 0.8) +
-    facet_grid(setpoint_type + analysis_range_name ~ group, scales = "free_x",
-           labeller = labeller(setpoint_type = setpoint_labels)) +
-    labs(title = "Read Distribution by Region Relative to Setpoint (Proportions)",
-         subtitle = "Proportion of reads below, at, and above setpoint",
-         x = "Sample",
-         y = "Proportion of Reads",
-         fill = "Region") +
+
+    p_read_prop <- ggplot(read_prop_data,
+                        aes(x = analysis_range_name, y = proportion, colour = region)) +
+    geom_boxplot(aes(fill = region), outlier.shape = NA, alpha = 0.3, width = 0.7,
+                 position = position_dodge(0.8)) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.12, dodge.width = 0.8),
+                size = 2.5, alpha = 0.9) +
+    facet_wrap(~ setpoint_type, ncol = 1,
+               labeller = labeller(setpoint_type = setpoint_labels)) +
     scale_fill_manual(
-      values = c("Below setpoint" = "steelblue", 
-                 "At setpoint" = "grey70",
-                 "Above setpoint" = "coral"),
-      # Explicit breaks to ensure legend order
+      values = c("Below setpoint" = "#08519C",
+                 "At setpoint"    = "#525252",
+                 "Above setpoint" = "#A50F15"),
+      breaks = c("Below setpoint", "At setpoint", "Above setpoint")
+    ) +
+    scale_colour_manual(
+      values = c("Below setpoint" = "#08519C",
+                 "At setpoint"    = "#525252",
+                 "Above setpoint" = "#A50F15"),
       breaks = c("Below setpoint", "At setpoint", "Above setpoint")
     ) +
     scale_y_continuous(labels = scales::percent_format()) +
+    labs(title = "Read proportions by region and range",
+         subtitle = "Proportion of reads below, at, and above setpoint. Absolute counts exported in Excel.",
+         x = "Analysis range", y = "Proportion of reads",
+         fill = "Region", colour = "Region") +
     theme_bw() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           legend.position = "bottom")
-  
-  print(p_read_proportions)
-  ggsave(file.path(plots_dir, "19_read_proportions_by_region.png"),
-         p_read_proportions, width = 14, height = 10, dpi = 300)
-  
-  # Plot 8: Expansion vs Contraction Balance (scatter)
+
+  ggsave(file.path(plots_dir, "17_read_proportions_by_region.png"),
+         p_read_prop, width = 12, height = 8, dpi = params$plot_dpi)
+
+  # ── Plot 20: Expansion vs Contraction Balance (faceted by range) ───────────────
+  # Saved to disk only — many range panels would be heavy inline.
   balance_data <- instability_metrics %>%
     filter(!is.na(contraction_ratio), !is.na(expansion_ratio))
-  
+
   if (nrow(balance_data) > 0) {
-    p_balance_scatter <- ggplot(balance_data,
-                                aes(x = contraction_ratio, y = expansion_ratio, 
-                                    colour = group, shape = analysis_range_name)) +
-      geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +
-      geom_point(size = 4, alpha = 0.7) +
-      facet_wrap(~ setpoint_type, nrow = 1) +
-      labs(title = "Expansion vs Contraction Balance",
-           subtitle = "Dashed line = balanced (expansion = contraction). Points above = more expansion; below = more contraction",
-           x = "Contraction Ratio (reads below / reads at setpoint)",
-           y = "Expansion Ratio (reads above / reads at setpoint)",
-           colour = "Group",
-           shape = "Analysis Range") +
-      theme_bw() +
-      theme(legend.position = "right")
-    
-    print(p_balance_scatter)
-    ggsave(file.path(plots_dir, "20_expansion_contraction_balance.png"),
-           p_balance_scatter, width = 14, height = 7, dpi = 300)
-  }
-  
+    # Two separate plots — one per setpoint type, each facet_wrapped by range
+    n_ranges <- length(unique(balance_data$analysis_range_name))
+    plot_w <- max(14, n_ranges * 2.5)
 
-  # Generate individual plots by analysis range
-  message("\nGenerating individual plots by analysis range...")
-  
-  instability_by_range_dir <- file.path(plots_dir, "instability_by_range")
-  if (!dir.exists(instability_by_range_dir)) {
-    dir.create(instability_by_range_dir, recursive = TRUE)
-  }
-  
-  for (my_range in unique(instability_metrics$analysis_range_name)) {
-    range_data <- instability_metrics %>%
-      filter(analysis_range_name == my_range)
-    
-    if (nrow(range_data) == 0) next
-    
-    # Plot: All instability indices for this range
-    p_range <- ggplot(range_data,
-                      aes(x = file_stem, y = instability_index, fill = setpoint_type)) +
-      geom_col(position = "dodge", alpha = 0.8) +
-      facet_wrap(~ group, scales = "free_x", nrow = 1) +
-      scale_fill_manual(values = c("sample_relative" = "steelblue", 
-                                   "control_relative" = "coral"),
-                       labels = c("sample_relative" = "Relative to Sample",
-                                 "control_relative" = "Relative to Control")) +
-      labs(title = paste0("Instability Index - ", my_range),
-           x = "Sample",
-           y = "Instability Index",
-           fill = "Setpoint Type") +
-      theme_bw() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1),
-            legend.position = "bottom")
-    
-    ggsave(file.path(instability_by_range_dir, 
-                    paste0("instability_index-", my_range, ".png")),
-           p_range, width = 12, height = 6, dpi = 300)
-    
-    # Plot: Read counts by region for this range
-    read_counts_range <- range_data %>%
-      select(file_stem, group, setpoint_type,
-             reads_below_setpoint, reads_at_setpoint, reads_above_setpoint) %>%
-      pivot_longer(cols = c(reads_below_setpoint, reads_at_setpoint, reads_above_setpoint),
-                   names_to = "region",
-                   values_to = "count") %>%
-      mutate(region = case_when(
-        region == "reads_below_setpoint" ~ "Below setpoint",
-        region == "reads_at_setpoint" ~ "At setpoint",
-        region == "reads_above_setpoint" ~ "Above setpoint"
-      ),
-      # Set factor levels: above first so it stacks on TOP
-      region = factor(region, levels = c("Above setpoint", "At setpoint", "Below setpoint")))
-    
-    p_counts_range <- ggplot(read_counts_range,
-                             aes(x = file_stem, y = count, fill = region)) +
-      geom_col(position = "stack", alpha = 0.8) +
-      facet_grid(setpoint_type ~ group, scales = "free",
-                 labeller = labeller(setpoint_type = setpoint_labels)) +
-      scale_fill_manual(values = c("Below setpoint" = "steelblue", 
-                                   "At setpoint" = "grey70",
-                                   "Above setpoint" = "coral")) +
-      labs(title = paste0("Read Counts by Region - ", my_range),
-           x = "Sample",
-           y = "Number of Reads",
-           fill = "Region") +
-      theme_bw() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1),
-            legend.position = "bottom")
-    
-    ggsave(file.path(instability_by_range_dir, 
-                    paste0("read_counts-", my_range, ".png")),
-           p_counts_range, width = 12, height = 8, dpi = 300)
-  }
-  
-  message("  Individual range plots saved to: ", instability_by_range_dir)
-  
-  # Generate individual plots by sample
-  message("\nGenerating individual plots by sample...")
-  
-  instability_by_sample_dir <- file.path(plots_dir, "instability_by_sample")
-  if (!dir.exists(instability_by_sample_dir)) {
-    dir.create(instability_by_sample_dir, recursive = TRUE)
-  }
-  
-  for (my_sample in unique(instability_metrics$file_stem)) {
-    sample_data <- instability_metrics %>%
-      filter(file_stem == my_sample)
-    
-    if (nrow(sample_data) == 0) next
-    
-    # Create a multi-panel plot for this sample
-    # Panel 1: Instability indices
-    indices_data <- sample_data %>%
-      select(analysis_range_name, setpoint_type, 
-             instability_index, expansion_index, contraction_index) %>%
-      pivot_longer(cols = c(instability_index, expansion_index, contraction_index),
-                   names_to = "metric",
-                   values_to = "value") %>%
-      mutate(metric = gsub("_", " ", metric),
-             metric = tools::toTitleCase(metric))
-    
-    p1 <- ggplot(indices_data,
-                aes(x = analysis_range_name, y = value, fill = metric)) +
-      geom_col(position = "dodge", alpha = 0.8) +
-      geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
-      facet_wrap(~ setpoint_type, nrow = 2,
-                 labeller = labeller(setpoint_type = setpoint_labels)) +
-      labs(title = "Instability Indices",
-           x = "Analysis Range",
-           y = "Index Value",
-           fill = "Metric") +
-      theme_bw() +
-      theme(legend.position = "bottom")
-    
-    # Panel 2: Read counts
-    counts_data <- sample_data %>%
-      select(analysis_range_name, setpoint_type,
-             reads_below_setpoint, reads_at_setpoint, reads_above_setpoint) %>%
-      pivot_longer(cols = c(reads_below_setpoint, reads_at_setpoint, reads_above_setpoint),
-                   names_to = "region",
-                   values_to = "count") %>%
-      mutate(region = case_when(
-        region == "reads_below_setpoint" ~ "Below",
-        region == "reads_at_setpoint" ~ "At",
-        region == "reads_above_setpoint" ~ "Above"
-      ),
-      # Set factor levels: above first so it stacks on TOP
-      region = factor(region, levels = c("Above", "At", "Below")))
-    
-    p2 <- ggplot(counts_data,
-                aes(x = analysis_range_name, y = count, fill = region)) +
-      geom_col(position = "stack", alpha = 0.8) +
-      facet_wrap(~ setpoint_type, nrow = 2,
-                 labeller = labeller(setpoint_type = setpoint_labels)) +
-      scale_fill_manual(values = c("Below" = "steelblue", 
-                                   "At" = "grey70",
-                                   "Above" = "coral")) +
-      labs(title = "Read Distribution",
-           x = "Analysis Range",
-           y = "Number of Reads",
-           fill = "Region") +
-      theme_bw() +
-      theme(legend.position = "bottom")
-    
-    # Combine plots
-    p_combined <- cowplot::plot_grid(p1, p2, ncol = 2,
-                                     labels = c("A", "B"),
-                                     label_size = 14)
-    
-    # Add title
-    title_text <- cowplot::ggdraw() + 
-      cowplot::draw_label(paste0("Instability Metrics - ", my_sample),
-                         fontface = "bold", size = 16)
-    
-    p_final <- cowplot::plot_grid(title_text, p_combined, ncol = 1,
-                                  rel_heights = c(0.05, 1))
-    
-    ggsave(file.path(instability_by_sample_dir, 
-                    paste0(my_sample, "-instability.png")),
-           p_final, width = 14, height = 10, dpi = 300)
-  }
-  
-  message("  Individual sample plots saved to: ", instability_by_sample_dir)
+    for (sp_type in unique(balance_data$setpoint_type)) {
+      sp_data  <- balance_data %>% filter(setpoint_type == sp_type)
+      sp_label <- setpoint_labels[sp_type]
+      sp_slug  <- gsub("_", "-", sp_type)   # e.g. "control-relative"
 
-  message("\nInstability plots saved to: ", plots_dir)
+      p_bal <- ggplot(sp_data,
+                      aes(x = contraction_ratio, y = expansion_ratio)) +
+        geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +
+        geom_smooth(method = "lm", se = FALSE, linewidth = 0.7, colour = "#4393C3") +
+        geom_point(colour = "grey30", size = 2.5, alpha = 0.75) +
+        facet_wrap(~ analysis_range_name, scales = "free") +
+        labs(title = paste0("Expansion vs contraction balance — ", sp_label),
+             subtitle = "Each point = one sample. Dashed = balanced (expansion = contraction). Blue line = lm fit.",
+             x = "Contraction ratio", y = "Expansion ratio") +
+        theme_bw() +
+        theme(strip.text = element_text(size = 8))
+
+      fname <- paste0("18_expansion_contraction_balance-", sp_slug, ".png")
+      n_cols  <- min(4, n_ranges)
+      n_rows  <- ceiling(n_ranges / n_cols)
+      ggsave(file.path(plots_dir, fname),
+             p_bal,
+             width  = n_cols * 4.5,
+             height = n_rows * 4 + 2,
+             dpi = params$plot_dpi, limitsize = FALSE)
+      message("Balance plot saved: ", fname)
+    }
+  }
+
 }
+
+message("\nInstability plots saved to: ", plots_dir)
 ```
 
 ---
@@ -2547,11 +2090,12 @@ if (params$group_control && any(instability_metrics$setpoint_type == "control_re
 
 Export all results to Excel workbook.
 
-```{r export_excel, echo=FALSE}
-# Prepare export list - comprehensive summary first
+```{r export_excel, echo=FALSE, message=FALSE}
+# Prepare export list
+# Note: comprehensive_range_summary contains all per-sample-range detail including
+# peaks and controls; range_summary (3-column settings overview) is dropped as redundant.
 excel_export <- list(
-  comprehensive_range_summary = comprehensive_range_summary,
-  range_summary = range_summary,
+  range_summary = comprehensive_range_summary,
   modal_peaks = modal_peaks,
   distribution_summary = distribution_summary
 )
@@ -2562,6 +2106,12 @@ if (!is.null(group_controls)) {
 
 if (nrow(instability_metrics) > 0) {
   excel_export$instability_metrics <- instability_metrics
+
+  # Add read counts table (wide format: one row per sample/range/setpoint_type)
+  read_counts_export <- instability_metrics %>%
+    select(file_stem, analysis_range_name, group, setpoint_type, setpoint_repeat_length,
+           reads_below_setpoint, reads_at_setpoint, reads_above_setpoint)
+  excel_export$read_counts <- read_counts_export
 }
 
 # Export to Excel
@@ -2574,12 +2124,12 @@ message("  Sheets: ", paste(names(excel_export), collapse = ", "))
 
 **Excel file contains:**
 
-- **comprehensive_range_summary**: Complete table with all parameters, peaks, and controls (NEW!)
-- **range_summary**: Analysis range definitions per sample
-- **modal_peaks**: Detected peaks per sample and range
-- **distribution_summary**: Full distribution statistics
-- **group_controls**: Control setpoints per group (if enabled)
-- **instability_metrics**: Instability metrics (if enabled)
+- **range_summary**: Complete table — all analysis ranges per sample with detected peaks, control setpoints, and boundary details
+- **modal_peaks**: Detected modal peaks per sample and range (long format)
+- **distribution_summary**: ~30 distribution statistics per sample per range (includes `n_reads_total` per range)
+- **group_controls**: Group control setpoints per range (if `group_control = TRUE`)
+- **instability_metrics**: All instability metrics (instability index, expansion/contraction indices, ratios, z-scores) per sample, range, and setpoint type
+- **read_counts**: Absolute read counts below, at, and above setpoint per sample/range/setpoint type
 
 ---
 
@@ -2614,7 +2164,6 @@ output_path <- file.path(results_dir, "06_range_analysis_results.RData")
 save(module6_output, file = output_path)
 
 message("Module 6 outputs saved to: ", output_path)
-message("  comprehensive_range_summary included in module6_output")
 ```
 
 **Module 6 Complete!**
@@ -2623,8 +2172,74 @@ Results saved to: `r output_path`
 
 ---
 
-**Session Info:**
+# Module diagnostics
+
+## Timing
+
+```{r timing_table, echo=FALSE}
+timing_df <- build_timing_table(timings)
+DT::datatable(
+  timing_df,
+  caption = "Section timing — Module 6",
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Section", "Seconds", "Elapsed (mm:ss)", "Cumulative (mm:ss)")
+) %>%
+  DT::formatStyle("section", target = "row",
+                  fontWeight = DT::styleEqual("Total", "bold"))
+```
+
+## Output objects
+
+```{r manifest_table, echo=FALSE}
+manifest <- data.frame(
+  object = names(module6_output),
+  description = c(
+    "Parsed settings: range definitions, floors, max peaks per sample",
+    "Per-sample/range config, peaks, controls, and summary statistics in one joined table",
+    "Detected modal peaks per sample and analysis range",
+    "~30 distribution statistics per sample/range (mean, median, SD, skewness, tails, CV...)",
+    "Aggregated control setpoints per group and range (NULL if group_control = FALSE)",
+    "Instability indices, expansion/contraction metrics, and z-scores vs control setpoints"
+  ),
+  class = sapply(module6_output, function(x) if (is.null(x)) "NULL" else class(x)[1]),
+  size = sapply(module6_output, function(x) {
+    format_size(if (is.null(x)) 0 else as.numeric(object.size(x)))
+  }),
+  bytes = sapply(module6_output, function(x) {
+    if (is.null(x)) 0L else as.numeric(object.size(x))
+  }),
+  stringsAsFactors = FALSE
+)
+
+DT::datatable(
+  manifest[, c("object", "description", "class", "size")],
+  caption = sprintf("Objects saved to module6_output — RData file: %s on disk (%s)",
+                    format_size(file.size(output_path)), output_path),
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Object", "Description", "Class", "In-memory size")
+)
+```
+
+```{r diagnostics_export, echo=FALSE}
+write_excel_function(
+  named_list = list("timing" = timing_df, "manifest" = manifest),
+  path = excel_path,
+  overwrite_sheet = TRUE
+)
+message(sprintf("Module 6 complete — total time: %s  |  RData: %s",
+                format_elapsed(sum(timings)), format_size(file.size(output_path))))
+```
+
+---
+
+# Session info
 
 ```{r session_info, echo=FALSE}
 sessionInfo()
 ```
+
+

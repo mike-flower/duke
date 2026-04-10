@@ -49,6 +49,48 @@ apply_fn <- function(...) {
   }
 }
 
+# ------------------------------------------------------------------------------
+# Timing utilities
+# ------------------------------------------------------------------------------
+
+# Format a byte count as a human-readable string with appropriate units
+format_size <- function(bytes) {
+  bytes <- as.numeric(bytes)
+  if (bytes < 1024) {
+    sprintf("%.0f B", bytes)
+  } else if (bytes < 1024^2) {
+    sprintf("%.1f KB", bytes / 1024)
+  } else if (bytes < 1024^3) {
+    sprintf("%.1f MB", bytes / 1024^2)
+  } else {
+    sprintf("%.2f GB", bytes / 1024^3)
+  }
+}
+
+# Format elapsed seconds as mm:ss or hh:mm:ss
+format_elapsed <- function(secs) {
+  secs <- round(as.numeric(secs))
+  if (secs < 3600) {
+    sprintf("%02d:%02d", secs %/% 60, secs %% 60)
+  } else {
+    sprintf("%02d:%02d:%02d", secs %/% 3600, (secs %% 3600) %/% 60, secs %% 60)
+  }
+}
+
+# Build a timing summary table from a named numeric vector of elapsed seconds
+build_timing_table <- function(timings) {
+  elapsed_secs <- as.numeric(timings)
+  total <- sum(elapsed_secs)
+  df <- data.frame(
+    section    = c(names(timings), "Total"),
+    secs       = c(round(elapsed_secs, 1), round(total, 1)),
+    elapsed    = c(sapply(elapsed_secs, format_elapsed), format_elapsed(total)),
+    cumulative = c(sapply(cumsum(elapsed_secs), format_elapsed), format_elapsed(total)),
+    stringsAsFactors = FALSE
+  )
+  df
+}
+
 # Extract result
 extract_apply_fn_result <- function(result) {
   if ("value" %in% names(result)) {

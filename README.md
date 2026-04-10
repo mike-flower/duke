@@ -2,14 +2,11 @@
 
 A modular pipeline for amplicon sequencing analysis with comprehensive repeat length characterisation and instability metrics.
 
-**Latest Updates (v2.1.0):**
-- 🗂️ **Reorganised Directory Structure** - Cleaner root with `modules/` and `scripts/` subdirectories
-- ✨ **Command-Line Interface** - Run Duke without editing files
-- ✅ **Optional Trimming** - Enable/disable adapter trimming with `--trim` flag
-- 🔧 **Enhanced Documentation** - Comprehensive parameter explanations with examples
-- 📦 **Organised Library Files** - Clear module number prefixes (00-07)
-- 🐛 **Bug Fixes** - Resume detection, parameter naming consistency, knit directory handling
-- 📊 **Improved Logging** - End time display and consistent HH:MM:SS duration format
+**Latest Updates (v2.2.0):**
+- ✨ **New parameters** — `check_duplicate_readnames`, `rm_flank_length_outliers`, `flank_iqr_multiplier`, `plot_dpi`, `plot_per_sample`, `export_read_counts`
+- 🐛 **Bug fixes** — partial module runs no longer crash summary; reference N-masking now case-insensitive; clustering connection leak fixed
+- 🔧 **Simplified** — `log_dir` and `verbose` removed (log always written to `logs/`; all messages always printed)
+- 📄 **Streamlined job scripts** — HPC scripts reduced to essentials; README is now the single reference for resource guidance
 
 ---
 
@@ -123,7 +120,7 @@ data/
 **Requirements:**
 - Must contain your target amplicon sequence
 - Include sufficient flanking sequence around repeat region
-- Use `NNNNN` separator for multiple reference sequences
+- Use `NNNNN` or `nnnnn` (upper or lowercase) as the repeat region separator
 
 **Demo Reference:** `www/HTTset20.fasta` - HTT exon 1 reference for CAG repeat analysis
 
@@ -137,7 +134,7 @@ GCCGCCGCCGCCGCCGCCGCCTCCTCAGCTTCCTCAGCCGCC...
 
 The reference contains:
 - Full HTT exon 1 sequence with flanking regions
-- `nnnnn` (lowercase) replaces the CAG repeat tract
+- `nnnnn` (5+ consecutive N/n, upper or lowercase) replaces the CAG repeat tract
 - This masks the repeat region, allowing Duke to detect repeats de novo from sequencing data
 - Flanking sequences provide alignment context on both sides of the repeat
 
@@ -512,7 +509,7 @@ duke/
   --path_ref /path/to/reference.fasta
 ```
 
-**Note:** This minimal command will run Modules 1-5 and 7. Module 6 (Range Analysis) requires a settings spreadsheet. To include Module 6, add `--path_settings /path/to/settings.xlsx`. To explicitly skip Module 6: use `--run_modules 1,2,3,4,5,7`. See [Settings Spreadsheet](#4-settings-spreadsheet-required-for-module-6) for format details.
+**Note:** Module 6 (Range Analysis) requires a settings spreadsheet. Without `--path_settings`, Module 6 will fail with a clear error. Either add `--path_settings /path/to/settings.xlsx` to include it, or explicitly skip it with `--run_modules 1,2,3,4,5,7`. See [Settings Spreadsheet](#4-settings-spreadsheet-required-for-module-6) for format details.
 
 #### Local test run example
 ```bash
@@ -712,8 +709,8 @@ Based on benchmark testing (January 2026) with datasets of 83-310 samples.
 ```bash
 #$ -pe smp 12
 #$ -l mem=64G        # 64GB per core = 768GB total
-#$ -l tmpfs=200G
-#$ -l h_rt=24:00:00  # Extend to 48:00:00 for 300+ samples
+#$ -l tmpfs=500G
+#$ -l h_rt=48:00:00
 ```
 
 With Duke command:
@@ -800,9 +797,9 @@ For datasets over 500 samples, use Kathleen with 80+ cores.
 
 | Dataset size | Samples | Cluster | Cores | Memory/core | tmpfs | Runtime |
 |--------------|---------|---------|-------|-------------|-------|---------|
-| Small | <100 | Myriad | 12 | 64GB | 200GB | 8-10h |
-| Medium | 100-300 | Myriad | 12 | 64GB | 200GB | 8-10h |
-| Large | 300-500 | Myriad | 12 | 64GB | 200GB | 28-48h |
+| Small | <100 | Myriad | 12 | 64GB | 500GB | 8-10h |
+| Medium | 100-300 | Myriad | 12 | 64GB | 500GB | 8-10h |
+| Large | 300-500 | Myriad | 12 | 64GB | 500GB | 28-48h |
 | Very large | 500-1000 | Kathleen | 80 | 4GB | - | 16-24h |
 | Massive | 1000+ | Kathleen | 80-160 | 4GB | - | 24-48h |
 
@@ -813,26 +810,47 @@ For datasets over 500 samples, use Kathleen with 80+ cores.
 
 ---
 
+### SGE vs Slurm command reference
+
+| Action | SGE (Myriad / Old Kathleen) | Slurm (New Kathleen) |
+|--------|----------------------------|----------------------|
+| Make executable | `chmod +x script.sh` | Not needed |
+| Submit job | `qsub script.sh` | `sbatch script.sh` |
+| Check jobs | `qstat -u $USER` | `squeue -u $USER` |
+| Job details | `qstat -j <JOB_ID>` | `scontrol show job <JOB_ID>` |
+| Cancel job | `qdel <JOB_ID>` | `scancel <JOB_ID>` |
+| After completion | `qacct -j <JOB_ID>` | `sacct -j <JOB_ID>` |
+| Job ID variable | `$JOB_ID` | `$SLURM_JOB_ID` |
+
+---
+
 ## Parameters
 
-### New parameters in 2.1.0
+### New parameters in v2.2.0
 
-All parameters remain the same as v2.0.1. The reorganisation only changed directory structure, not functionality.
+- `check_duplicate_readnames` — scan for reads with the same name and keep only the longest copy (Module 1)
+- `rm_flank_length_outliers` — filter reads with outlier combined flank lengths in Module 3; propagates to all downstream modules
+- `flank_iqr_multiplier` — IQR multiplier for flank length outlier detection (only active when `rm_flank_length_outliers = TRUE`)
+- `plot_dpi` — resolution for all `ggsave` diagnostic output (150 = screen quality, 300 = print quality)
+- `plot_per_sample` — gate on/off per-sample plot generation in Modules 2, 3, and 4
+- `export_read_counts` — write per-read repeat counts to `.tsv.gz` files in `03_repeat_detection/read_counts/` (default `TRUE`)
+
+**Removed in v2.2.0:** `log_dir` (hard-coded to `logs/`), `verbose` (all messages always printed), `waterfall_per_sample`, `repeat_histogram_per_sample`, `repeat_scatter_per_sample` (unimplemented).
 
 ### Essential parameters
 
 ```r
 # Required
-dir_data = "/path/to/data"           # Input directory
-dir_out = "/path/to/output"          # Output directory
-path_ref = "/path/to/reference.fasta" # Reference FASTA
+dir_data = "/path/to/data"            # Input directory
+dir_out = "/path/to/output"           # Output directory
+path_ref = "/path/to/reference.fasta" # Reference FASTA (NNNNN or nnnnn separator)
 
 # Trimming (if trim = TRUE)
 path_trim_patterns = "/path/to/adapters.csv"
 
 # Runtime
-threads = 2                          # CPU cores
-resume = TRUE                        # Skip completed modules (default)
+threads = 2                           # CPU cores
+resume = TRUE                         # Skip completed modules (default)
 ```
 
 ### Complete parameter reference
@@ -851,6 +869,7 @@ See `./duke --help` for comprehensive documentation of all 54+ parameters, inclu
 - `import_patterns` - File extensions to import
 - `downsample` - Limit reads per sample (NA = all)
 - `select_one_of_pair` - For paired-end: "R1", "R2", or NA
+- `check_duplicate_readnames` - Remove duplicate read names, keeping longest copy (default: TRUE; safe to set FALSE for PacBio CCS)
 
 #### Adapter trimming
 - `trim` - Enable/disable (default: TRUE)
@@ -874,11 +893,22 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 - `rpt_max_tract_gap` - Max gap between tracts (default: 18)
 - `rpt_return_option` - "longest" or "all"
 
+#### Flank length QC (Module 3)
+- `rm_flank_length_outliers` - Filter reads with outlier combined flank lengths (default: FALSE — review flank plots first)
+- `flank_iqr_multiplier` - IQR multiplier for outlier detection (default: 1.5; only active when `rm_flank_length_outliers = TRUE`)
+
 #### Clustering
 - `cluster` - Enable clustering (default: TRUE)
 - `cluster_by` - Method: "repeat", "haplotype", or both
 - `haplotype_cluster_max` - Max haplotypes (default: 10)
 - `repeat_cluster_max` - Max repeat lengths (default: 20)
+
+#### Plot output
+- `plot_dpi` - Resolution for all diagnostic plots (default: 150; use 300 for publication figures)
+- `plot_per_sample` - Generate per-sample plot files in Modules 2, 3, 4 (default: TRUE; consider FALSE for >50 samples)
+
+#### Data export
+- `export_read_counts` - Export per-read repeat counts to `03_repeat_detection/read_counts/{sample}.tsv.gz` (default: TRUE). Each file contains `read_id`, `repeat_count_full`, `repeat_count_match`, `repeat_count_tracts`. Useful for loading data in Python, Excel, or other downstream tools.
 
 #### Module control
 - `waterfall` - Generate waterfall plots (default: TRUE)
@@ -888,10 +918,9 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 #### Runtime
 - `threads` - CPU cores (default: 80 HPC / 2 local)
 - `resume` - Skip completed modules (default: TRUE)
-- `remove_intermediate` - Free RAM (default: TRUE)
-- `cleanup_temp` - Delete temp files (default: FALSE)
+- `remove_intermediate` - Free RAM between modules (default: TRUE)
+- `cleanup_temp` - Delete temp files on completion (default: FALSE)
 - `run_modules` - Which modules to run (default: c(1:7))
-- `log_dir` - Log directory (default: "logs")
 
 ---
 
@@ -900,7 +929,8 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 ### Module 1: Import and QC
 - Imports FASTQ/FASTA/BAM files
 - **Optionally trims adapters** (controlled by `trim` parameter)
-- Removes duplicates
+- **Optionally checks and removes duplicate read names**, keeping longest copy (controlled by `check_duplicate_readnames`; default TRUE; safe to disable for PacBio CCS)
+- Optional downsampling
 - QC metrics and plots
 
 ### Module 2: Alignment
@@ -913,6 +943,7 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 - Identifies repeat tracts
 - Tolerates sequencing errors
 - Multiple counting methods
+- **Flank length QC** — per-sample distribution plots always generated; optional outlier filtering via `rm_flank_length_outliers` (default FALSE — review plots before enabling). Filtered reads propagate to all downstream modules.
 
 ### Module 4: Allele calling
 - **⚠️ Most memory-intensive module** - requires 4GB+ per core
@@ -956,6 +987,44 @@ All parameters have comprehensive documentation with examples in `scripts/duke_r
 - Frequency histograms
 - Scatter/violin plots
 - Publication-ready figures
+
+---
+
+## Module diagnostics
+
+Every module ends with a **`# Module diagnostics`** section in the HTML report, appearing just before Session info.
+
+### Timing table
+
+All seven modules record wall-clock time for each major computation section and display a summary table with four columns:
+
+| Column | Description |
+|---|---|
+| Section | Name of the computation step |
+| Seconds | Raw elapsed seconds for that step |
+| Elapsed (mm:ss) | Step duration formatted as mm:ss or hh:mm:ss |
+| Cumulative (mm:ss) | Running total from module start |
+
+The **Total** row (bold) gives the complete module wall time. This makes it straightforward to identify which step dominates runtime and whether caching (resume) is working.
+
+### Output manifest
+
+Modules 1, 2, 3, 4, and 6 — those that save an `.RData` file — also display an **output manifest** table listing every object in the module's output list:
+
+| Column | Description |
+|---|---|
+| Object | R object name (as accessed via `moduleN_output$...`) |
+| Description | What the object contains and how it should be used downstream |
+| Class | R class (data.frame, tbl_df, list, etc.) |
+| In-memory size | Human-readable size (B / KB / MB / GB) |
+
+The table caption shows the `.RData` file size on disk and full path.
+
+### Excel export
+
+Both tables are appended as additional sheets to each module's output Excel file (`timing` and `manifest`), so timing data is available alongside the analysis results without opening the HTML.
+
+Modules 5 and 7 (waterfall and repeat visualisation) save only a `timing` sheet, as they produce no `.RData` output (only plots).
 
 ---
 
@@ -1156,24 +1225,58 @@ qsub scripts/duke_myriad.sh  # Resume parameter = TRUE by default
 
 ```
 result_duke/
-├── 01_import_and_qc.html             # HTML reports
+├── 01_import_and_qc.html             # HTML reports (one per module)
 ├── 02_alignment.html
-├── ...
+├── 03_repeat_detection.html
+├── 04_allele_calling.html
+├── 05_waterfall.html
+├── 06_range_analysis.html
 ├── 07_repeat_visualisation.html
 │
-├── module_data/                      # Cached results (for resume)
+├── module_data/                      # Cached RData (for resume)
 │   ├── 01_import_qc_results.RData
 │   ├── 02_alignment_results.RData
-│   └── ...
+│   ├── 03_repeat_detection_results.RData
+│   ├── 04_allele_calling_results.RData
+│   └── 06_range_analysis_results.RData
 │
-├── 01_import_qc/                     # Module outputs
-│   ├── qc.xlsx
+├── 01_import_qc/
+│   ├── qc.xlsx                       # count_summary | trim_summary | timing | manifest
 │   └── plots/
 ├── 02_alignment/
-│   └── plots/coverage_by_sample/
-├── ...
+│   ├── alignment.xlsx                # alignment_summary | flank_filtering | strand_summary
+│   │                                 # alignment_quality | sequence_segments | timing | manifest
+│   └── plots/
+│       └── coverage_by_sample/
+├── 03_repeat_detection/
+│   ├── repeat_detection.xlsx         # count_summary | tract_detection | count_method_comparison
+│   │                                 # heatmap_sample_index | flank_summary | timing | manifest
+│   ├── read_counts/                  # Per-read TSV files (only if export_read_counts = TRUE)
+│   │   ├── {sample_1}.tsv.gz         # read_id | repeat_count_full | repeat_count_match | repeat_count_tracts
+│   │   └── {sample_N}.tsv.gz
+│   └── plots/
+│       └── flank/
+├── 04_allele_calling/
+│   ├── allele_calling.xlsx           # cluster_summary | timing | manifest
+│   ├── consensus/
+│   │   ├── consensus.xlsx
+│   │   ├── consensus_sequences.fasta
+│   │   └── vcf_by_sample/
+│   └── plots/
+├── 05_waterfall/
+│   ├── waterfall.xlsx                # timing
+│   └── plots/
+│       └── waterfall_by_cluster/
+├── 06_range_analysis/
+│   ├── range_analysis.xlsx           # range_summary | modal_peaks | distribution_summary
+│   │                                 # instability_metrics | group_controls | timing | manifest
+│   └── plots/
 └── 07_repeat_visualisation/
+    ├── repeat_visualisation.xlsx     # timing
     └── plots/
+        ├── histograms_by_sample/
+        ├── scatter_by_sample/
+        └── density_by_sample/
 ```
 
 ---
@@ -1399,8 +1502,25 @@ rm result_duke/module_data/06_range_analysis_results.RData
 
 ## Version history
 
-### 2.1.0 (January 2026) - Current
-- 🗂️ **REORGANISED:** Clean directory structure with `modules/` and `scripts/` subdirectories
+### v2.2.0 (April 2026) - Current
+- ✨ **NEW:** Module diagnostics section in every HTML report — timing table per module (all 7) and output manifest (modules 1–4, 6); both exported to each module's Excel file
+- ✨ **NEW:** `export_read_counts` parameter (Module 3) — opt-in export of per-read repeat counts to `{sample}.tsv.gz` (gzipped TSV; columns: read_id, repeat_count_full, repeat_count_match, repeat_count_tracts)
+- ✨ **NEW:** `check_duplicate_readnames` parameter (Module 1; default TRUE)
+- ✨ **NEW:** Flank length QC filtering — `rm_flank_length_outliers`, `flank_iqr_multiplier` (Module 3)
+- ✨ **NEW:** Plot output control — `plot_dpi`, `plot_per_sample` (Modules 2, 3, 4)
+- ✨ **NEW:** `format_size()`, `format_elapsed()`, `build_timing_table()` helpers in `00_utils.R`
+- 🐛 **FIXED:** Modules 5 and 7 no longer have spurious resume checks — they always run when included in `run_modules` (use `run_modules` to skip them)
+- 🐛 **FIXED:** Manifest in-memory sizes now use adaptive units (B/KB/MB/GB) — previously showed 0 for small objects
+- 🐛 **FIXED:** RData file size shown in manifest caption only, not repeated per row
+- 🐛 **FIXED:** Summary section crash when running partial module sets
+- 🐛 **FIXED:** Reference N-masking now case-insensitive (`NNNNN` or `nnnnn`)
+- 🐛 **FIXED:** Clustering early-exit return type inconsistency
+- 🐛 **FIXED:** GMM connection leak in Module 4 clustering (replaced `sink(tempfile())` with `capture.output()`)
+- 🔧 **REMOVED:** `log_dir` (hard-coded to `logs/`), `verbose`, `waterfall_per_sample`, `repeat_histogram_per_sample`, `repeat_scatter_per_sample`
+- 🔧 **UPDATED:** `consensus_downsample` default 200 → 50; `waterfall_per_cluster` default TRUE → FALSE
+- 📄 **STREAMLINED:** HPC job scripts; README is now the single reference for resource guidance
+
+### v2.1.0 (January 2026)
 - 🐛 **FIXED:** `knit_root_dir` handling for Rmd files in subdirectories
 - 📚 **ENHANCED:** Comprehensive reorganisation documentation
 - 📊 **ADDED:** Job monitoring commands in README
@@ -1408,7 +1528,7 @@ rm result_duke/module_data/06_range_analysis_results.RData
 - 🎯 **ADDED:** Demo reference (HTTset20.fasta) and adapters (adapters.csv)
 - 📋 **ADDED:** Common workflows section with six example workflows
 
-### 2.0.1 (January 2025)
+### v2.0.1 (January 2025)
 - ✨ **NEW:** Command-line interface
 - ✅ **NEW:** `trim` parameter (optional adapter trimming)
 - 🔧 **RENAMED:** `visualise_alignment_downsample` (was: `_n_reads`)
@@ -1418,7 +1538,7 @@ rm result_duke/module_data/06_range_analysis_results.RData
 - 📦 **ORGANISED:** Library files with module prefixes (00-07)
 - 📊 **IMPROVED:** Logging format
 
-### 2.0.0
+### v2.0.0
 - Modular architecture (7 modules)
 - Resume capability
 - Cleanup options

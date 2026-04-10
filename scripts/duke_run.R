@@ -73,6 +73,15 @@ params <- list(
   # Downsampling (set to NA to disable)
   downsample = NA,  # e.g., 1000 to keep 1000 reads per sample
   
+  # check_duplicate_readnames: Scan for reads sharing the same name and keep
+  #   only the longest copy of each duplicate.
+  #   - TRUE  = run the check (default; important for ONT data)
+  #   - FALSE = skip the check and pass sequences through unchanged
+  #   Note: PacBio CCS data (Revio/Sequel) cannot have duplicate read names by
+  #   design, so FALSE is safe and saves significant time on large datasets.
+  #   For ONT data, duplicates can occur depending on basecaller settings.
+  check_duplicate_readnames = TRUE,
+  
   # -----------------------------------------------------------------------------
   # Adapter trimming (from both 5' and 3' ends using Biostrings::trimLRPatterns)
   # -----------------------------------------------------------------------------
@@ -235,6 +244,32 @@ params <- list(
   #   - Note: Downstream analyses must handle NAs
   #
   na_repeat_handling = "convert_to_zero",
+
+  # export_read_counts: Export per-read repeat counts to gzipped TSV files
+  #   - TRUE  = write one {file_stem}.tsv.gz per sample to
+  #             03_repeat_detection/read_counts/
+  #             Columns: read_id, repeat_count_full, repeat_count_match, repeat_count_tracts
+  #             Useful for downstream analysis in Python, Excel, or other tools.
+  #   - FALSE = do not export
+  export_read_counts = TRUE,
+
+  # -----------------------------------------------------------------------------
+  # Flank length QC & filtering (Module 3)
+  # -----------------------------------------------------------------------------
+  # rm_flank_length_outliers: Remove reads with unusual combined flank lengths
+  #   Filtering happens in Module 3 and applies to ALL downstream modules (4-7).
+  #   Default FALSE — review flank/ plots in Module 3 output before enabling.
+  #   - FALSE = keep all reads (recommended; use plots to assess first)
+  #   - TRUE  = remove reads where combined flank length is an IQR outlier
+  rm_flank_length_outliers = FALSE,
+  
+  # flank_iqr_multiplier: IQR multiplier for combined flank length outlier detection
+  #   Only used when rm_flank_length_outliers = TRUE.
+  #   1.5 × IQR reference lines are always shown in plots regardless of this setting.
+  #   - 1.5 = standard boxplot rule (may be too aggressive if within-sample IQR ≈ 0)
+  #   - 3.0 = relaxed (recommended for high-accuracy long-read amplicons)
+  #   See flank_iqr_sweep.png in Module 3 plots to calibrate.
+  flank_iqr_multiplier = 1.5,
   
   # -----------------------------------------------------------------------------
   # Clustering
@@ -310,12 +345,6 @@ params <- list(
   #   Note: Downsampling is random but reproducible (seed = 123)
   waterfall_downsample = 1000,
   
-  # waterfall_rm_flank_length_outliers: Remove reads with unusual flank lengths
-  #   - TRUE = remove outliers using 1.5 × IQR method per cluster (recommended)
-  #   - FALSE = plot all reads regardless of flank length
-  #   Helps remove chimeric reads and sequencing artifacts
-  waterfall_rm_flank_length_outliers = TRUE,
-  
   # waterfall_y_axis_labels: Controls y-axis labeling density
   #   - "auto" = dynamic based on read count (default, from original Duke)
   #              <30 reads: every read, 30-50: every 3rd, 50-100: every 5th,
@@ -326,9 +355,9 @@ params <- list(
   waterfall_y_axis_labels = "auto",
   
   # waterfall_per_cluster: Generate separate waterfall plot for each cluster
-  #   - TRUE = create per-cluster plots (can create many files)
-  #   - FALSE = only per-sample plots (default, faster)
-  waterfall_per_cluster = TRUE,
+  #   - TRUE = create per-cluster plots (useful for targeted QC, but creates many files)
+  #   - FALSE = only per-sample plots (default, much faster for large datasets)
+  waterfall_per_cluster = FALSE,
   
   # DNA base colors for waterfall plots
   dna_colours = c("A" = "darkgreen", "C" = "blue", "T" = "red", 
@@ -388,6 +417,26 @@ params <- list(
   repeat_distribution_metrics = c("modal_length", "mean_length", "median_length"),
   
   # -----------------------------------------------------------------------------
+  # Plot output control
+  # -----------------------------------------------------------------------------
+  # plot_dpi: Resolution for all diagnostic ggsave output
+  #   - 150 = screen-quality (default, ~2x faster than 300, suitable for QC review)
+  #   - 300 = print-quality (use for publication figures)
+  plot_dpi = 150,
+  
+  # plot_per_sample: Generate per-sample plot files (one file per sample)
+  #   - TRUE = create individual per-sample plots in subdirectories (default)
+  #   - FALSE = skip per-sample plots; aggregate cohort plots still generated
+  #   Note: Consider setting FALSE for large datasets (>50 samples) to avoid
+  #   generating hundreds of files per module
+  plot_per_sample = TRUE,
+
+  # Module-specific per-sample overrides (force per-sample plots ON regardless
+  # of plot_per_sample; useful when you want specific plot types for all samples)
+  #   - TRUE = always generate per-sample plots for this module
+  #   - FALSE = follow plot_per_sample (default)
+  
+  # -----------------------------------------------------------------------------
   # Pipeline execution control
   # -----------------------------------------------------------------------------
   # Which modules to run (vector of module numbers 1-7)
@@ -435,29 +484,18 @@ params <- list(
   #   - Applied at end of pipeline after all modules successfully complete
   #   - Useful for: repeated runs, limited disk space, production workflows
   #   - Keep FALSE for: debugging, inspecting intermediate results
-  cleanup_temp = FALSE,
+  cleanup_temp = FALSE
   
-  # -----------------------------------------------------------------------------
-  # Logging and output control
-  # -----------------------------------------------------------------------------
-  # log_dir: Directory for log files
-  #   - Relative to pipeline directory (where duke_run.R is located)
-  #   - Each run creates a timestamped subdirectory
-  #   - Contains duke_run-TIMESTAMP.log and params-TIMESTAMP.R
-  log_dir = "logs",
-  
-  # verbose: Enable verbose output
-  #   - Show additional progress messages
-  #   - Useful for debugging or monitoring long runs
-  verbose = FALSE
+  # log_dir is hard-coded to "logs" (see logging setup below)
+  # verbose is not used; all informative messages are always printed
 )
 
 # ==============================================================================
 # LOGGING SETUP
 # ==============================================================================
 
-# Create logs directory at root level (same location as duke_run.R)
-log_dir <- file.path(getwd(), params$log_dir)
+# Log directory is hard-coded relative to the duke root
+log_dir <- file.path(getwd(), "logs")
 if (!dir.exists(log_dir)) {
   dir.create(log_dir, recursive = TRUE)
 }
@@ -634,21 +672,15 @@ if (5 %in% params$run_modules) {
     cat("-----------------------------------------------------------------\n")
     cat("Module 5: Waterfall Plots\n")
     cat("-----------------------------------------------------------------\n")
-    
-    module5_output <- file.path(params$dir_out, "module_data", "05_waterfall_results.RData")
-    
-    if (params$resume && file.exists(module5_output)) {
-      cat("Skipping Module 5 (results found)...\n")
-    } else {
-      rmarkdown::render(
-        input = "modules/05_waterfall.Rmd",
-        output_dir = params$dir_out,
-        params = params,
-        envir = new.env(),
-        knit_root_dir = getwd()
-      )
-      cat("\nModule 5 complete!\n")
-    }
+
+    rmarkdown::render(
+      input = "modules/05_waterfall.Rmd",
+      output_dir = params$dir_out,
+      params = params,
+      envir = new.env(),
+      knit_root_dir = getwd()
+    )
+    cat("\nModule 5 complete!\n")
   } else {
     cat("\n")
     cat("Skipping Module 5 (waterfall = FALSE)...\n")
@@ -692,21 +724,15 @@ if (7 %in% params$run_modules) {
   cat("-----------------------------------------------------------------\n")
   cat("Module 7: Repeat Distribution Visualisation\n")
   cat("-----------------------------------------------------------------\n")
-  
-  module7_output <- file.path(params$dir_out, "module_data", "07_repeat_visualisation_results.RData")
-  
-  if (params$resume && file.exists(module7_output)) {
-    cat("Skipping Module 7 (results found)...\n")
-  } else {
-    rmarkdown::render(
-      input = "modules/07_repeat_visualisation.Rmd",
-      output_dir = params$dir_out,
-      params = params,
-      envir = new.env(),
-      knit_root_dir = getwd()
-    )
-    cat("\nModule 7 complete!\n")
-  }
+
+  rmarkdown::render(
+    input = "modules/07_repeat_visualisation.Rmd",
+    output_dir = params$dir_out,
+    params = params,
+    envir = new.env(),
+    knit_root_dir = getwd()
+  )
+  cat("\nModule 7 complete!\n")
 } else {
   cat("\nSkipping Module 7 (not in run_modules)...\n")
 }
@@ -723,29 +749,29 @@ cat("\n")
 cat("Results saved to:", params$dir_out, "\n")
 cat("\n")
 cat("HTML reports:\n")
-cat("  - ", file.path(params$dir_out, "01_import_and_qc.html"), "\n")
-cat("  - ", file.path(params$dir_out, "02_alignment.html"), "\n")
-cat("  - ", file.path(params$dir_out, "03_repeat_detection.html"), "\n")
-cat("  - ", file.path(params$dir_out, "04_allele_calling.html"), "\n")
-if (params$waterfall) {
+if (1 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "01_import_and_qc.html"), "\n")
+if (2 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "02_alignment.html"), "\n")
+if (3 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "03_repeat_detection.html"), "\n")
+if (4 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "04_allele_calling.html"), "\n")
+if (5 %in% params$run_modules && params$waterfall) {
   cat("  - ", file.path(params$dir_out, "05_waterfall.html"), "\n")
 }
-cat("  - ", file.path(params$dir_out, "06_range_analysis.html"), "\n")
-cat("  - ", file.path(params$dir_out, "07_repeat_visualisation.html"), "\n")
+if (6 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "06_range_analysis.html"), "\n")
+if (7 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "07_repeat_visualisation.html"), "\n")
 cat("\n")
 cat("RData files:\n")
-cat("  - ", module1_output, "\n")
-cat("  - ", module2_output, "\n")
-cat("  - ", module3_output, "\n")
-cat("  - ", module4_output, "\n")
-if (params$waterfall && exists("module5_output")) {
-  cat("  - ", module5_output, "\n")
-}
-cat("  - ", module6_output, "\n")
-cat("  - ", module7_output, "\n")
+if (exists("module1_output")) cat("  - ", module1_output, "\n")
+if (exists("module2_output")) cat("  - ", module2_output, "\n")
+if (exists("module3_output")) cat("  - ", module3_output, "\n")
+if (exists("module4_output")) cat("  - ", module4_output, "\n")
+if (params$waterfall && exists("module5_output")) cat("  - ", module5_output, "\n")
+if (exists("module6_output")) cat("  - ", module6_output, "\n")
+if (exists("module7_output")) cat("  - ", module7_output, "\n")
 cat("\n")
 cat("Excel exports:\n")
-cat("  - ", file.path(params$dir_out, "06_range_analysis", "range_analysis_results.xlsx"), "\n")
+if (6 %in% params$run_modules) {
+  cat("  - ", file.path(params$dir_out, "06_range_analysis", "range_analysis_results.xlsx"), "\n")
+}
 cat("\n")
 
 # ==============================================================================

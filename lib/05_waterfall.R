@@ -264,7 +264,11 @@ create_waterfall_plot <- function(data,
 #' - Returns original data with outlier flags added
 #'
 #' @examples
-#' data_flagged <- identify_flank_outliers(
+#' @examples
+#' waterfall_data <- prepare_waterfall_data(
+#'   alignment_data      = alignment_clustered,
+#'   repeat_count_method = "repeat_count_full"
+#' )
 #'   data = alignment_data,
 #'   group_vars = c("file_stem", "cluster_number")
 #' )
@@ -274,105 +278,34 @@ create_waterfall_plot <- function(data,
 #'   filter(!left_outlier & !right_outlier)
 #'
 #' @export
-identify_flank_outliers <- function(data, group_vars = c("file_stem", "cluster_number")) {
-  
-  # Calculate flank lengths if not present
-  if (!"left_length" %in% names(data)) {
-    data <- data %>% mutate(left_length = nchar(left))
-  }
-  if (!"right_length" %in% names(data)) {
-    data <- data %>% mutate(right_length = nchar(right))
-  }
-  
-  # Group by specified variables
-  data_grouped <- data %>% group_by(across(all_of(group_vars)))
-  
-  # Calculate IQR-based outliers
-  data_flagged <- data_grouped %>%
-    mutate(
-      # Left flank quartiles
-      left_q1 = quantile(left_length, 0.25, na.rm = TRUE),
-      left_q3 = quantile(left_length, 0.75, na.rm = TRUE),
-      left_iqr = left_q3 - left_q1,
-      # Right flank quartiles
-      right_q1 = quantile(right_length, 0.25, na.rm = TRUE),
-      right_q3 = quantile(right_length, 0.75, na.rm = TRUE),
-      right_iqr = right_q3 - right_q1,
-      # Flag outliers
-      left_outlier = left_length < (left_q1 - 1.5 * left_iqr) | 
-                     left_length > (left_q3 + 1.5 * left_iqr),
-      right_outlier = right_length < (right_q1 - 1.5 * right_iqr) | 
-                      right_length > (right_q3 + 1.5 * right_iqr)
-    ) %>%
-    ungroup() %>%
-    # Remove temporary calculation columns
-    select(-ends_with("_q1"), -ends_with("_q3"), -ends_with("_iqr"))
-  
-  return(data_flagged)
-}
-
-
 #' Prepare Waterfall Data
 #'
-#' Prepare alignment data for waterfall plotting
+#' Prepare alignment data for waterfall plotting.
+#' Flank length filtering is applied upstream in Module 4 if enabled —
+#' this function does not apply any outlier removal.
 #'
 #' @param alignment_data Data frame with alignment information
 #' @param repeat_count_method Character string naming the repeat count column to use
-#' @param remove_outliers Logical, whether to flag and optionally remove flank length outliers
-#' @param group_vars Character vector of grouping variables for outlier detection
+#' @param group_vars Character vector of grouping variables (unused, kept for compatibility)
 #'
 #' @return Data frame ready for waterfall plotting
-#'
-#' @details
-#' Preparation steps:
-#' 1. Filter for reads with valid mid segment and cluster assignment
-#' 2. Calculate flank lengths
-#' 3. Optionally identify outliers (if remove_outliers = TRUE)
-#' 4. Add repeat_length column from specified method
-#'
-#' @examples
-#' waterfall_data <- prepare_waterfall_data(
-#'   alignment_data = module4_output$alignment_clustered,
-#'   repeat_count_method = "repeat_count_full",
-#'   remove_outliers = TRUE,
-#'   group_vars = c("file_stem", "cluster_number")
-#' )
 #'
 #' @export
 prepare_waterfall_data <- function(alignment_data,
                                    repeat_count_method = "repeat_count_full",
-                                   remove_outliers = TRUE,
                                    group_vars = c("file_stem", "cluster_number")) {
   
-  # Filter for valid reads
   data <- alignment_data %>%
     dplyr::filter(!is.na(mid), !is.na(cluster_number)) %>%
     dplyr::mutate(
-      # Calculate flank lengths
-      left_length = nchar(left),
-      right_length = nchar(right),
-      mid_length = nchar(mid),
-      # Add repeat count for ordering
+      left_length   = nchar(left),
+      right_length  = nchar(right),
+      mid_length    = nchar(mid),
       repeat_length = !!sym(repeat_count_method)
     )
   
-  n_before <- nrow(data)
-  
-  # Identify and optionally remove outliers
-  if (remove_outliers) {
-    data <- identify_flank_outliers(data, group_vars = group_vars)
-    
-    # Filter out outliers
-    data <- data %>%
-      dplyr::filter(!left_outlier & !right_outlier) %>%
-      select(-left_outlier, -right_outlier)
-    
-    n_after <- nrow(data)
-    n_removed <- n_before - n_after
-    
-    message("Outlier removal: filtered ", n_removed, " reads (", 
-            round(100 * n_removed / n_before, 1), "%)")
-  }
+  message("Waterfall data prepared: ", format(nrow(data), big.mark = ","),
+          " reads across ", length(unique(data$file_stem)), " samples")
   
   return(data)
 }

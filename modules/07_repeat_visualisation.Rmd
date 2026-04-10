@@ -1,27 +1,45 @@
 ---
-title: "Duke Pipeline - Module 7: Repeat Visualisation"
+title: "Duke pipeline"
+subtitle: "Module 7: Repeat visualisation"
+author: "Michael Flower"
+date: "`r Sys.Date()`"
 output:
   html_document:
     toc: true
     toc_float: true
     toc_depth: 3
-    theme: paper
+    number_sections: false
+    code_folding: hide
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = FALSE)
+pbapply::pboptions(type = "none")
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 7: Repeat visualisation";</script>')
 ```
 
 ---
 
 # Overview
 
-This module provides comprehensive visualisation of repeat length distributions through:
+**Module 7: Repeat visualisation**
 
-1. **Repeat Histograms**: Frequency distribution plots showing the count of reads at each repeat length
-2. **Scatter/Violin Plots**: Individual read distributions with violin overlays
+Provides visualisation of repeat length distributions through histograms and scatter plots. These complement the statistical analyses in Module 6 by showing individual reads and distribution shapes visually.
 
-These plots complement the statistical analyses in Module 6 by showing individual reads and distribution shapes visually.
+**Input:** Repeat counts and cluster assignments (Modules 3 and 4), modal peaks and distribution summaries (Module 6)
+
+**Metric overlays** (modal, mean, median) are controlled by `params$repeat_distribution_metrics` in the pipeline settings.
+
+**Outputs:**
+
+- Cohort repeat length summary plot (`cohort_repeat_summary.png`)
+- Repeat histograms per sample — full range (`histograms_by_sample/full/`) and per analysis range (`histograms_by_sample/{range}/`)
+- Per-sample horizontal scatter plots — full range (`scatter_by_sample/full/`) and per analysis range (`scatter_by_sample/{range}/`)
+- Per-sample ggridges density plots — all reads as a single density (`density_by_sample/full/`) and one ridge per analysis range (`density_by_sample/ranges/`)
 
 ---
 
@@ -35,6 +53,8 @@ library(scales)
 library(DT)
 library(ggnewscale)
 library(data.table)
+library(ggridges)
+library(openxlsx)
 ```
 
 ```{r load_functions, echo=FALSE}
@@ -57,31 +77,48 @@ message("\n=== Module 7: Repeat Distribution Visualisation ===")
 message("Output directory: ", plots_dir)
 ```
 
+```{r timing_init, echo=FALSE}
+module_start_time <- proc.time()["elapsed"]
+timings <- c()
+```
+
 ---
 
-# Load Data
+# Load data
 
-```{r load_data}
-# Load Module 4 output (clustered data with repeat counts)
+Load repeat counts and cluster assignments from Modules 3 and 4, and modal peaks and distribution summaries from Module 6.
+
+```{r load_data, echo=FALSE, message=FALSE}
 results_dir <- file.path(params$dir_out, "module_data")
-load(file.path(results_dir, "04_allele_calling_results.RData"))
+
+# Load Module 3 slim (repeat counts)
+module3_path <- file.path(results_dir, "03_repeat_detection_results.RData")
+if (!file.exists(module3_path)) stop("Module 3 output not found: ", module3_path)
+load(module3_path)
+counts_slim <- module3_output$alignment_counts_slim
+
+# Load Module 4 slim (cluster assignments)
+module4_path <- file.path(results_dir, "04_allele_calling_results.RData")
+if (!file.exists(module4_path)) stop("Module 4 output not found: ", module4_path)
+load(module4_path)
+clusters_slim <- module4_output$alignment_clustered_slim
+
+# Join: repeat counts + cluster assignments
+alignment_clustered <- counts_slim %>%
+  dplyr::left_join(clusters_slim, by = c("file_stem", "qname"))
 
 # Load Module 6 output (modal peaks and distribution summary)
-load(file.path(results_dir, "06_range_analysis_results.RData"))
-
-# Extract data from Module 4
-alignment_clustered <- module4_output$alignment_clustered
-
-# Extract data from Module 6
-modal_peaks <- module6_output$modal_peaks
+module6_path <- file.path(results_dir, "06_range_analysis_results.RData")
+if (!file.exists(module6_path)) stop("Module 6 output not found: ", module6_path)
+load(module6_path)
+modal_peaks        <- module6_output$modal_peaks
 distribution_summary <- module6_output$distribution_summary
 
-# Get repeat count method
 repeat_method <- params$repeat_count_method
 
-message("\nData loaded:")
-message("  Samples: ", length(unique(alignment_clustered$file_stem)))
-message("  Total reads: ", nrow(alignment_clustered))
+message("Data loaded:")
+message("  Samples: ",  length(unique(alignment_clustered$file_stem)))
+message("  Total reads: ", format(nrow(alignment_clustered), big.mark = ","))
 message("  Repeat method: ", repeat_method)
 message("  Modal peaks: ", nrow(modal_peaks))
 message("  Distribution summaries: ", nrow(distribution_summary))
@@ -89,9 +126,11 @@ message("  Distribution summaries: ", nrow(distribution_summary))
 
 ---
 
-# Prepare Data
+# Prepare data
 
-```{r prepare_data}
+Build summary metric points (modal, mean, median) for overlay on per-sample plots, controlled by `params$repeat_distribution_metrics`. Analysis range boundaries are extracted from Module 6 modal peaks.
+
+```{r prepare_data, echo=FALSE, message=FALSE}
 # alignment_clustered is already a single dataframe with all reads from all samples
 alignment_data <- alignment_clustered
 
@@ -176,11 +215,15 @@ message("  Metrics to display: ", paste(selected_metrics, collapse = ", "))
 
 ---
 
-# Repeat Histograms
+# Repeat histograms
 
-Histograms show the frequency distribution of repeat lengths with modal and mean markers.
+Frequency histograms of repeat lengths. All plots are saved to disk — none are printed inline as the number of samples × ranges makes inline display impractical.
 
-```{r setup_range_colors}
+**Full histograms** (`histograms_by_sample/full/`) — all reads for each sample across the full repeat length range, with no range window overlay.
+
+**Per-range histograms** (`histograms_by_sample/{range}/`) — reads filtered to each analysis range, with a shaded yellow range window. Metric overlays (modal, mean, median) shown as coloured points: red = modal, blue = mean, purple = median.
+
+```{r setup_range_colors, echo=FALSE, message=FALSE}
 # Define consistent colors for analysis ranges
 range_names <- unique(analysis_ranges$analysis_range_name)
 range_colors <- setNames(
@@ -189,292 +232,496 @@ range_colors <- setNames(
 )
 ```
 
-## Histograms by Sample
+```{r t_hist_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
 
-```{r histograms_by_sample, fig.width=10, fig.height=6}
+```{r histograms_by_sample, echo=FALSE, message=FALSE}
 if (params$repeat_histogram) {
-  
-  # Create directory
+
   hist_by_sample_dir <- file.path(plots_dir, "histograms_by_sample")
-  if (!dir.exists(hist_by_sample_dir)) {
-    dir.create(hist_by_sample_dir, recursive = TRUE)
+  # Consistent metric colour/shape convention (used by per-range histograms and scatters)
+  metric_colors <- c("modal" = "red",     "mean" = "#4393C3", "median" = "purple")
+  metric_shapes <- c("modal" = 16,        "mean" = 17,        "median" = 15)
+  metric_labels <- c("modal" = "Modal",   "mean" = "Mean",    "median" = "Median")
+
+  add_metric_points_hist <- function(p, pts) {
+    # pts: data frame with columns x, y, name
+    # Colour only (no shape distinction) — consistent with scatter convention
+    if (is.null(pts) || nrow(pts) == 0) return(p)
+    present <- unique(pts$name)
+    p +
+      geom_point(data = pts,
+                 aes(x = x, y = y, colour = name),
+                 shape = 16, size = 4, inherit.aes = FALSE) +
+      ggrepel::geom_text_repel(
+        data = pts,
+        aes(x = x, y = y,
+            label = as.character(round(x, 1)),
+            colour = name),
+        size = 3.5, inherit.aes = FALSE, show.legend = FALSE) +
+      scale_colour_manual(values = metric_colors[present],
+                          labels = metric_labels[present],
+                          name = "Metric")
   }
-  
+
+  # Per-range scatter metric helper — colour only, numeric labels
+  add_metric_points_scatter <- function(p, pts) {
+    if (is.null(pts) || nrow(pts) == 0) return(p)
+    present <- unique(pts$name)
+    p +
+      ggnewscale::new_scale_colour() +
+      geom_point(data = pts,
+                 aes(x = x, y = 1, colour = name),
+                 shape = 16, size = 3, inherit.aes = FALSE) +
+      ggrepel::geom_text_repel(
+        data = pts,
+        aes(x = x, y = 1,
+            label = as.character(round(x, 1)),
+            colour = name),
+        size = 3.5, inherit.aes = FALSE, show.legend = FALSE,
+        direction = "y", nudge_y = 0.2) +
+      scale_colour_manual(values = metric_colors[present],
+                          labels = metric_labels[present],
+                          name = "Metric")
+  }
+
+  # Dense x-axis breaks helper
+  dense_x <- scale_x_continuous(breaks = scales::pretty_breaks(n = 15))
+
+
+
+  # Empty single-colour box for per-range plots (grey, no range colour)
+  grey_box_color <- c(grey = "grey70")
+
   for (my_sample in unique(alignment_clustered$file_stem)) {
-    
-    # Get all data for this sample (full range)
+
     sample_data_full <- alignment_clustered %>%
       filter(file_stem == my_sample)
-    
     if (nrow(sample_data_full) == 0) next
-    
-    # Get range boxes for this specific sample
-    sample_boxes <- range_boxes %>%
-      filter(file_stem == my_sample) %>%
-      distinct(name, xmin, xmax)
-    
-    # Get points for this sample (all selected metrics already in summary_points)
+
     sample_points <- summary_points %>%
       filter(file_stem == my_sample)
-    
-    # 1. Create full range histogram (all data)
+
+    # ── 1. Full-range histogram: no range boxes, save to full/ ────────────────
+    full_dir <- file.path(hist_by_sample_dir, "full")
+    if (!dir.exists(full_dir)) dir.create(full_dir, recursive = TRUE)
+
     p_full <- plot_frequency_histogram(
-      data = sample_data_full,
-      repeat_col = repeat_method,
-      binwidth = params$repeat_histogram_binwidth,
-      manual_points = sample_points,
-      manual_boxes = sample_boxes,
-      range_colors = range_colors,
-      title = paste0("Repeat Distribution - ", my_sample, " (Full Range)"),
+      data          = sample_data_full,
+      repeat_col    = repeat_method,
+      binwidth      = params$repeat_histogram_binwidth,
+      manual_points = NULL,          # Too many overlapping points on full plot
+      manual_boxes  = NULL,          # No range windows on full plot
+      range_colors  = NULL,
+      title         = my_sample,
       base_text_size = 14
     )
-    
-    # Don't print to HTML (would make file huge with many samples)
-    # Just save to file
-    
-    ggsave(file.path(hist_by_sample_dir, 
-                    paste0(my_sample, "-histogram-full.png")),
-           p_full, width = 10, height = 6, dpi = 300)
-    
-    # 2. Create per-range histograms (only for ranges this sample has)
+
+    p_full <- p_full + dense_x +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    ggsave(file.path(full_dir, paste0(my_sample, "-histogram-full.png")),
+           p_full, width = 10, height = 6, dpi = params$plot_dpi)
+
+    # ── 2. Per-range histograms: grey box, save to {range}/ ──────────────────
     sample_ranges <- analysis_ranges %>%
       filter(file_stem == my_sample) %>%
       pull(analysis_range_name) %>%
       unique()
-    
+
     for (my_range in sample_ranges) {
-      
-      # Get range boundaries for this sample and range
+
       range_info <- analysis_ranges %>%
         filter(file_stem == my_sample, analysis_range_name == my_range)
-      
       if (nrow(range_info) == 0) next
-      
+
       range_min <- range_info$range_min[1]
       range_max <- range_info$range_max[1]
-      
-      # Get data for this sample in this range
-      # Filter by REPEAT LENGTH, not by pre-assigned column
+
       sample_range_data <- alignment_data %>%
         filter(
           file_stem == my_sample,
           .data[[repeat_method]] >= range_min,
           .data[[repeat_method]] <= range_max
         )
-      
       if (nrow(sample_range_data) == 0) next
-      
-      # Get range box for this specific range and sample
-      range_box <- range_boxes %>%
-        filter(file_stem == my_sample, name == my_range) %>%
-        distinct(name, xmin, xmax)
-      
-      # Get points for this sample and range
-      # These come from Module 6 and already have analysis_range_name
+
       range_points <- sample_points %>%
         filter(range == my_range)
-      
-      # Create range-specific histogram
-      p_range <- plot_frequency_histogram(
-        data = sample_range_data,
-        repeat_col = repeat_method,
-        binwidth = params$repeat_histogram_binwidth,
-        manual_points = range_points,
-        manual_boxes = range_box,
-        range_colors = range_colors,
-        title = paste0("Repeat Distribution - ", my_sample, " - ", my_range),
-        base_text_size = 14
+
+      # Box named with range name so legend is correct
+      grey_range_box <- data.frame(
+        name = my_range, xmin = range_min, xmax = range_max
       )
-      
-      # Don't print to HTML (would make file huge)
-      # Just save to file
-      
-      ggsave(file.path(hist_by_sample_dir, 
-                      paste0(my_sample, "-histogram-", my_range, ".png")),
-             p_range, width = 10, height = 6, dpi = 300)
+      grey_named <- setNames("#D6EAF8", my_range)  # subtle blue tint
+
+      # Pass manual_points = NULL; add with consistent metric colours below
+      p_range <- plot_frequency_histogram(
+        data          = sample_range_data,
+        repeat_col    = repeat_method,
+        binwidth      = params$repeat_histogram_binwidth,
+        manual_points = NULL,
+        manual_boxes  = grey_range_box,
+        range_colors  = grey_named,
+        title         = my_sample,
+        base_text_size = 14
+      ) +
+        labs(subtitle = my_range) +
+        # Shaded range window (added after function to control visibility)
+        annotate("rect", xmin = range_min, xmax = range_max,
+                 ymin = 0, ymax = Inf,
+                 fill = "#FFD700", colour = NA, alpha = 0.1) +
+        dense_x +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+      # Add metric points with consistent red/blue/purple colours
+      p_range <- add_metric_points_hist(p_range, range_points)
+      # Sentence case axis and legend titles (override function defaults)
+      p_range <- p_range +
+        labs(fill = "Analysis range", x = "Repeat length", y = "Number of reads")
+
+      range_dir <- file.path(hist_by_sample_dir, my_range)
+      if (!dir.exists(range_dir)) dir.create(range_dir, recursive = TRUE)
+
+      ggsave(file.path(range_dir, paste0(my_sample, "-histogram-", my_range, ".png")),
+             p_range, width = 10, height = 6, dpi = params$plot_dpi)
     }
   }
-  
-  message("Histograms by sample created: ", hist_by_sample_dir)
-  message("  - Full range histograms: {sample}-histogram-full.png")
-  message("  - Per-range histograms: {sample}-histogram-{range}.png")
+
+  message("Histograms saved:")
+  message("  Full:      histograms_by_sample/full/{sample}-histogram-full.png")
+  message("  Per-range: histograms_by_sample/{range}/{sample}-histogram-{range}.png")
 }
+```
+
+```{r t_hist_end, echo=FALSE}
+timings["Histograms"] <- proc.time()["elapsed"] - .t
 ```
 
 ---
 
-# Repeat Scatter/Violin Plots
+# Repeat scatter plots
 
-Scatter plots show individual reads as points with violin overlay showing distribution shape.
+## Cohort repeat length summary
 
-## Combined Vertical Scatter
+Box+jitter plot showing modal repeat length per analysis range — one point per sample. Scales to hundreds of samples. This complements Module 6 plot 03 (modal peaks by range) and is included here for convenience within the visualisation module.
 
-```{r scatter_vertical_combined, fig.width=14, fig.height=10}
+```{r t_scatter_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r cohort_repeat_summary, echo=FALSE, message=FALSE, fig.width=12, fig.height=6}
 if (params$repeat_scatter) {
-  
-  # Use summary_points which already has the selected metrics
-  # Reshape for scatter plot (needs repeat_method column name)
-  combined_points <- summary_points %>%
-    rename(!!sym(repeat_method) := x)
-  
-  # Create plot
-  p_scatter_combined <- plot_scatter_vertical(
-    data = alignment_data,
-    x_var = "file_stem",
-    y_var = repeat_method,
-    points = combined_points,
-    title = "Repeat Length Distribution - All Samples",
-    base_text_size = 14
-  )
-  
-  print(p_scatter_combined)
-  
-  ggsave(file.path(plots_dir, "scatter.png"),
-         p_scatter_combined, width = 14, height = 8, dpi = 300)
-  
-  message("\nCombined scatter plot created")
+
+  # Use distribution_summary from Module 6 — one row per sample × range
+  # Shows modal (primary peak) repeat length per range
+  cohort_data <- distribution_summary %>%
+    select(file_stem, analysis_range_name, modal_length, mean_length) %>%
+    filter(!is.na(modal_length))
+
+  p_cohort <- ggplot(cohort_data,
+                     aes(x = analysis_range_name, y = modal_length)) +
+    geom_boxplot(outlier.shape = NA, fill = "grey90", colour = "grey50",
+                 width = 0.6) +
+    geom_jitter(colour = "grey40", width = 0.2, height = 0,
+                alpha = 0.7, size = 2) +
+    stat_summary(fun = mean, geom = "point", shape = 18, size = 4,
+                 colour = "red", alpha = 0.6) +
+    labs(title = "Cohort repeat length summary by analysis range",
+         subtitle = "Modal repeat length per sample per range. Box = IQR; points = samples; red diamond = mean.",
+         x = "Analysis range",
+         y = "Modal repeat length") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  print(p_cohort)
+
+  ggsave(file.path(plots_dir, "cohort_repeat_summary.png"),
+         p_cohort, width = 12, height = 6, dpi = params$plot_dpi)
+
+  message("Cohort repeat length summary saved: cohort_repeat_summary.png")
 }
 ```
 
-## Scatter Plots by Analysis Range
+## Horizontal scatter by sample
 
-```{r scatter_by_range, fig.width=12, fig.height=10}
+Horizontal scatter/violin plots for each sample. All plots saved to disk.
+
+**Full scatter** (`scatter_by_sample/full/`) — all reads with a steelblue violin overlay, no range window.
+
+**Per-range scatter** (`scatter_by_sample/{range}/`) — reads filtered to each analysis range, with a shaded yellow range window and coloured metric overlays (red = modal, blue = mean, purple = median).
+
+```{r scatter_by_sample, echo=FALSE, message=FALSE}
 if (params$repeat_scatter) {
-  
-  # Create directory
-  scatter_by_range_dir <- file.path(plots_dir, "scatter_by_range")
-  if (!dir.exists(scatter_by_range_dir)) {
-    dir.create(scatter_by_range_dir, recursive = TRUE)
-  }
-  
-  for (my_range in unique(analysis_ranges$analysis_range_name)) {
-    
-    # Get range boundaries for this range
-    range_info <- analysis_ranges %>%
-      filter(analysis_range_name == my_range) %>%
-      slice(1)  # Take first row if multiple samples have same range name
-    
-    if (nrow(range_info) == 0) next
-    
-    range_min <- range_info$range_min[1]
-    range_max <- range_info$range_max[1]
-    
-    # Filter data by REPEAT LENGTH
-    range_data <- alignment_data %>%
-      filter(
-        .data[[repeat_method]] >= range_min,
-        .data[[repeat_method]] <= range_max
-      )
-    
-    if (nrow(range_data) == 0) next
-    
-    # Get points for this range
-    # These come from Module 6 and already have analysis_range_name
-    range_points <- summary_points %>%
-      filter(range == my_range) %>%
-      rename(!!sym(repeat_method) := x)
-    
-    # Create plot
-    p_range_scatter <- plot_scatter_vertical(
-      data = range_data,
-      x_var = "file_stem",
-      y_var = repeat_method,
-      points = range_points,
-      title = paste0("Repeat Distribution - ", my_range),
-      base_text_size = 14
-    )
-    
-    print(p_range_scatter)
-    
-    ggsave(file.path(scatter_by_range_dir,
-                    paste0("scatter-", my_range, ".png")),
-           p_range_scatter, width = 12, height = 6, dpi = 300)
-  }
-  
-  message("Scatter plots by range created: ", scatter_by_range_dir)
-}
-```
 
-## Horizontal Scatter by Sample
-
-```{r scatter_by_sample, fig.width=12, fig.height=4}
-if (params$repeat_scatter) {
-  
-  # Create directory
   scatter_by_sample_dir <- file.path(plots_dir, "scatter_by_sample")
-  if (!dir.exists(scatter_by_sample_dir)) {
-    dir.create(scatter_by_sample_dir, recursive = TRUE)
-  }
-  
+  grey_box_color <- c(grey = "grey70")  # kept for full scatter (no box used)
+
+  # Dense x-axis for scatter
+  dense_x_scatter <- scale_x_continuous(breaks = scales::pretty_breaks(n = 15),
+                                        guide = guide_axis(angle = 45))
+
+  # Transparent violin overlay on top of points (outline only)
+  violin_overlay <- geom_violin(trim = TRUE, scale = "width",
+                                fill = "steelblue", colour = "steelblue4",
+                                alpha = 0.3, linewidth = 0.8)
+
   for (my_sample in unique(alignment_data$file_stem)) {
-    
-    # Filter data
+
     sample_data <- alignment_data %>%
       filter(file_stem == my_sample)
-    
     if (nrow(sample_data) == 0) next
-    
-    # Get range boxes for this specific sample
-    sample_boxes <- range_boxes %>%
-      filter(file_stem == my_sample) %>%
-      distinct(name, xmin, xmax)
-    
-    # Get points for this sample (already filtered in summary_points)
+
     sample_points <- summary_points %>%
       filter(file_stem == my_sample)
-    
-    # Create plot
-    p_sample_scatter <- plot_scatter_horizontal(
-      data = sample_data,
-      x_var = repeat_method,
-      points = sample_points,
-      boxes = sample_boxes,
-      range_colors = range_colors,
-      title = paste0("Repeat Distribution - ", my_sample),
+
+    # ── 1. Full scatter: no range windows ─────────────────────────────────────
+    full_dir <- file.path(scatter_by_sample_dir, "full")
+    if (!dir.exists(full_dir)) dir.create(full_dir, recursive = TRUE)
+
+    p_full <- plot_scatter_horizontal(
+      data       = sample_data,
+      x_var      = repeat_method,
+      points     = NULL,         # Too many overlapping points on full plot
+      boxes      = NULL,
+      range_colors = NULL,
+      title      = my_sample,
       base_text_size = 14
-    )
-    
-    # Don't print to HTML (would make file huge with many samples)
-    # Just save to file
-    
-    ggsave(file.path(scatter_by_sample_dir,
-                    paste0(my_sample, "-scatter.png")),
-           p_sample_scatter, width = 12, height = 4, dpi = 300)
+    ) +
+      violin_overlay +
+      dense_x_scatter
+
+    ggsave(file.path(full_dir, paste0(my_sample, "-scatter.png")),
+           p_full, width = 12, height = 4, dpi = params$plot_dpi)
+
+    # ── 2. Per-range scatter: grey box, range in subtitle ─────────────────────
+    sample_ranges <- analysis_ranges %>%
+      filter(file_stem == my_sample) %>%
+      pull(analysis_range_name) %>%
+      unique()
+
+    for (my_range in sample_ranges) {
+
+      range_info <- analysis_ranges %>%
+        filter(file_stem == my_sample, analysis_range_name == my_range)
+      if (nrow(range_info) == 0) next
+
+      range_min <- range_info$range_min[1]
+      range_max <- range_info$range_max[1]
+
+      sample_range_data <- alignment_data %>%
+        filter(
+          file_stem == my_sample,
+          .data[[repeat_method]] >= range_min,
+          .data[[repeat_method]] <= range_max
+        )
+      if (nrow(sample_range_data) == 0) next
+
+      range_points <- sample_points %>%
+        filter(range == my_range)
+
+      # Name box with range name so legend shows correctly
+      grey_range_box <- data.frame(
+        name = my_range, xmin = range_min, xmax = range_max
+      )
+      grey_named_scatter <- setNames("#D6EAF8", my_range)  # subtle blue tint
+
+      p_range <- plot_scatter_horizontal(
+        data       = sample_range_data,
+        x_var      = repeat_method,
+        points     = NULL,           # Added manually below for numeric labels
+        boxes      = grey_range_box,
+        range_colors = grey_named_scatter,
+        title      = my_sample,
+        base_text_size = 14
+      ) +
+        labs(subtitle = my_range,
+             fill = "Analysis range", x = "Repeat length") +
+        # Shaded range window
+        annotate("rect", xmin = range_min, xmax = range_max,
+                 ymin = -Inf, ymax = Inf,
+                 fill = "#FFD700", colour = NA, alpha = 0.1) +
+        violin_overlay +
+        dense_x_scatter
+
+      # Add metric points with numeric-only labels
+      p_range <- add_metric_points_scatter(p_range, range_points)
+
+      range_dir <- file.path(scatter_by_sample_dir, my_range)
+      if (!dir.exists(range_dir)) dir.create(range_dir, recursive = TRUE)
+
+      ggsave(file.path(range_dir, paste0(my_sample, "-scatter-", my_range, ".png")),
+             p_range, width = 12, height = 4, dpi = params$plot_dpi)
+    }
   }
-  
-  message("Scatter plots by sample created: ", scatter_by_sample_dir)
+
+  message("Scatter by sample saved:")
+  message("  Full:      scatter_by_sample/full/{sample}-scatter.png")
+  message("  Per-range: scatter_by_sample/{range}/{sample}-scatter-{range}.png")
 }
+```
+
+```{r t_scatter_end, echo=FALSE}
+timings["Scatter plots"] <- proc.time()["elapsed"] - .t
 ```
 
 ---
 
-# Summary
+# Density plots by sample
 
-```{r summary}
-message("\n=== Module 7 Complete ===")
-message("Plots saved to: ", plots_dir)
+ggridges density plots per sample. All plots saved to disk.
 
-if (params$repeat_histogram) {
-  message("\nHistogram plots:")
-  message("  - By sample: histograms_by_sample/")
-  message("    - Full range: {sample}-histogram-full.png")
-  message("    - Per range: {sample}-histogram-{range}.png")
-}
+**Full density** (`density_by_sample/full/`) — a single density ridge of all reads for each sample, regardless of analysis ranges. Useful for seeing the overall repeat length distribution shape.
 
+**Ranges density** (`density_by_sample/ranges/`) — one ridge per analysis range for each sample, showing how the distribution shape differs across ranges. Reads are filtered to each range window; ranges may overlap so some reads appear in multiple ridges.
+
+```{r t_density_start, echo=FALSE}
+.t <- proc.time()["elapsed"]
+```
+
+```{r density_by_sample, echo=FALSE, message=FALSE}
 if (params$repeat_scatter) {
-  message("\nScatter plots:")
-  message("  - Combined: scatter.png")
-  message("  - By range: scatter_by_range/{range}-scatter.png")
-  message("  - By sample: scatter_by_sample/{sample}-scatter.png")
-}
 
-cat("\n")
+  density_by_sample_dir <- file.path(plots_dir, "density_by_sample")
+
+  # Use same range_colors defined in setup_range_colors chunk
+  # for ridge fills consistent with Module 6 style
+
+  for (my_sample in unique(alignment_data$file_stem)) {
+
+    sample_data_full <- alignment_data %>%
+      filter(file_stem == my_sample)
+    if (nrow(sample_data_full) == 0) next
+
+    sample_ranges <- analysis_ranges %>%
+      filter(file_stem == my_sample) %>%
+      pull(analysis_range_name) %>%
+      unique()
+
+    # ── 1. Full density: ALL reads for this sample, single ridge ─────────────
+    full_dir <- file.path(density_by_sample_dir, "full")
+    if (!dir.exists(full_dir)) dir.create(full_dir, recursive = TRUE)
+
+    # Add group for fill colouring (matching Module 6 format)
+    sample_group <- distribution_summary %>%
+      filter(file_stem == my_sample) %>%
+      pull(group) %>%
+      unique() %>%
+      .[1]
+
+    p_density_full <- ggplot(sample_data_full,
+                             aes(x = .data[[repeat_method]], y = "")) +
+      geom_density_ridges(fill = "steelblue", colour = "black",
+                          alpha = 0.7, scale = 1.2, rel_min_height = 0.01,
+                          jittered_points = TRUE,
+                          position = position_points_jitter(width = 0.5, height = 0.1),
+                          point_shape = 16, point_size = 0.2,
+                          point_alpha = 0.2, point_colour = "black") +
+      scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+      coord_cartesian(xlim = c(0, NA)) +
+      labs(title    = my_sample,
+           subtitle = "Repeat length density — all reads",
+           x = "Repeat length",
+           y = NULL) +
+      theme_bw() +
+      theme(axis.text.x  = element_text(angle = 45, hjust = 1),
+            axis.text.y  = element_blank(),
+            axis.ticks.y = element_blank())
+
+    ggsave(file.path(full_dir, paste0(my_sample, "-density-full.png")),
+           p_density_full, width = 12, height = 4, dpi = params$plot_dpi)
+
+    # ── 2. Ranges density: one ridge per analysis range, coloured by range ────
+    # Build tall dataset — each read tagged with every range it falls in
+    density_ranges_data <- lapply(sample_ranges, function(rng) {
+      ri <- analysis_ranges %>%
+        filter(file_stem == my_sample, analysis_range_name == rng)
+      if (nrow(ri) == 0) return(NULL)
+      sample_data_full %>%
+        filter(.data[[repeat_method]] >= ri$range_min[1],
+               .data[[repeat_method]] <= ri$range_max[1]) %>%
+        mutate(analysis_range_name = rng)
+    }) %>%
+      bind_rows() %>%
+      mutate(analysis_range_name = factor(analysis_range_name,
+                                          levels = rev(sort(unique(analysis_range_name)))))
+
+    if (nrow(density_ranges_data) > 0) {
+      n_ranges_sample <- length(sample_ranges)
+
+      p_density_ranges <- ggplot(density_ranges_data,
+                                 aes(x = .data[[repeat_method]],
+                                     y = analysis_range_name)) +
+        geom_density_ridges(fill = "steelblue", colour = "black",
+                            alpha = 0.7, scale = 1.5, rel_min_height = 0.01,
+                            jittered_points = TRUE,
+                            position = position_points_jitter(width = 0.5, height = 0.1),
+                            point_shape = 16, point_size = 0.2,
+                            point_alpha = 0.2, point_colour = "black") +
+        scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
+        labs(title    = my_sample,
+             subtitle = "Repeat length density by analysis range",
+             x = "Repeat length",
+             y = "Analysis range") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+      ranges_dir <- file.path(density_by_sample_dir, "ranges")
+      if (!dir.exists(ranges_dir)) dir.create(ranges_dir, recursive = TRUE)
+
+      ggsave(file.path(ranges_dir, paste0(my_sample, "-density-ranges.png")),
+             p_density_ranges,
+             width  = 12,
+             height = max(5, n_ranges_sample * 0.6 + 2),
+             dpi = params$plot_dpi)
+    }
+  }
+
+  message("Density plots by sample saved:")
+  message("  Full:   density_by_sample/full/{sample}-density-full.png")
+  message("  Ranges: density_by_sample/ranges/{sample}-density-ranges.png")
+}
+```
+
+```{r t_density_end, echo=FALSE}
+timings["Density plots"] <- proc.time()["elapsed"] - .t
 ```
 
 ---
 
-# Session Info
+# Module diagnostics
 
-```{r session_info}
+## Timing
+
+```{r timing_table, echo=FALSE}
+timing_df <- build_timing_table(timings)
+DT::datatable(
+  timing_df,
+  caption = "Section timing — Module 7",
+  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
+  rownames = FALSE,
+  class = 'cell-border stripe compact',
+  colnames = c("Section", "Seconds", "Elapsed (mm:ss)", "Cumulative (mm:ss)")
+) %>%
+  DT::formatStyle("section", target = "row",
+                  fontWeight = DT::styleEqual("Total", "bold"))
+```
+
+```{r diagnostics_export, echo=FALSE}
+vis_excel_path <- file.path(params$dir_out, "07_repeat_visualisation", "repeat_visualisation.xlsx")
+dir.create(dirname(vis_excel_path), showWarnings = FALSE, recursive = TRUE)
+write_excel_function(
+  named_list = list("timing" = timing_df),
+  path = vis_excel_path,
+  overwrite_sheet = TRUE
+)
+message(sprintf("Module 7 complete — total time: %s", format_elapsed(sum(timings))))
+```
+
+---
+
+# Session info
+
+```{r session_info, echo=FALSE}
 sessionInfo()
 ```
