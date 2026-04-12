@@ -36,7 +36,7 @@ cd ~/Scratch/bin/duke
 
 # ==============================================================================
 # EDIT PATHS BELOW
-# Note: keep --threads matching --ntasks above
+# Note: --threads is set automatically from $SLURM_NTASKS
 # ==============================================================================
 
 ./duke \
@@ -45,7 +45,7 @@ cd ~/Scratch/bin/duke
   --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
   --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
-  --threads 80 \
+  --threads $SLURM_NTASKS \
   --resume TRUE \
   --remove_intermediate TRUE \
   --remove_temp FALSE

@@ -12,7 +12,7 @@
 
 # ==============================================================================
 # Duke Pipeline - Old Kathleen Job Script
-# Config: 160 cores requested, 80 threads used (2G/core = 320GB total)
+# Config: 160 cores requested, 80 used (2G/core = 320GB total); threads set automatically from $NSLOTS
 # See README.md for resource guidance and Kathleen-specific notes
 # ==============================================================================
 
@@ -40,7 +40,7 @@ echo ""
   --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
   --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
-  --threads 80 \
+  --threads $NSLOTS \
   --resume TRUE \
   --remove_intermediate TRUE \
   --remove_temp FALSE

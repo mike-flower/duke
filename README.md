@@ -643,7 +643,7 @@ Both tables are appended to each module's Excel file as `timing` and `manifest` 
 
 ### Job submission
 
-Edit the paths in the job script, then submit:
+Edit the data/output paths in the job script, then submit. The `--threads` parameter is set automatically from `$NSLOTS` (SGE) or `$SLURM_NTASKS` (Slurm) — you only need to change the core count in the scheduler header line.
 
 #### Myriad (SGE)
 ```bash
@@ -711,7 +711,7 @@ tail -f logs/duke_*.out
 
 With Duke:
 ```bash
-./duke --threads 12 ...
+./duke --threads $NSLOTS ...
 ```
 
 **Expected runtimes:**
@@ -751,7 +751,7 @@ With Duke:
 #$ -pe mpi 80
 #$ -l mem=4G
 #$ -l h_rt=48:00:00
-# --threads 80
+# --threads $NSLOTS  (set automatically from scheduler)
 ```
 
 **New Kathleen (Slurm):**
@@ -760,14 +760,14 @@ With Duke:
 #SBATCH --ntasks=80
 #SBATCH --mem-per-cpu=4G
 #SBATCH --time=48:00:00
-# --threads 80
+# --threads $NSLOTS  (set automatically from scheduler)
 ```
 
 **Memory workaround** (if 4 GB/core unavailable):
 ```bash
 #$ -pe mpi 160
 #$ -l mem=2G         # 320 GB total
-# --threads 80 (not 160)
+# --threads 80  (not 160 — override required for memory workaround)
 ```
 
 #### Resource summary
@@ -1012,7 +1012,7 @@ Insufficient memory. Use at least 4 GB/core, 8 GB recommended:
 # Request double cores, use half for processing
 #$ -pe mpi 160
 #$ -l mem=2G
-# --threads 80
+# --threads $NSLOTS  (set automatically from scheduler)
 ```
 
 **"Error: cannot open the connection" when running Rmd**
