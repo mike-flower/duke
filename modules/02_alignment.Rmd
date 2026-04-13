@@ -103,12 +103,7 @@ Load the trimmed sequences from Module 1.
 ```{r load_module1, echo=FALSE, results='asis'}
 # Load Module 1 results
 module1_path <- file.path(params$dir_out, "module_data", "01_import_qc_results.RData")
-
-if (!file.exists(module1_path)) {
-  stop("Module 1 results not found. Please run Module 1 first: ", module1_path)
-}
-
-load(module1_path)
+safe_load_module(module1_path, module_num = 1, envir = environment())
 
 # Extract sequences and metadata
 sequences <- module1_output$sequences
@@ -180,9 +175,8 @@ Align reads to left and right reference flanks separately using minimap2. This a
 # Check for cached alignments
 alignment_cache_path <- file.path(temp_dir, "02_alignments.RData")
 
-if (params$resume && file.exists(alignment_cache_path)) {
+if (params$resume && safe_load_cache(alignment_cache_path, environment())) {
   message("Loading cached alignments...")
-  load(alignment_cache_path)
   
   # Verify loaded data has proper names
   if (is.null(names(alignments))) {
@@ -322,9 +316,8 @@ alignment_info_merge <- alignment_info_merge %>%
 # Check for cached filtered alignments
 cache_file <- file.path(temp_dir, "02_alignment_filtered.RData")
 
-if (params$resume && file.exists(cache_file)) {
+if (params$resume && safe_load_cache(cache_file, environment())) {
   message("Loading cached filtered alignments from: ", cache_file)
-  load(cache_file)
 } else {
   # Apply filtering
   message("Filtering alignments for dual-flank reads...")
@@ -491,9 +484,8 @@ Reverse complement reads that aligned on the reverse strand (-) so that all read
 # Check for cached strand-corrected data
 strand_cache_path <- file.path(temp_dir, "02_strand_corrected.RData")
 
-if (params$resume && file.exists(strand_cache_path)) {
+if (params$resume && safe_load_cache(strand_cache_path, environment())) {
   message("Loading cached strand-corrected alignments...")
-  load(strand_cache_path)
 } else {
   message("Correcting strand orientation...")
   

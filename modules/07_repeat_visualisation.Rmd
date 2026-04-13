@@ -101,14 +101,12 @@ results_dir <- file.path(params$dir_out, "module_data")
 
 # Load Module 3 slim (repeat counts)
 module3_path <- file.path(results_dir, "03_repeat_detection_results.RData")
-if (!file.exists(module3_path)) stop("Module 3 output not found: ", module3_path)
-load(module3_path)
+safe_load_module(module3_path, module_num = 3, envir = environment())
 counts_slim <- module3_output$alignment_counts_slim
 
 # Load Module 4 slim (cluster assignments)
 module4_path <- file.path(results_dir, "04_allele_calling_results.RData")
-if (!file.exists(module4_path)) stop("Module 4 output not found: ", module4_path)
-load(module4_path)
+safe_load_module(module4_path, module_num = 4, envir = environment())
 clusters_slim <- module4_output$alignment_clustered_slim
 
 # Join: repeat counts + cluster assignments
@@ -117,8 +115,7 @@ alignment_clustered <- counts_slim %>%
 
 # Load Module 6 output (modal peaks and distribution summary)
 module6_path <- file.path(results_dir, "06_range_analysis_results.RData")
-if (!file.exists(module6_path)) stop("Module 6 output not found: ", module6_path)
-load(module6_path)
+safe_load_module(module6_path, module_num = 6, envir = environment())
 modal_peaks        <- module6_output$modal_peaks
 distribution_summary <- module6_output$distribution_summary
 

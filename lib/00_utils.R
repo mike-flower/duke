@@ -91,6 +91,68 @@ build_timing_table <- function(timings) {
   df
 }
 
+# ------------------------------------------------------------------------------
+# Safe cache loading utilities
+# ------------------------------------------------------------------------------
+
+# safe_load_cache: Load a temp/ cache file with automatic fallback on corruption.
+#   Returns TRUE if the file loaded successfully, FALSE if it was missing or
+#   corrupt (in which case the corrupt file is deleted so the caller recomputes).
+#   Call with envir = parent.env(environment()) so loaded objects are visible
+#   in the calling scope.
+#
+#   Usage pattern:
+#     if (params$resume && safe_load_cache(cache_path, environment())) {
+#       message("Loaded from cache")
+#     } else {
+#       # recompute ...
+#       save(result, file = cache_path)
+#     }
+safe_load_cache <- function(path, envir = parent.frame()) {
+  if (!file.exists(path)) return(FALSE)
+  if (file.size(path) == 0) {
+    warning("Cache file is empty (zero bytes), will recompute: ", basename(path))
+    file.remove(path)
+    return(FALSE)
+  }
+  tryCatch({
+    load(path, envir = envir)
+    TRUE
+  }, error = function(e) {
+    warning("Cache file is corrupt, will recompute: ", basename(path))
+    file.remove(path)
+    FALSE
+  })
+}
+
+# safe_load_module: Load a module_data/ RData file with a clear error message
+#   if the file is missing, empty, or corrupt. These files cannot be recovered
+#   within the current module — the user must delete the file and rerun the
+#   source module.
+#
+#   Usage:
+#     safe_load_module(module3_path, module_num = 3, envir = environment())
+safe_load_module <- function(path, module_num, envir = parent.frame()) {
+  if (!file.exists(path)) {
+    stop("Module ", module_num, " output not found. Has Module ", module_num,
+         " been run?\n  Expected: ", path)
+  }
+  if (file.size(path) == 0) {
+    stop("Module ", module_num, " output is empty (zero bytes) — the previous run",
+         " was likely interrupted during save.\n",
+         "  Delete and rerun Module ", module_num, ":\n  ", path)
+  }
+  tryCatch(
+    load(path, envir = envir),
+    error = function(e) {
+      stop("Module ", module_num, " output is corrupt — the previous run was",
+           " likely interrupted during save.\n",
+           "  Delete and rerun Module ", module_num, ":\n  ", path, "\n",
+           "  Original error: ", e$message)
+    }
+  )
+}
+
 # Extract result
 extract_apply_fn_result <- function(result) {
   if ("value" %in% names(result)) {

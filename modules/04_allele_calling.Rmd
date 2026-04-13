@@ -103,22 +103,14 @@ dir.create(variants_dir, showWarnings = FALSE, recursive = TRUE)
 ```{r load_data, echo=FALSE, results='asis'}
 # Load Module 2 results (alignment_split with sequences)
 module2_path <- file.path(results_dir, "02_alignment_results.RData")
-if (!file.exists(module2_path)) {
-  stop("Module 2 output not found: ", module2_path,
-       "\nPlease run Module 2 first!")
-}
-load(module2_path)
+safe_load_module(module2_path, module_num = 2, envir = environment())
 alignment_split <- module2_output$alignment_split
 message("Loaded ", format(nrow(alignment_split), big.mark = ","),
         " reads from Module 2 (alignment_split)")
 
 # Load Module 3 results (slim repeat counts)
 module3_path <- file.path(results_dir, "03_repeat_detection_results.RData")
-if (!file.exists(module3_path)) {
-  stop("Module 3 output not found: ", module3_path,
-       "\nPlease run Module 3 first!")
-}
-load(module3_path)
+safe_load_module(module3_path, module_num = 3, envir = environment())
 counts_slim <- module3_output$alignment_counts_slim
 message("Loaded ", format(nrow(counts_slim), big.mark = ","),
         " rows from Module 3 (alignment_counts_slim)")
@@ -176,11 +168,10 @@ Assign reads to clusters (alleles) using the strategy: **`r params$cluster_by`**
 # Check resume
 cache_path <- file.path(temp_dir, "04_clustering.RData")
 
-if (file.exists(cache_path) && params$resume) {
+if (params$resume && safe_load_cache(cache_path, environment())) {
   message("Loading cached clustering results...")
-  load(cache_path)
   message("Clustering loaded from cache")
-  
+
 } else {
   
   if (params$cluster) {
@@ -205,8 +196,7 @@ if (file.exists(cache_path) && params$resume) {
       
       # Check for cached result
       sample_cache_file <- file.path(temp_dir, paste0("cluster_", sample_name, ".RData"))
-      if (params$resume && file.exists(sample_cache_file)) {
-        load(sample_cache_file)  # Loads 'sample_clustered'
+      if (params$resume && safe_load_cache(sample_cache_file, environment())) {
         return(sample_clustered)
       }
       
@@ -676,11 +666,10 @@ on.exit(options(verbose = old_verbose))
 # Check resume
 consensus_cache_path <- file.path(temp_dir, "04_consensus.RData")
 
-if (file.exists(consensus_cache_path) && params$resume) {
+if (params$resume && safe_load_cache(consensus_cache_path, environment())) {
   message("Loading cached consensus results...")
-  load(consensus_cache_path)
   message("Consensus sequences loaded from cache")
-  
+
 } else {
   
   if (params$cluster_consensus) {
@@ -713,10 +702,9 @@ if (file.exists(consensus_cache_path) && params$resume) {
       cluster_num <- cluster_data$cluster_number[1]
       
       # Check for cached result
-      cluster_cache_file <- file.path(temp_dir, 
+      cluster_cache_file <- file.path(temp_dir,
                                       paste0("consensus_", sample_name, "_cluster", cluster_num, ".RData"))
-      if (params$resume && file.exists(cluster_cache_file)) {
-        load(cluster_cache_file)  # Loads 'cluster_consensus'
+      if (params$resume && safe_load_cache(cluster_cache_file, environment())) {
         return(cluster_consensus)
       }
       
@@ -949,11 +937,10 @@ Each cluster's **full consensus sequence** is aligned to the reference using glo
 # Cache variant calling results
 variant_cache_path <- file.path(temp_dir, "04_variants.RData")
 
-if (file.exists(variant_cache_path) && params$resume) {
+if (params$resume && safe_load_cache(variant_cache_path, environment())) {
   message("Loading cached variant calling results...")
-  load(variant_cache_path)
   message("Variant results loaded from cache")
-  
+
 } else {
   
   if (params$call_variants && exists("reference_seq") && !is.null(reference_seq) && 

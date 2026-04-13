@@ -100,12 +100,7 @@ This module identifies and counts repeat tracts in the mid sequence, performs fl
 ```{r load_results, echo=FALSE}
 # Load Module 2 results
 module2_path <- file.path(results_dir, "02_alignment_results.RData")
-
-if (!file.exists(module2_path)) {
-  stop("Module 2 results not found. Please run Module 2 first.")
-}
-
-load(module2_path)
+safe_load_module(module2_path, module_num = 2, envir = environment())
 
 # Extract alignment_split
 alignment_split <- module2_output$alignment_split
@@ -145,12 +140,11 @@ message("")
 # Check for cached alignment_counts (combined from all samples)
 alignment_counts_cache <- file.path(temp_dir, "03_alignment_counts.RData")
 
-if (params$resume && file.exists(alignment_counts_cache)) {
+if (params$resume && safe_load_cache(alignment_counts_cache, environment())) {
   message("✓ Loading cached alignment counts...")
-  load(alignment_counts_cache)  # Loads 'alignment_counts'
-  message("  Loaded ", format(nrow(alignment_counts), big.mark = ","), " reads from ", 
+  message("  Loaded ", format(nrow(alignment_counts), big.mark = ","), " reads from ",
           length(unique(alignment_counts$file_stem)), " samples")
-  
+
 } else {
   message("Processing all samples with full parallelisation...")
   

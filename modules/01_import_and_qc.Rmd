@@ -229,8 +229,8 @@ Some sequencing technologies may contain duplicate read names. This section iden
 if (params$check_duplicate_readnames) {
   # Find duplicate read names and select the longest
   my_path <- file.path(temp_dir, "01_unique_readname_result.RData")
-  if (file.exists(my_path) && params$resume) {
-    load(my_path)
+  if (params$resume && safe_load_cache(my_path, environment())) {
+    message("Loaded duplicate readname results from cache")
   } else {
     unique_readname_result <- apply_fn(seq, select_longest_duplicate_readname)
     unique_readname_result <- extract_apply_fn_result(unique_readname_result)
@@ -962,9 +962,8 @@ my_path <- file.path(temp_dir, "02_trim_result.RData")
 if (length(combined_trim_sequences) > 0) {
   # Trimming enabled - process adapters
   
-  if (file.exists(my_path) && params$resume) {
+  if (params$resume && safe_load_cache(my_path, environment())) {
     message("Loading cached trim results...")
-    load(my_path)
   } else {
     message("Trimming adapters from sequences...")
     
