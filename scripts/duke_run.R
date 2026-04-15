@@ -571,7 +571,7 @@ if (1 %in% params$run_modules) {
   cat("Module 1: Import and QC\n")
   cat("-----------------------------------------------------------------\n")
   
-  module1_output <- file.path(params$dir_out, "module_data", "01_import_qc_results.RData")
+  module1_output <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
   
   if (params$resume && file.exists(module1_output)) {
     cat("Skipping Module 1 (results found)...\n")
@@ -598,7 +598,7 @@ if (2 %in% params$run_modules) {
   cat("Module 2: Alignment and Processing\n")
   cat("-----------------------------------------------------------------\n")
   
-  module2_output <- file.path(params$dir_out, "module_data", "02_alignment_results.RData")
+  module2_output <- file.path(params$dir_out, "module_data", "02_alignment.RData")
   
   if (params$resume && file.exists(module2_output)) {
     cat("Skipping Module 2 (results found)...\n")
@@ -625,7 +625,7 @@ if (3 %in% params$run_modules) {
   cat("Module 3: Repeat Detection\n")
   cat("-----------------------------------------------------------------\n")
   
-  module3_output <- file.path(params$dir_out, "module_data", "03_repeat_detection_results.RData")
+  module3_output <- file.path(params$dir_out, "module_data", "03_repeat_detection.RData")
   
   if (params$resume && file.exists(module3_output)) {
     cat("Skipping Module 3 (results found)...\n")
@@ -652,7 +652,7 @@ if (4 %in% params$run_modules) {
   cat("Module 4: Allele Calling\n")
   cat("-----------------------------------------------------------------\n")
   
-  module4_output <- file.path(params$dir_out, "module_data", "04_allele_calling_results.RData")
+  module4_output <- file.path(params$dir_out, "module_data", "04_allele_calling.RData")
   
   if (params$resume && file.exists(module4_output)) {
     cat("Skipping Module 4 (results found)...\n")
@@ -705,7 +705,7 @@ if (6 %in% params$run_modules) {
   cat("Module 6: Range Analysis & Instability Metrics\n")
   cat("-----------------------------------------------------------------\n")
   
-  module6_output <- file.path(params$dir_out, "module_data", "06_range_analysis_results.RData")
+  module6_output <- file.path(params$dir_out, "module_data", "06_range_analysis.RData")
   
   if (params$resume && file.exists(module6_output)) {
     cat("Skipping Module 6 (results found)...\n")
@@ -777,7 +777,7 @@ if (exists("module7_output")) cat("  - ", module7_output, "\n")
 cat("\n")
 cat("Excel exports:\n")
 if (6 %in% params$run_modules) {
-  cat("  - ", file.path(params$dir_out, "06_range_analysis", "range_analysis_results.xlsx"), "\n")
+  cat("  - ", file.path(params$dir_out, "06_range_analysis", "range_analysis.xlsx"), "\n")
 }
 cat("\n")
 

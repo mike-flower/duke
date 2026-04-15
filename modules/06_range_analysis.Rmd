@@ -84,12 +84,12 @@ Analyses repeat length distributions within user-defined ranges and calculates i
 results_dir <- file.path(params$dir_out, "module_data")
 
 # Load Module 3 slim (repeat counts)
-module3_path <- file.path(results_dir, "03_repeat_detection_results.RData")
+module3_path <- file.path(results_dir, "03_repeat_detection.RData")
 safe_load_module(module3_path, module_num = 3, envir = environment())
 counts_slim <- module3_output$alignment_counts_slim
 
 # Load Module 4 slim (cluster assignments)
-module4_path <- file.path(results_dir, "04_allele_calling_results.RData")
+module4_path <- file.path(results_dir, "04_allele_calling.RData")
 safe_load_module(module4_path, module_num = 4, envir = environment())
 clusters_slim <- module4_output$alignment_clustered_slim
 
@@ -2158,7 +2158,7 @@ module6_output <- list(
 results_dir <- file.path(params$dir_out, "module_data")
 if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE)
 
-output_path <- file.path(results_dir, "06_range_analysis_results.RData")
+output_path <- file.path(results_dir, "06_range_analysis.RData")
 save(module6_output, file = output_path)
 
 message("Module 6 outputs saved to: ", output_path)

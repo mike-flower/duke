@@ -102,7 +102,7 @@ Load the trimmed sequences from Module 1.
 
 ```{r load_module1, echo=FALSE, results='asis'}
 # Load Module 1 results
-module1_path <- file.path(params$dir_out, "module_data", "01_import_qc_results.RData")
+module1_path <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
 safe_load_module(module1_path, module_num = 1, envir = environment())
 
 # Extract sequences and metadata
@@ -1272,7 +1272,7 @@ module2_output <- list(
 )
 
 # Save complete module output
-output_path <- file.path(results_dir, "02_alignment_results.RData")
+output_path <- file.path(results_dir, "02_alignment.RData")
 save(module2_output, file = output_path)
 
 message("Module 2 outputs saved to: ", output_path)

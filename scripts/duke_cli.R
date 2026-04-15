@@ -709,7 +709,7 @@ if (args$dry_run) {
       output <- file.path(params$dir_out, "module_data", 
                          paste0("0", mod, "_", c("import_qc", "alignment", "repeat_detection",
                                                   "allele_calling", "waterfall", "range_analysis",
-                                                  "repeat_visualisation")[mod], "_results.RData"))
+                                                  "repeat_visualisation")[mod], ".RData"))
       if (file.exists(output)) {
         status <- " [SKIP - results found]"
       } else {
@@ -757,10 +757,10 @@ tryCatch({
                  "modules/04_allele_calling.Rmd", "modules/05_waterfall.Rmd", "modules/06_range_analysis.Rmd",
                  "modules/07_repeat_visualisation.Rmd")
   
-  output_files <- c("01_import_qc_results.RData", "02_alignment_results.RData",
-                    "03_repeat_detection_results.RData", "04_allele_calling_results.RData",
+  output_files <- c("01_import_qc.RData", "02_alignment.RData",
+                    "03_repeat_detection.RData", "04_allele_calling.RData",
                     NA,                                  # Module 5 — plot-only, no resume check
-                    "06_range_analysis_results.RData",
+                    "06_range_analysis.RData",
                     NA)                                  # Module 7 — plot-only, no resume check
 
   # Only run selected modules

@@ -350,11 +350,11 @@ result_duke/
 ├── 07_repeat_visualisation.html
 │
 ├── module_data/                      # Cached RData files (for resume)
-│   ├── 01_import_qc_results.RData
-│   ├── 02_alignment_results.RData
-│   ├── 03_repeat_detection_results.RData
-│   ├── 04_allele_calling_results.RData
-│   └── 06_range_analysis_results.RData
+│   ├── 01_import_qc.RData
+│   ├── 02_alignment.RData
+│   ├── 03_repeat_detection.RData
+│   ├── 04_allele_calling.RData
+│   └── 06_range_analysis.RData
 │
 ├── 01_import_qc/
 │   ├── qc.xlsx                       # count_summary | trim_summary | timing | manifest
@@ -952,7 +952,7 @@ qsub scripts/duke_myriad.sh
 ./duke --run_modules 2,3,4,5,6,7 --path_manual_exclusions updated_exclusions.xlsx ...
 
 # Force re-run of a specific module by deleting its cached output
-rm result_duke/module_data/03_repeat_detection_results.RData
+rm result_duke/module_data/03_repeat_detection.RData
 ./duke --run_modules 3,4,5,6,7 ...
 ```
 

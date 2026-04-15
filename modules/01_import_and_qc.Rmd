@@ -1363,7 +1363,7 @@ results_dir <- file.path(params$dir_out, "module_data")
 if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE)
 
 # Save complete module output
-output_path <- file.path(results_dir, "01_import_qc_results.RData")
+output_path <- file.path(results_dir, "01_import_qc.RData")
 save(module1_output, file = output_path)
 ```
 

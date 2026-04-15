@@ -70,7 +70,7 @@ This module performs **clustering** to assign reads to distinct alleles, generat
 - Per-sample violin and scatter plots (`violin_by_sample/`, `scatter_by_sample/`)
 - Consensus sequences — Excel (`consensus.xlsx`) and FASTA (full, left, mid, right per cluster)
 - Variant calls — Excel (`variant.xlsx`), CSV, and VCF files (per sample and combined)
-- `04_allele_calling_results.RData` for downstream modules
+- `04_allele_calling.RData` for downstream modules
 
 **Key Parameters:**
 
@@ -102,14 +102,14 @@ dir.create(variants_dir, showWarnings = FALSE, recursive = TRUE)
 
 ```{r load_data, echo=FALSE, results='asis'}
 # Load Module 2 results (alignment_split with sequences)
-module2_path <- file.path(results_dir, "02_alignment_results.RData")
+module2_path <- file.path(results_dir, "02_alignment.RData")
 safe_load_module(module2_path, module_num = 2, envir = environment())
 alignment_split <- module2_output$alignment_split
 message("Loaded ", format(nrow(alignment_split), big.mark = ","),
         " reads from Module 2 (alignment_split)")
 
 # Load Module 3 results (slim repeat counts)
-module3_path <- file.path(results_dir, "03_repeat_detection_results.RData")
+module3_path <- file.path(results_dir, "03_repeat_detection.RData")
 safe_load_module(module3_path, module_num = 3, envir = environment())
 counts_slim <- module3_output$alignment_counts_slim
 message("Loaded ", format(nrow(counts_slim), big.mark = ","),
@@ -1457,7 +1457,7 @@ module4_output <- list(
 )
 
 # Save module output
-output_path <- file.path(results_dir, "04_allele_calling_results.RData")
+output_path <- file.path(results_dir, "04_allele_calling.RData")
 save(module4_output, file = output_path)
 message("Module 4 outputs saved to: ", output_path)
 
