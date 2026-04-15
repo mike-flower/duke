@@ -714,24 +714,37 @@ With Duke:
 ./duke --threads $NSLOTS ...
 ```
 
-**Expected runtimes:**
+**Run modes**
 
-| Samples | Runtime |
-|---------|---------|
-| ~100 | 8–10 h |
-| ~300 | ~10 h |
-| 300+ | 28–35 h |
+| Mode | Modules | Flags | When to use |
+|------|---------|-------|-------------|
+| Full | M1–M7 | `--trim TRUE --waterfall TRUE` (defaults) | First-pass analysis; when per-read waterfall inspection is needed for QC |
+| Slim | M1–M4, M6–M7 | `--trim FALSE --waterfall FALSE` | When adapters are absent or already stripped, and waterfall plots are not required; saves 5–30% runtime |
 
-**Benchmark results** (12 cores / 64 GB vs alternatives):
+In slim mode, Module 1 still runs in full but skips the adapter-trimming step. Module 5 (waterfall plots) is omitted entirely. All other modules and outputs are identical to a full run.
 
-| Dataset | Samples | 12c/64G | 6c/128G | 24c/32G |
-|---------|---------|---------|---------|---------|
-| jasmine | 102 | **8.1 h** | 8.9 h | 13.0 h |
-| pg | 298 | **9.4 h** | 19.9 h | 17.5 h |
-| fs | 310 | 28–34 h | **27.1 h** | Failed |
-| yas | 83 | 9.6 h | 15.1 h | **5.7 h** |
+**Benchmark results** (Myriad, 12 cores / 64 GB, v2.2.0):
 
-12 cores / 64 GB is optimal for most datasets. More RAM per core does not reliably improve performance. Too many cores with less memory can cause failures on large datasets.
+All timings are from complete fresh runs (all modules executed from scratch, no cached results re-used). v1.0 = January 2026; v2.2.0 = April 2026. "—" = configuration not run for that dataset. csf timings are approximate, derived from a concurrent multi-job log.
+
+| Dataset | Samples | Total reads | Reads / sample | v1.0 full | v2.2.0 full | v2.2.0 slim | Change (full) |
+|---------|--------:|------------:|---------------:|----------:|------------:|------------:|:-------------:|
+| jasmine | 102 | ~2.9 M | ~28 k | 8.1 h | — | — | — |
+| yas | 77 ¹ | 3.6 M | ~46 k | 9.6 h | 5.3 h | **5.0 h** | −45% |
+| jd | 131 | 4.4 M | ~34 k | — | 6.3 h | — | new dataset |
+| pg | 285 ¹ | 3.6 M | ~13 k | 9.4 h | 8.3 h | **5.9 h** | −12% |
+| csf | ~100 | ~4 M | ~40 k | — | ~17.5 h ² | ~3.9 h ² | new dataset |
+| fs | 310 | 10.6 M | ~34 k | 28–34 h | 27.6 h | — | ~same |
+
+¹ Sample count differs slightly from v1.0 due to QC exclusions applied between runs.  
+² Timing approximate; two jobs ran concurrently and shared a log file.
+
+**Key findings:**
+
+- **Total reads is the strongest runtime predictor.** Datasets under 5 M reads consistently finish in 5–9 h; the fs dataset at 10.6 M reads takes ~28 h regardless of pipeline version. Sample count is a secondary factor.
+- **v2.2.0 is materially faster for most datasets.** The yas dataset improved by 45%; pg by 12%. The fs dataset (highest read depth) showed no meaningful change, consistent with it being I/O- and read-throughput-bound rather than compute-bound.
+- **Slim mode offers significant savings for larger sample counts.** The pg dataset (285 samples) went from 8.3 h to 5.9 h (−29%) with `--trim FALSE --waterfall FALSE`. Savings are smaller for low sample counts (yas: 5.3 → 5.0 h, −5%).
+- **12 cores / 64 GB remains optimal.** More RAM per core does not improve performance for most datasets; more cores with less memory can cause failures on large datasets.
 
 **Configurations to avoid:**
 ```bash
@@ -743,6 +756,28 @@ With Duke:
 #$ -pe smp 24
 #$ -l mem=32G
 ```
+
+**Runtime estimation:**
+
+Use total reads (R, in millions) and sample count (N) to estimate v2.2.0 full-run time on Myriad at 12c / 64G:
+
+```
+Runtime_full (h)  ≈  8.94 − 2.68R + 0.377R² + 0.014N
+Runtime_slim (h)  ≈  Runtime_full × max(0.5,  1 − 0.001N)
+```
+
+Uncertainty is approximately ±25% within the calibrated range (N ≤ 310, R ≤ 10.6 M). For larger datasets, treat estimates as indicative only.
+
+**Quick reference:**
+
+| Total reads | ~100 samples | ~200 samples | ~300 samples |
+|-------------|:------------:|:------------:|:------------:|
+| 3–4 M | 5–6 h | 6–8 h | 7–9 h |
+| 5–7 M | 7–10 h | 9–12 h | 11–14 h |
+| 8–11 M | 15–22 h | 17–25 h | 20–28 h |
+| >11 M | 28–40 h | 30–42 h | 33–45 h |
+
+For `h_rt`, add a 20% safety margin: if you estimate 10 h, request 12 h.
 
 #### Kathleen
 
@@ -772,13 +807,17 @@ With Duke:
 
 #### Resource summary
 
-| Dataset size | Samples | Cluster | Cores | Memory/core | tmpfs | Runtime |
-|--------------|---------|---------|-------|-------------|-------|---------|
-| Small | <100 | Myriad | 12 | 64 GB | 500 GB | 8–10 h |
-| Medium | 100–300 | Myriad | 12 | 64 GB | 500 GB | 8–10 h |
-| Large | 300–500 | Myriad | 12 | 64 GB | 500 GB | 28–48 h |
-| Very large | 500–1000 | Kathleen | 80 | 4 GB | — | 16–24 h |
-| Massive | 1000+ | Kathleen | 80–160 | 4 GB | — | 24–48 h |
+Myriad runtimes are from v2.2.0 benchmarks (full mode, 12c / 64G). Slim mode (`--trim FALSE --waterfall FALSE`) reduces runtimes by ~5–30% depending on sample count. Kathleen runtimes are indicative estimates only — no benchmark data has been collected on Kathleen.
+
+| Dataset size | Samples | Cluster | Cores | Memory/core | tmpfs | Runtime (full) | Runtime (slim) |
+|--------------|--------:|---------|------:|------------:|------:|:--------------:|:--------------:|
+| Small | <100 | Myriad | 12 | 64 GB | 500 GB | 5–9 h | 4–8 h |
+| Medium | 100–300 | Myriad | 12 | 64 GB | 500 GB | 6–10 h | 5–8 h |
+| Large | 300–500 | Myriad | 12 | 64 GB | 500 GB | 15–35 h | 10–25 h |
+| Very large | 500–1000 | Kathleen | 80 | 4 GB | — | est. 16–24 h | — |
+| Massive | 1000+ | Kathleen | 80–160 | 4 GB | — | est. 24–48 h | — |
+
+> Runtime depends strongly on **total reads**, not sample count alone. Two datasets of 300 samples can differ by 3× in runtime if one has 3× the read depth. Use the estimation formula in the Myriad section above.
 
 ---
 
