@@ -716,16 +716,26 @@ With Duke:
 
 **Run modes**
 
-| Mode | Modules | Flags | When to use |
-|------|---------|-------|-------------|
-| Full | M1–M7 | `--trim TRUE --waterfall TRUE` (defaults) | First-pass analysis; when per-read waterfall inspection is needed for QC |
-| Slim | M1–M4, M6–M7 | `--trim FALSE --waterfall FALSE` | When adapters are absent or already stripped, and waterfall plots are not required; saves 5–30% runtime |
+Both modes run all seven modules (M1–M7). The difference is in what each module does:
 
-In slim mode, Module 1 still runs in full but skips the adapter-trimming step. Module 5 (waterfall plots) is omitted entirely. All other modules and outputs are identical to a full run.
+| Parameter | Full | Slim | Effect |
+|-----------|:----:|:----:|--------|
+| `trim` | TRUE | FALSE | Adapter trimming in M1 |
+| `check_duplicate_readnames` | TRUE | FALSE | Duplicate read QC in M1 |
+| `visualise_alignment` | TRUE | FALSE | Coverage/strand plots in M2 |
+| `cluster` | TRUE | FALSE | Allele clustering in M4 |
+| `cluster_consensus` | TRUE | FALSE | Consensus sequence generation in M4 |
+| `call_variants` | TRUE | FALSE | VCF variant calling in M4 |
+| `waterfall` | TRUE | FALSE | M5 waterfall plots |
+| `export_read_counts` | TRUE | FALSE | Per-sample read count export |
+
+In slim mode, M4 performs repeat length assignment only — allele clustering, consensus generation, and variant calling are all disabled. M5 runs but produces no output (`waterfall = FALSE` skips plot generation). Repeat histograms, scatter plots, density plots, and range analysis outputs (M6–M7) are identical between modes.
+
+Use full mode for first-pass analysis of new data, or whenever allele calls, consensus sequences, VCF output, or waterfall QC are needed. Use slim mode for rapid re-processing, parameter exploration, or when only repeat length distributions and instability metrics are required.
 
 **Benchmark results** (Myriad, 12 cores / 64 GB, v2.2.0):
 
-All timings are from complete fresh runs (all modules executed from scratch, no cached results re-used). v1.0 = January 2026; v2.2.0 = April 2026. "—" = configuration not run for that dataset. csf timings are approximate, derived from a concurrent multi-job log.
+All timings are from complete fresh runs (all modules executed from scratch, no cached results re-used). v1.0 = January 2026; v2.2.0 = April 2026. Full and slim modes are defined in the table above. "—" = configuration not run for that dataset. csf timings are approximate, derived from a concurrent multi-job log.
 
 | Dataset | Samples | Total reads | Reads / sample | v1.0 full | v2.2.0 full | v2.2.0 slim | Change (full) |
 |---------|--------:|------------:|---------------:|----------:|------------:|------------:|:-------------:|
@@ -807,7 +817,7 @@ For `h_rt`, add a 20% safety margin: if you estimate 10 h, request 12 h.
 
 #### Resource summary
 
-Myriad runtimes are from v2.2.0 benchmarks (full mode, 12c / 64G). Slim mode (`--trim FALSE --waterfall FALSE`) reduces runtimes by ~5–30% depending on sample count. Kathleen runtimes are indicative estimates only — no benchmark data has been collected on Kathleen.
+Myriad runtimes are from v2.2.0 benchmarks (full mode, 12c / 64G). Slim mode (see run modes table above) reduces runtimes by ~5–30% depending on sample count. Kathleen runtimes are indicative estimates only — no benchmark data has been collected on Kathleen.
 
 | Dataset size | Samples | Cluster | Cores | Memory/core | tmpfs | Runtime (full) | Runtime (slim) |
 |--------------|--------:|---------|------:|------------:|------:|:--------------:|:--------------:|
