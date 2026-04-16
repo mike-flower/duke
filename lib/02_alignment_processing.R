@@ -425,6 +425,17 @@ load_manual_read_exclusions <- function(exclusion_path) {
 
 
 # Apply manual read exclusions to alignment data
+#
+# Exclusions are scoped by BOTH file_stem AND qname. This means:
+#   - The 'file_name' column in the exclusion file must match the pipeline's
+#     file_stem exactly (i.e. filename without extension, including any _R1/_R2
+#     suffix for paired-end data).
+#   - A read name listed under sample A will never affect sample B, even if
+#     both samples happen to contain a read with the same qname.
+#
+# alignment_info: combined data frame for ALL samples (has a file_stem column)
+# exclusion_list: named list; names = file_stem values, elements = read name vectors
+# sample_name:    the file_stem to process in this call
 apply_manual_exclusions <- function(alignment_info, exclusion_list, sample_name) {
   
   # Exit if no exclusion list
@@ -445,9 +456,11 @@ apply_manual_exclusions <- function(alignment_info, exclusion_list, sample_name)
   # Get reads to exclude for this sample
   reads_to_exclude <- exclusion_list[[sample_name]]
   
-  # Filter out excluded reads
+  # Filter out excluded reads, scoped to this sample only.
+  # The file_stem guard ensures read names are matched within the correct
+  # sample and cannot accidentally remove reads from other samples.
   alignment_filtered <- alignment_info %>%
-    dplyr::filter(!qname %in% reads_to_exclude)
+    dplyr::filter(!(file_stem == sample_name & qname %in% reads_to_exclude))
   
   # Report how many were excluded
   n_excluded <- nrow(alignment_info) - nrow(alignment_filtered)

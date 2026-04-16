@@ -68,7 +68,7 @@ params <- list(
   # Paired-end read handling
   r1_pattern = "_R1_",
   r2_pattern = "_R2_",
-  select_one_of_pair = "R1",  # Keep only R1, or set to NA to keep all
+  select_one_of_pair = "R1",  # "R1", "R2", or "all" to import both directions as separate samples
   
   # Downsampling (set to NA to disable)
   downsample = NA,  # e.g., 1000 to keep 1000 reads per sample
@@ -226,22 +226,20 @@ params <- list(
   #   - Genuine deletions (e.g., CRISPR-edited samples with repeat removed)
   #   - Off-target amplification (non-HTT sequences)
   # 
-  # "convert_to_zero":
-  #   - Treat as 0 repeats (no tract present)
-  #   - Best for: CRISPR-edited samples where deletions are expected
-  #   - Preserves all reads but includes artifacts in the 0-count bin
-  #   - Default (matches original duke.Rmd behavior)
-  # 
+  # "convert_to_zero" (default):
+  #   - Assign repeat_count = 0 for reads where no tract was detected
+  #   - Appropriate because Module 2's dual-flank filter already requires reads
+  #     to align to both flanks, so any read reaching Module 3 genuinely spans
+  #     the locus; a missing tract means no (or sub-threshold) repeat is present
+  #
   # "filter":
-  #   - Remove these reads entirely
-  #   - Best for: Non-edited samples, prioritising data quality over completeness
-  #   - Conservative approach that removes artifacts but also genuine deletions
-  # 
-  # "flag_only":
-  #   - Keep NA as-is, add 'no_tract_found' flag column
-  #   - Best for: Exploratory analysis, want to inspect these reads manually
-  #   - Allows filtering later on a per-sample basis
-  #   - Note: Downstream analyses must handle NAs
+  #   - Remove reads with no detectable tract entirely
+  #   - Use when you want these reads excluded from all downstream analysis
+  #
+  # NA:
+  #   - Leave repeat_count as NA and propagate as-is
+  #   - Useful for inspecting these reads before deciding how to handle them
+  #   - Downstream analyses that ignore NAs will exclude them automatically
   #
   na_repeat_handling = "convert_to_zero",
 

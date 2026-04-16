@@ -113,11 +113,41 @@ clusters_slim <- module4_output$alignment_clustered_slim
 alignment_clustered <- counts_slim %>%
   dplyr::left_join(clusters_slim, by = c("file_stem", "qname"))
 
-# Load Module 6 output (modal peaks and distribution summary)
+# Load Module 6 output (modal peaks and distribution summary).
+# Module 6 is optional for Module 7. If its output file is missing, Module 7
+# proceeds without range boxes or metric overlays (modal/mean/median points).
+# Histogram and scatter plots are still generated using the raw repeat counts.
 module6_path <- file.path(results_dir, "06_range_analysis.RData")
-safe_load_module(module6_path, module_num = 6, envir = environment())
-modal_peaks        <- module6_output$modal_peaks
-distribution_summary <- module6_output$distribution_summary
+module6_available <- file.exists(module6_path) && file.size(module6_path) > 0
+
+if (module6_available) {
+  tryCatch({
+    safe_load_module(module6_path, module_num = 6, envir = environment())
+    modal_peaks          <- module6_output$modal_peaks
+    distribution_summary <- module6_output$distribution_summary
+    message("  Module 6 data loaded.")
+  }, error = function(e) {
+    module6_available <<- FALSE
+    message("  WARNING: Module 6 output could not be loaded (", e$message, ").")
+    message("  Continuing without range boxes or metric overlays.")
+  })
+}
+
+if (!module6_available) {
+  # Empty structures — downstream code checks nrow() / length() before using these
+  modal_peaks <- data.frame(
+    file_stem = character(), analysis_range_name = character(),
+    range_min = numeric(), range_max = numeric(),
+    modal_length = numeric(), modal_frequency = numeric(),
+    peak_rank = integer(), stringsAsFactors = FALSE
+  )
+  distribution_summary <- data.frame(
+    file_stem = character(), analysis_range_name = character(),
+    mean_length = numeric(), median_length = numeric(),
+    stringsAsFactors = FALSE
+  )
+  message("  Module 6 not available — plots will show raw repeat distributions only.")
+}
 
 repeat_method <- params$repeat_count_method
 

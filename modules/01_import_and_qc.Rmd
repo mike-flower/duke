@@ -120,7 +120,9 @@ file_details <- data.frame(file_name = file_names,
                 include = case_when(paired & paired_read_direction == params$select_one_of_pair ~ TRUE,
                                     paired ~ FALSE,
                                     TRUE ~ TRUE),
-                sample_stem = ifelse(paired, gsub("_R[12]_.*", "", file_name), file_stem)) %>%
+                sample_stem = ifelse(paired,
+                  gsub(paste0("(", params$r1_pattern, "|", params$r2_pattern, ").*"), "", file_name),
+                  file_stem)) %>%
   dplyr::relocate(c(file_format, paired, paired_read_direction, include, sample_stem), 
                   .after = "file_name")
 ```

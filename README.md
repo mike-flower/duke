@@ -258,7 +258,7 @@ floor:           [5][3][3]
 max_peaks:       [1][2][1]
 ```
 
-**Rules:** No spaces between brackets. Use `NA` for unbounded upper limits. Equal numbers of `[` and `]` per cell.
+**Rules:** No spaces between brackets. Use `NA` for unbounded upper limits. Equal numbers of `[` and `]` per cell. Range bounds must be zero or positive integers — negative values are not supported and will cause a parsing error.
 
 ##### Creating your settings file
 
@@ -279,9 +279,11 @@ max_peaks:       [1][2][1]
 
 | Column | Description | Example |
 |--------|-------------|---------|
-| `file_name` | Sample filename without extension | `sample_001` |
+| `file_name` | Sample file stem (filename without extension) | `sample_001` |
 | `read_name` | Exact read identifier | `m64011_190830_220126/4194640/ccs` |
 | `reason` | Documentation | `Low quality alignment` |
+
+**Important:** The `file_name` value must match the pipeline's `file_stem` exactly — the filename with its extension(s) stripped. For paired-end FASTQ data this includes any `_R1`/`_R2` suffix (e.g. `DMPX_MS408_S1_L001_R1`, not `DMPX_MS408_S1_L001`). Exclusions are applied per-sample: a read name listed under sample A will never affect sample B, even if both samples share that read name.
 
 Get exact read names from BAM files:
 ```bash
@@ -434,7 +436,7 @@ Finds and counts repeat tracts in the sequence between the two flanks.
   - `repeat_count_full` — tract length ÷ pattern length (recommended; robust for ONT)
   - `repeat_count_match` — exact pattern matches only (stringent; best for PacBio HiFi)
   - `repeat_count_tracts` — tract structure as string e.g. `"3,2,2"` (QC only; not numeric)
-- Flank length QC — total combined flank length should be stable per sample; optional outlier filtering (`--rm_flank_length_outliers`)
+- Flank length QC — total combined flank length should be stable per sample; optional outlier filtering (`--rm_flank_length_outliers`). The cohort scatter plot shows reference lines at the **mean** of the per-sample IQR fences across all samples — these lines are visual guides only. The actual filter, when enabled, uses per-sample fences computed independently for each sample.
 - **Output:** `repeat_detection.xlsx`; per-read `.tsv.gz` count files; flank QC plots
 
 ### Module 4: Allele calling
@@ -514,9 +516,11 @@ Publication-quality repeat length distribution figures.
 - `--path_manual_exclusions` — Read exclusions file (optional)
 
 #### Import options
-- `--import_patterns` — File extensions to import
+- `--import_patterns` — Comma-separated regex patterns for filenames to import (default: `\.fastq$,\.fastq.gz$,\.fasta$,\.fa$,\.bam$`)
 - `--downsample` — Limit reads per sample (NA = all)
-- `--select_one_of_pair` — For paired-end: `"R1"`, `"R2"`, or NA
+- `--r1_pattern` — Regex pattern identifying R1 files in paired-end data (default: `"_R1_"`). **Note:** the default requires an underscore on both sides (e.g. `sample_R1_001.fastq.gz`). If your files end with `_R1.fastq.gz` rather than `_R1_001.fastq.gz`, pass `--r1_pattern "_R1"` (no trailing underscore).
+- `--r2_pattern` — Regex pattern identifying R2 files in paired-end data (default: `"_R2_"`). See note for `--r1_pattern`.
+- `--select_one_of_pair` — For paired-end: `"R1"`, `"R2"`, or `"all"`. When `"R1"` or `"R2"`, only that direction is imported. When `"all"`, both are imported as separate samples (default: `"R1"`)
 - `--check_duplicate_readnames` — Remove duplicate read names, keeping longest (default: TRUE; safe to disable for PacBio CCS)
 
 #### Adapter trimming
@@ -539,7 +543,7 @@ Publication-quality repeat length distribution figures.
 - `--rpt_max_tract_gap` — Max gap between tracts to merge them (default: 18)
 - `--rpt_return_option` — `"longest"` or `"all"` (default: `"longest"`)
 - `--repeat_count_method` — Primary counting method (default: `"repeat_count_full"`)
-- `--na_repeat_handling` — How to handle reads with no tract: `"convert_to_zero"`, `"filter"`, or `"flag_only"` (default: `"convert_to_zero"`)
+- `--na_repeat_handling` — How to handle reads with no detectable repeat tract: `"convert_to_zero"` (assign repeat_count = 0; appropriate for long-read data where Module 2's dual-flank filter ensures every read spans the locus), `"filter"` (remove these reads entirely), or `NA` (leave as NA and propagate; useful for inspection before deciding) (default: `"convert_to_zero"`)
 - `--export_read_counts` — Export per-read counts to `.tsv.gz` (default: TRUE)
 
 #### Flank length QC (Module 3)
@@ -555,6 +559,7 @@ Publication-quality repeat length distribution figures.
 - `--haplotype_cluster_downsample` — Max reads for haplotype optimisation (default: 5,000)
 - `--haplotype_region` — Which flanks to use: `"left"`, `"right"`, or `"both"` (default: `"both"`)
 - `--haplotype_method` — Distance metric: `"levenshtein"` or `"hamming"` (default: `"levenshtein"`)
+- `--haplotype_trim_length` — Trim flank sequences before haplotype clustering: `"auto"` trims to the modal flank length per sample; a number specifies a fixed bp length; `"NA"` disables trimming (default: `"auto"`). Trimming is strongly recommended — variable-length flanks inflate Levenshtein distances and degrade cluster quality.
 
 #### Consensus and variant calling
 - `--cluster_consensus` — Generate consensus sequences (default: TRUE)

@@ -255,33 +255,40 @@ distribution_summary_function <- function(repeat_counts, floor = NA) {
     return(default_result)
   }
   
+  # Reconstruct a per-read vector from the floor-filtered frequency table.
+  # n_reads_total (above) preserves the original read count for sequencing QC.
+  # All descriptive statistics below are computed on this filtered population so
+  # that mean, SD, SEM, and spread metrics are consistent with reads_below_modal
+  # and reads_above_modal, which are also derived from the filtered data.
+  filtered_counts <- rep(x, y)
+  
   # Mode
   mode_idx <- which.max(y)
   mode_rpt <- x[mode_idx]
   mode_y <- y[mode_idx]
   
   # Central tendency
-  mean_val <- mean(repeat_counts)
-  median_val <- median(repeat_counts)
+  mean_val <- mean(filtered_counts)
+  median_val <- median(filtered_counts)
   
   # Spread
-  sd_val <- sd(repeat_counts)
+  sd_val <- sd(filtered_counts)
   sem_val <- sd_val / sqrt(n_reads_used)
   cv_val <- if (mean_val != 0) sd_val / mean_val else NA
-  min_val <- min(repeat_counts)
-  max_val <- max(repeat_counts)
+  min_val <- min(filtered_counts)
+  max_val <- max(filtered_counts)
   range_val <- max_val - min_val
-  iqr_val <- IQR(repeat_counts)
-  perc5 <- quantile(repeat_counts, 0.05, na.rm = TRUE)
-  perc95 <- quantile(repeat_counts, 0.95, na.rm = TRUE)
+  iqr_val <- IQR(filtered_counts)
+  perc5 <- quantile(filtered_counts, 0.05, na.rm = TRUE)
+  perc95 <- quantile(filtered_counts, 0.95, na.rm = TRUE)
   
   # Shape
   skew_val <- if (requireNamespace("moments", quietly = TRUE)) {
-    moments::skewness(repeat_counts)
+    moments::skewness(filtered_counts)
   } else NA
   
   kurt_val <- if (requireNamespace("moments", quietly = TRUE)) {
-    moments::kurtosis(repeat_counts)
+    moments::kurtosis(filtered_counts)
   } else NA
   
   # Gini coefficient

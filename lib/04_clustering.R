@@ -223,12 +223,17 @@ cluster_by_haplotype <- function(sequences,
     
     message("  Identified ", n_clusters, " haplotype group(s) in sample")
     
-    # Calculate centroid (consensus) for each cluster
-    message("  Computing cluster centroids...")
+    # Calculate centroid (consensus) for each cluster.
+    # APPROXIMATION: the centroid is the first sequence in each cluster rather
+    # than a true consensus. This is a speed trade-off — computing a full
+    # multiple-sequence alignment for every cluster on every large sample would
+    # be prohibitively slow. In practice the approximation works well when
+    # within-cluster sequences are highly similar (typical for flanking regions
+    # of a single haplotype). It can misassign reads that sit near a cluster
+    # boundary, particularly with shorter or more variable sequences.
+    message("  Computing cluster centroids (first-sequence approximation)...")
     centroids <- lapply(1:n_clusters, function(i) {
       cluster_seqs <- sample_seqs[sample_clusters == i]
-      # Simple consensus: most common base at each position
-      # For speed, just use first sequence as representative
       cluster_seqs[1]
     })
     

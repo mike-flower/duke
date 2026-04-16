@@ -201,8 +201,24 @@ if (n_na > 0) {
   message("  Reads without detectable repeats: ", format(n_na, big.mark = ","), 
           " (", round(100 * na_rate, 1), "%)")
   
-  # Handle based on params$na_repeat_handling
-  if (!is.null(params$na_repeat_handling)) {
+  # na_repeat_handling controls what happens to reads where no repeat tract
+  # was detected within the mid sequence.
+  #
+  # "convert_to_zero" (default): assign repeat_count = 0.
+  #   Appropriate for long-read data where every read spans the full locus —
+  #   Module 2 already requires alignment to both flanks, so a missing tract
+  #   genuinely means no (or sub-threshold) repeat sequence is present.
+  #
+  # "filter": remove these reads entirely.
+  #   Use when NA reads represent a distinct technical failure class you want
+  #   excluded from all downstream analysis.
+  #
+  # NA: leave repeat_count as NA and propagate as-is.
+  #   Reads remain in alignment_counts but will be excluded from any
+  #   calculation that ignores NAs. Useful for inspecting the NA reads
+  #   before deciding how to handle them.
+  
+  if (!is.null(params$na_repeat_handling) && !is.na(params$na_repeat_handling)) {
     if (params$na_repeat_handling == "convert_to_zero") {
       alignment_counts <- alignment_counts %>%
         mutate(
@@ -218,7 +234,12 @@ if (n_na > 0) {
       n_after <- nrow(alignment_counts)
       message("  → Filtered out ", format(n_before - n_after, big.mark = ","), 
               " reads (na_repeat_handling = 'filter')")
+    } else {
+      warning("  Unrecognised na_repeat_handling value: '", params$na_repeat_handling,
+              "'. Expected 'convert_to_zero', 'filter', or NA. Reads left as NA.")
     }
+  } else {
+    message("  → NAs retained (na_repeat_handling = NA)")
   }
 }
 ```
@@ -574,7 +595,10 @@ flank_thresholds <- flank_thresholds %>%
                    by = "file_stem")
 
 # Cohort repeat vs flank scatter: one point per sample (modal repeat, modal flank)
-# % within 1.5x IQR labelled next to each point
+# % within 1.5x IQR labelled next to each point.
+# The horizontal dashed lines show the MEAN of the per-sample IQR fences across all
+# samples. They are visual guides only — the actual filter (when enabled) applies
+# per-sample fences computed independently for each sample.
 p_flank_box <- ggplot(flank_thresholds, aes(x = modal_repeat, y = modal_flank)) +
   geom_hline(yintercept = mean_ref_lo, linetype = "dashed",
              colour = "grey50", linewidth = 0.7, alpha = 0.7) +

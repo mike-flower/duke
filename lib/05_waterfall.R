@@ -248,40 +248,10 @@ create_waterfall_plot <- function(data,
 }
 
 
-#' Identify Flank Length Outliers
-#'
-#' Identify reads with outlier flank lengths using IQR method
-#'
-#' @param data Data frame with left and right sequences
-#' @param group_vars Character vector of column names to group by (e.g., c("file_stem", "cluster_number"))
-#'
-#' @return Data frame with added columns: left_outlier, right_outlier (logical)
-#'
-#' @details
-#' Uses 1.5 × IQR method per group:
-#' - Calculate Q1, Q3, IQR for left and right flank lengths
-#' - Flag reads with length < Q1 - 1.5×IQR or > Q3 + 1.5×IQR
-#' - Returns original data with outlier flags added
-#'
-#' @examples
-#' @examples
-#' waterfall_data <- prepare_waterfall_data(
-#'   alignment_data      = alignment_clustered,
-#'   repeat_count_method = "repeat_count_full"
-#' )
-#'   data = alignment_data,
-#'   group_vars = c("file_stem", "cluster_number")
-#' )
-#' 
-#' # Remove outliers
-#' data_clean <- data_flagged %>% 
-#'   filter(!left_outlier & !right_outlier)
-#'
-#' @export
 #' Prepare Waterfall Data
 #'
 #' Prepare alignment data for waterfall plotting.
-#' Flank length filtering is applied upstream in Module 4 if enabled —
+#' Flank length filtering is applied upstream in Module 3 if enabled —
 #' this function does not apply any outlier removal.
 #'
 #' @param alignment_data Data frame with alignment information

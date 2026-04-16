@@ -1206,7 +1206,15 @@ message("All alignment plots exported to: ", plots_dir)
 # Augment alignment_summary with strand breakdown and final read count
 strand_pivot <- strand_summary %>%
   dplyr::select(file_stem, strand, read_count) %>%
-  tidyr::pivot_wider(names_from = strand, values_from = read_count) %>%
+  # values_fill = 0: a sample missing one strand gets 0, not NA
+  tidyr::pivot_wider(names_from = strand, values_from = read_count, values_fill = 0)
+
+# Add missing strand columns with 0 when a strand is entirely absent from all
+# samples (common with FASTQ/amplicon data where all reads align forward)
+if (!("+"  %in% names(strand_pivot))) strand_pivot[["+"]]  <- 0L
+if (!("+c" %in% names(strand_pivot))) strand_pivot[["+c"]] <- 0L
+
+strand_pivot <- strand_pivot %>%
   dplyr::rename(n_forward = `+`, n_reverse = `+c`) %>%
   dplyr::mutate(pct_forward = n_forward / (n_forward + n_reverse))
 

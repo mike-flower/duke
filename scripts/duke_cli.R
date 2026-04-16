@@ -178,7 +178,7 @@ option_list <- list(
               metavar="METHOD"),
   
   make_option("--na_repeat_handling", type="character", default="convert_to_zero",
-              help="Handle NA repeats: convert_to_zero/filter/flag_only [default: %default]",
+              help="Handle reads with no detectable repeat tract: convert_to_zero (assign 0; appropriate for long-read data where Module 2 dual-flank filter ensures every read spans the locus), filter (remove these reads), or NA (leave as NA and propagate) [default: %default]",
               metavar="METHOD"),
 
   make_option("--export_read_counts", type="logical", default=TRUE,
