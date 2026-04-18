@@ -742,24 +742,34 @@ Use full mode for first-pass analysis of new data, or whenever allele calls, con
 
 All timings are from complete fresh runs (all modules executed from scratch, no cached results re-used). v1.0 = January 2026; v2.2.0 = April 2026. Full and slim modes are defined in the table above. "—" = configuration not run for that dataset. csf timings are approximate, derived from a concurrent multi-job log.
 
+All datasets are PacBio Revio HiFi amplicons (~3 kb amplicon length), except yas_miseq which is Illumina MiSeq short-read (~150 bp amplicon).
+
 | Dataset | Samples | Total reads | Reads / sample | v1.0 full | v2.2.0 full | v2.2.0 slim | Change (full) |
 |---------|--------:|------------:|---------------:|----------:|------------:|------------:|:-------------:|
 | jasmine | 102 | ~2.9 M | ~28 k | 8.1 h | — | — | — |
-| yas | 77 ¹ | 3.6 M | ~46 k | 9.6 h | 5.3 h | **5.0 h** | −45% |
+| yas | 77 ¹ | 3.6 M | ~46 k | 9.6 h | 5.3 h ³ | **5.0 h** | −45% |
 | jd | 131 | 4.4 M | ~34 k | — | 6.3 h | — | new dataset |
 | pg | 285 ¹ | 3.6 M | ~13 k | 9.4 h | 8.3 h | **5.9 h** | −12% |
 | csf | ~100 | ~4 M | ~40 k | — | ~17.5 h ² | ~3.9 h ² | new dataset |
 | fs | 310 | 10.6 M | ~34 k | 28–34 h | 27.6 h | — | ~same |
+| yas_miseq ⁴ | 25 | 2.8 M | ~112 k | — | 3.5–4.4 h ⁵ | — | new dataset |
+| rpt_series | 783 | 19.5 M | ~25 k | — | — | **28.0 h** ⁶ | new dataset |
 
 ¹ Sample count differs slightly from v1.0 due to QC exclusions applied between runs.  
-² Timing approximate; two jobs ran concurrently and shared a log file.
+² Timing approximate; two jobs ran concurrently and shared a log file.  
+³ Confirmed by independent replication (April 2026): 5.30 h.  
+⁴ Illumina MiSeq short-read data (~150 bp amplicon). All other datasets are PacBio Revio HiFi (~3 kb amplicon).  
+⁵ Two independent full runs of the same data gave 3:29 h and 4:23 h; difference likely reflects cluster load variation.  
+⁶ Slim mode only. This dataset exceeds the calibrated range of the runtime estimation formula (R > 10.6 M, N > 310); the formula should not be used for datasets of this size.
 
 **Key findings:**
 
-- **Total reads is the strongest runtime predictor.** Datasets under 5 M reads consistently finish in 5–9 h; the fs dataset at 10.6 M reads takes ~28 h regardless of pipeline version. Sample count is a secondary factor.
-- **v2.2.0 is materially faster for most datasets.** The yas dataset improved by 45%; pg by 12%. The fs dataset (highest read depth) showed no meaningful change, consistent with it being I/O- and read-throughput-bound rather than compute-bound.
+- **Total reads is the strongest runtime predictor.** Datasets under 5 M reads consistently finish in 3.5–9 h; the fs dataset at 10.6 M reads takes ~28 h regardless of pipeline version. Sample count is a secondary factor.
+- **v2.2.0 is materially faster for most datasets.** The yas dataset improved by 45%; pg by 12%. The fs dataset (highest read depth among PacBio runs) showed no meaningful change, consistent with it being I/O- and read-throughput-bound rather than compute-bound.
 - **Slim mode offers significant savings for larger sample counts.** The pg dataset (285 samples) went from 8.3 h to 5.9 h (−29%) with `--trim FALSE --waterfall FALSE`. Savings are smaller for low sample counts (yas: 5.3 → 5.0 h, −5%).
+- **Short-read amplicon data runs faster than long-read at equivalent read counts.** The yas_miseq dataset (25 samples, 2.8 M reads, ~150 bp amplicon) completed in 3.5–4.4 h full mode — consistent with the formula prediction of ~4.7 h, and faster than long-read datasets of similar total read count, likely due to reduced per-read alignment and repeat detection time.
 - **12 cores / 64 GB remains optimal.** More RAM per core does not improve performance for most datasets; more cores with less memory can cause failures on large datasets.
+- **The runtime formula does not extrapolate to very large datasets.** The rpt_series dataset (783 samples, 19.5 M reads) took 28.0 h in slim mode. Formula predictions at this scale (R > 10.6 M, N > 310) are unreliable; request 48 h wall time for datasets of this size.
 
 **Configurations to avoid:**
 ```bash
@@ -781,7 +791,7 @@ Runtime_full (h)  ≈  8.94 − 2.68R + 0.377R² + 0.014N
 Runtime_slim (h)  ≈  Runtime_full × max(0.5,  1 − 0.001N)
 ```
 
-Uncertainty is approximately ±25% within the calibrated range (N ≤ 310, R ≤ 10.6 M). For larger datasets, treat estimates as indicative only.
+Uncertainty is approximately ±25% within the calibrated range (N ≤ 310, R ≤ 10.6 M). **Do not use this formula for datasets outside this range** — predictions become unreliable above ~10 M reads or ~400 samples.
 
 **Quick reference:**
 
@@ -790,7 +800,9 @@ Uncertainty is approximately ±25% within the calibrated range (N ≤ 310, R ≤
 | 3–4 M | 5–6 h | 6–8 h | 7–9 h |
 | 5–7 M | 7–10 h | 9–12 h | 11–14 h |
 | 8–11 M | 15–22 h | 17–25 h | 20–28 h |
-| >11 M | 28–40 h | 30–42 h | 33–45 h |
+| >11 M | 28–40 h ⁷ | 30–42 h ⁷ | 33–45 h ⁷ |
+
+⁷ Empirically anchored: rpt_series (783 samples, 19.5 M reads) took 28.0 h in slim mode. Formula estimates at this scale are unreliable; request 48 h wall time.
 
 For `h_rt`, add a 20% safety margin: if you estimate 10 h, request 12 h.
 
