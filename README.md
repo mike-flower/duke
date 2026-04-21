@@ -1098,12 +1098,14 @@ grep "knit_root_dir" scripts/duke_run.R    # Should return a line
 - ✨ **NEW:** Flank length QC filtering — `rm_flank_length_outliers`, `flank_iqr_multiplier` (Module 3)
 - ✨ **NEW:** Plot output control — `plot_dpi`, `plot_per_sample` (Modules 2, 3, 4)
 - ✨ **NEW:** `format_size()`, `format_elapsed()`, `build_timing_table()` helpers in `00_utils.R`
+- ✨ **NEW:** Provenance columns in Module 6 xlsx — `control_aggregation_used` in `group_controls` and `range_summary` sheets, and `setpoint_aggregation` in `instability_metrics` (`NA` for `sample_relative` rows)
 - 🐛 **FIXED:** Modules 5 and 7 no longer have spurious resume checks
 - 🐛 **FIXED:** Manifest in-memory sizes now use adaptive units (B/KB/MB/GB)
 - 🐛 **FIXED:** Summary section crash when running partial module sets
 - 🐛 **FIXED:** Reference N-masking now case-insensitive (`NNNNN` or `nnnnn`)
 - 🐛 **FIXED:** Clustering early-exit return type inconsistency
 - 🐛 **FIXED:** GMM connection leak in Module 4 clustering
+- 🐛 **FIXED:** `control_aggregation_method` in Module 6 is now honoured — previously the flag was documented and echoed at startup but the underlying aggregation across control samples was hardcoded to `mean()` regardless of the setting. Default (`"median"`) runs therefore produced `mean`-aggregated setpoints. Results including `control_setpoint`, all `control_relative` instability metrics, and plot 09 (`11_control_setpoints.png`) will change on re-run if `control_aggregation_method != "mean"`
 - 🔧 **REMOVED:** `log_dir`, `verbose`, `waterfall_per_sample`, `repeat_histogram_per_sample`, `repeat_scatter_per_sample`
 - 🔧 **UPDATED:** `consensus_downsample` default 200 → 50; `waterfall_per_cluster` default TRUE → FALSE
 - 📄 **STREAMLINED:** HPC job scripts; README restructured for new users

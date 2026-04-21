@@ -1351,6 +1351,18 @@ if (params$group_control) {
   
   metric_column <- metric_column_map[[params$control_setpoint_metric]]
   
+  # Aggregator across control samples (mirrors calculate_control_setpoint() in 06_range_analysis.R)
+  valid_agg_methods <- c("mean", "median", "trimmed_mean")
+  if (!params$control_aggregation_method %in% valid_agg_methods) {
+    stop("Invalid control_aggregation_method: ", params$control_aggregation_method,
+         ". Must be one of: ", paste(valid_agg_methods, collapse = ", "))
+  }
+  agg_fun <- switch(params$control_aggregation_method,
+    "mean"         = function(x) mean(x, na.rm = TRUE),
+    "median"       = function(x) median(x, na.rm = TRUE),
+    "trimmed_mean" = function(x) mean(x, trim = 0.1, na.rm = TRUE)
+  )
+  
   # Get unique analysis ranges
   analysis_range_names <- unique(distribution_summary$analysis_range_name)
   
@@ -1394,9 +1406,9 @@ if (params$group_control) {
     control_summary <- control_data %>%
       group_by(group) %>%
       summarise(
-        control_modal_length = mean(modal_length, na.rm = TRUE),
-        control_mean_length = mean(mean_length, na.rm = TRUE),
-        control_median_length = mean(median_length, na.rm = TRUE),
+        control_modal_length = agg_fun(modal_length),
+        control_mean_length = agg_fun(mean_length),
+        control_median_length = agg_fun(median_length),
         control_count = n(),
         control_sd = sd(!!sym(metric_column), na.rm = TRUE),
         control_sem = control_sd / sqrt(control_count),
@@ -1406,7 +1418,8 @@ if (params$group_control) {
         analysis_range_name = my_range_name,
         # Set control setpoint based on user's choice
         control_setpoint = !!sym(paste0("control_", params$control_setpoint_metric)),
-        control_metric_used = params$control_setpoint_metric
+        control_metric_used = params$control_setpoint_metric,
+        control_aggregation_used = params$control_aggregation_method
       )
     
     return(control_summary)
@@ -1460,7 +1473,8 @@ if (params$group_control && exists("group_controls") && !is.null(group_controls)
   
   # Get control setpoints per group and range
   control_setpoints <- group_controls %>%
-    select(group, analysis_range_name, control_setpoint, control_metric_used)
+    select(group, analysis_range_name, control_setpoint, control_metric_used,
+           control_aggregation_used)
   
   # Join to comprehensive summary
   comprehensive_range_summary <- comprehensive_range_summary %>%
@@ -1717,7 +1731,8 @@ instability_metrics_list <- lapply(analysis_range_names, function(my_range_name)
         analysis_range_name = my_range_name,
         group = sample_group,
         setpoint_type = "sample_relative",
-        setpoint_metric = params$control_setpoint_metric
+        setpoint_metric = params$control_setpoint_metric,
+        setpoint_aggregation = NA_character_
       )
     
     # CONDITIONALLY calculate instability relative to CONTROL setpoint
@@ -1743,6 +1758,7 @@ instability_metrics_list <- lapply(analysis_range_names, function(my_range_name)
               group = sample_group,
               setpoint_type = "control_relative",
               setpoint_metric = params$control_setpoint_metric,
+              setpoint_aggregation = params$control_aggregation_method,
               control_sd = group_control$control_sd[1],
               control_sem = group_control$control_sem[1],
               control_n = group_control$control_count[1]
@@ -1774,7 +1790,8 @@ instability_metrics_list <- lapply(analysis_range_names, function(my_range_name)
 
 # Combine all ranges
 instability_metrics <- bind_rows(instability_metrics_list) %>%
-  relocate(file_stem, analysis_range_name, group, setpoint_type, setpoint_metric)
+  relocate(file_stem, analysis_range_name, group, setpoint_type,
+           setpoint_metric, setpoint_aggregation)
 
 # Add relative distribution statistics (modal, median, mean differences from setpoint)
 instability_metrics <- instability_metrics %>%
@@ -1791,7 +1808,8 @@ instability_metrics <- instability_metrics %>%
     mean_diff = mean_length - setpoint_repeat_length
   ) %>%
   # Reorder columns logically
-  relocate(file_stem, analysis_range_name, group, setpoint_type, setpoint_metric,
+  relocate(file_stem, analysis_range_name, group, setpoint_type,
+           setpoint_metric, setpoint_aggregation,
            setpoint_repeat_length, 
            modal_length, median_length, mean_length,
            modal_diff, median_diff, mean_diff)
