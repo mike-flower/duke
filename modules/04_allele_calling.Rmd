@@ -223,8 +223,18 @@ if (params$resume && safe_load_cache(cache_path, environment())) {
         sample_data$cluster_number <- cluster_result$cluster_number
         sample_data$repeat_cluster <- cluster_result$repeat_cluster
         sample_data$haplotype_cluster <- cluster_result$haplotype_cluster
+      } else if (params$cluster_by == "repeat") {
+        # Repeat-only: each cluster is, by definition, a repeat cluster
+        sample_data$cluster_number <- cluster_result
+        sample_data$repeat_cluster <- as.character(cluster_result)
+        sample_data$haplotype_cluster <- NA_character_
+      } else if (params$cluster_by == "haplotype") {
+        # Haplotype-only: each cluster is, by definition, a haplotype cluster
+        sample_data$cluster_number <- cluster_result
+        sample_data$repeat_cluster <- NA_character_
+        sample_data$haplotype_cluster <- as.character(cluster_result)
       } else {
-        # Simple strategies return vector
+        # Fallback for unknown strategies
         sample_data$cluster_number <- cluster_result
         sample_data$repeat_cluster <- NA_character_
         sample_data$haplotype_cluster <- NA_character_

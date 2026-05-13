@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing analysis with comprehensive repeat length characterisation and instability metrics.
 
-**v2.2.0** — [What's new](#version-history)
+**v2.3.1** — [What's new](#version-history)
 
 ---
 
@@ -411,10 +411,14 @@ result_duke/
 Imports sequencing files, runs quality metrics, and optionally trims adapters.
 
 - Accepts BAM, FASTQ, FASTQ.gz, FASTA
+- **PacBio HiFi auto-detection** — checks each BAM for the `np:i:` tag on the first record, falling back to `@PG PN=ccs/skera/lima` header lines (case-insensitive). Per-sample and keyed by file_stem, so mixed cohorts (some PacBio + some non-PacBio in the same run) are handled correctly
+- When PacBio is detected, per-read aux tags (`np`, `rq`, `ec`, `zm`, `bq`) are extracted into `module1_output$read_metadata` and a per-sample summary is added to `module1_output$pacbio_summary`
+- New PacBio QC section reports pass count (`np`) distribution, read quality (`rq`) distribution, and np-vs-length scatter — skipped automatically when no PacBio samples are present
+- `--np_min N` drops PacBio HiFi reads with `np < N` (applies only to detected PacBio samples; FASTQ, FASTA, and non-PacBio BAMs are unaffected)
 - Duplicate read name detection (keeps longest; safe to disable for PacBio CCS with `--check_duplicate_readnames FALSE`)
 - Optional downsampling (`--downsample`)
 - Adapter trimming from both ends using `Biostrings::trimLRPatterns`
-- **Output:** `qc.xlsx` with read counts and trim statistics; QC plots
+- **Output:** `qc.xlsx` with read counts, trim statistics, and per-sample PacBio np/rq summaries; QC plots including `pacbio_np_distribution.png`, `pacbio_rq_distribution.png`, and `pacbio_np_vs_length.png`
 
 ### Module 2: Alignment
 
@@ -522,6 +526,8 @@ Publication-quality repeat length distribution figures.
 - `--r2_pattern` — Regex pattern identifying R2 files in paired-end data (default: `"_R2_"`). See note for `--r1_pattern`.
 - `--select_one_of_pair` — For paired-end: `"R1"`, `"R2"`, or `"all"`. When `"R1"` or `"R2"`, only that direction is imported. When `"all"`, both are imported as separate samples (default: `"R1"`)
 - `--check_duplicate_readnames` — Remove duplicate read names, keeping longest (default: TRUE; safe to disable for PacBio CCS)
+- `--np_min` — Drop PacBio HiFi reads with `np < N` (default: NULL = no filter). Applies only to samples auto-detected as PacBio HiFi BAMs in Module 1; FASTQ, FASTA, and non-PacBio BAMs are unaffected, and mixed cohorts are handled correctly on a per-sample basis
+- `--pacbio_scatter_downsample` — Max points rendered in the PacBio np-vs-read-length scatter (default: 50,000). NA = plot all reads (may be slow for very large cohorts). The lm fit and R² are computed on the rendered subset — at n = 50k the estimates are essentially identical to the full-cohort values for any plausible effect size. Applies only to detected PacBio samples
 
 #### Adapter trimming
 - `--trim` — Enable/disable (default: TRUE)
@@ -1091,7 +1097,34 @@ grep "knit_root_dir" scripts/duke_run.R    # Should return a line
 
 ## Version history
 
-### v2.2.0 (April 2026) — Current
+### v2.3.1 (May 2026) — Current
+
+Cross-cutting plot and clarity refinements following the v2.3.0 PacBio HiFi run review, plus a clustering bugfix.
+
+**Module 2 — Alignment**
+- ✨ Segment lengths plot redesigned: all five segments (`pre`, `left`, `mid`, `right`, `post`) on a single x-axis in order, y-axis = per-sample median segment length, boxplot + jittered sample points + red mean diamond. Replaces the previous mid-only plot. Output PNG renamed `repeat_segment_length.png` → `segment_lengths.png`
+
+**Module 3 — Repeat detection**
+- 📝 Rewrote the unclear "Module 3 repeat tract repositioning" sentence in the Flank length QC section to state plainly what determines flank lengths
+- 📝 Added explanatory paragraph covering all four flank-QC plots (distributions, sweep, filter effect, count method comparison)
+- ✨ Count method comparison plot reframed as *"hypothetical filter outcomes"* — title and subtitle now make explicit that the series show *what would happen if each filter were applied*, not the currently-applied state
+- ✨ Repeat count distribution heatmap now in **dataset order** (not median order); subtitle and x-axis label updated; `heatmap_sample_index` lookup in `repeat_detection.xlsx` re-ordered to match
+- ✨ Ridge plot uses a single fill colour (`#619CFF`) instead of `fill = file_stem` — scales to cohorts of any size without exhausting colour palettes
+
+**Module 4 — Allele calling**
+- 🐛 R (`repeat_cluster`) and H (`haplotype_cluster`) columns now populated when clustering by a single dimension. Previously both columns were `NA_character_` for `cluster_by = "repeat"` or `cluster_by = "haplotype"`. Now `repeat_cluster = as.character(cluster_number)` for repeat-only, and `haplotype_cluster = as.character(cluster_number)` for haplotype-only. The `"both"` strategy behaviour is unchanged. R and H reflect original (pre-renumbering) cluster IDs, matching the `"both"` strategy convention
+
+### v2.3.0 (May 2026)
+- ✨ **NEW:** PacBio HiFi auto-detection in Module 1 — per-sample, keyed by file_stem; checks the `np:i:` tag on the first record of each BAM and falls back to `@PG PN=ccs/skera/lima` header lines (case-insensitive). Mixed cohorts handled correctly
+- ✨ **NEW:** `extract_pacbio_metadata()` helper in `01_import.R` — single-pass extraction of per-read aux tags (`np`, `rq`, `ec`, `zm`, `bq`) into a tidy data.frame
+- ✨ **NEW:** PacBio HiFi metrics section in Module 1 with three new diagnostic plots — pass count (`np`) distribution, read quality (`rq`) distribution, and np-vs-length scatter; per-sample summary table exported to `qc.xlsx`. Section auto-skipped on non-PacBio cohorts
+- ✨ **NEW:** Three new `module1_output` slots appended — `is_pacbio` (named logical vector), `read_metadata` (per-read aux tags, PacBio samples only), and `pacbio_summary` (per-sample np/rq summary). Existing 7 slots unchanged in name, order, and content
+- ✨ **NEW:** `--np_min` flag drops PacBio HiFi reads with `np < N` (default: NULL = no filter). Applies only to detected PacBio samples; FASTQ, FASTA, and non-PacBio BAMs are unaffected. Subsets `seq[[file_stem]]` and `read_metadata[[file_stem]]` together so all downstream modules see consistent reads
+- ✨ **NEW:** `--pacbio_scatter_downsample` controls the np-vs-length scatter render cap (default 50,000; NA = plot all). Consistent with `--waterfall_downsample` and `--visualise_alignment_downsample`. The lm fit + R² are computed on the rendered subset
+- ✨ **NEW:** `qc_summary$mean_np / median_np / sd_np / mean_rq / median_rq / sd_rq` columns populated for PacBio samples (NA elsewhere)
+- ✅ **COMPATIBILITY:** Fully backward-compatible for non-PacBio inputs. `detect_pacbio()` returns FALSE for FASTQ/FASTA/non-PacBio BAM, and the cost is a one-record scan per BAM. PacBio metadata cache (`01_pacbio_metadata.RData`) is independent of existing caches
+
+### v2.2.0 (April 2026)
 - ✨ **NEW:** Module diagnostics in every HTML report — timing table (all 7 modules) and output manifest (modules 1–4, 6); both exported to each module's Excel file
 - ✨ **NEW:** `export_read_counts` — per-read repeat counts exported to `{sample}.tsv.gz` (default TRUE)
 - ✨ **NEW:** `check_duplicate_readnames` parameter (Module 1; default TRUE)

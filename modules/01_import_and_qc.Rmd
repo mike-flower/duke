@@ -28,15 +28,17 @@ cat('<script>document.title = "Duke | Module 1: Import and QC";</script>')
 This module handles:
 
 1. File discovery and import (FASTQ, FASTA, BAM)
-2. Duplicate read name handling
-3. Optional downsampling
-4. Quality control metrics
-5. Adapter trimming
+2. PacBio HiFi auto-detection and per-read aux-tag QC (np, rq, ec, zm, bq)
+3. Optional `--np_min` filter to drop low-pass PacBio reads (PacBio samples only)
+4. Duplicate read name handling
+5. Optional downsampling
+6. Quality control metrics
+7. Adapter trimming
 
 **Outputs:**
 
 - Trimmed sequences ready for alignment
-- QC metrics and visualisations
+- QC metrics and visualisations, including PacBio np distribution, rq distribution, and np-vs-length scatter
 - Adapter trimming statistics
 
 
@@ -215,6 +217,364 @@ seq <- extract_apply_fn_result(seq)
 
 ```{r t_import_end, echo=FALSE}
 timings["Import"] <- proc.time()["elapsed"] - .t
+```
+
+---
+
+# PacBio HiFi metrics
+
+Per-sample auto-detection of PacBio HiFi BAMs and extraction of per-read aux tags. Non-PacBio inputs (FASTQ, FASTA, non-PacBio BAM) are unaffected — the section is skipped automatically when no PacBio samples are detected.
+
+**Aux tags extracted:**
+
+- **np** (number of passes) — how many times the polymerase read the SMRT-bell template; higher np means more sequencing redundancy and higher per-base confidence in the HiFi consensus
+- **rq** (read quality) — predicted per-read accuracy on a 0–1 scale; HiFi reads have rq ≥ 0.99 (Q20) by definition
+- **ec** (effective coverage), **zm** (ZMW hole number), **bq** (barcode quality) — also extracted but not plotted
+
+**Per-read values are saved** to `module1_output$read_metadata` — a named list of data.frames keyed by `file_stem`, with columns `read_name`, `np`, `rq`, `ec`, `zm`, `bq`. Load with `load("module_data/01_import_qc.RData")` and access as `module1_output$read_metadata[["sample_id"]]`. Per-sample summaries are also exported to `qc.xlsx` (sheet `pacbio_summary`).
+
+```{r pacbio_detect, echo=FALSE}
+# Per-sample detection — keyed by file_stem to handle mixed cohorts correctly
+is_pacbio <- vapply(file_stem_vector, function(file_stem) {
+  file_path   <- file_details$file_path[match(file_stem, file_details$file_stem)]
+  file_format <- file_details$file_format[match(file_stem, file_details$file_stem)]
+  detect_pacbio(path = file_path, format = file_format)
+}, logical(1))
+```
+
+```{r pacbio_detection_summary, echo=FALSE, results='asis'}
+n_total   <- length(is_pacbio)
+n_pacbio  <- sum(is_pacbio)
+pct_pacbio <- if (n_total > 0) n_pacbio / n_total * 100 else 0
+
+if (n_pacbio == 0) {
+  cat(sprintf(
+    "\n⊗ **No PacBio HiFi samples detected** across %d sample%s. PacBio metrics section skipped.\n\n",
+    n_total, ifelse(n_total == 1, "", "s")
+  ))
+} else if (n_pacbio == n_total) {
+  cat(sprintf(
+    "\n✓ **All %d sample%s detected as PacBio HiFi.** Extracting per-read aux tags.\n\n",
+    n_total, ifelse(n_total == 1, "", "s")
+  ))
+} else {
+  cat(sprintf(
+    "\n✓ **Mixed cohort:** %d of %d samples (%.1f%%) detected as PacBio HiFi; the remaining %d sample%s flow through unchanged.\n\n",
+    n_pacbio, n_total, pct_pacbio, n_total - n_pacbio,
+    ifelse(n_total - n_pacbio == 1, "", "s")
+  ))
+}
+```
+
+```{r t_pacbio_start, echo=FALSE, eval=any(is_pacbio)}
+.t <- proc.time()["elapsed"]
+```
+
+```{r pacbio_extract_metadata, echo=FALSE, message=FALSE, results='hide', eval=any(is_pacbio)}
+# Subset of file stems that are PacBio HiFi
+pacbio_stems <- file_stem_vector[is_pacbio]
+
+# Cached parallel extraction of per-read aux tags
+my_path <- file.path(temp_dir, "01_pacbio_metadata.RData")
+if (params$resume && safe_load_cache(my_path, environment())) {
+  message("Loaded PacBio per-read metadata from cache")
+} else {
+  read_metadata <- apply_fn(pacbio_stems, function(file_stem, file_details) {
+    file_path <- file_details$file_path[match(file_stem, file_details$file_stem)]
+    extract_pacbio_metadata(path = file_path)
+  }, file_details = file_details)
+  read_metadata <- extract_apply_fn_result(read_metadata)
+  save(read_metadata, file = my_path)
+}
+```
+
+## Optional pass-count (np) filter
+
+```{r pacbio_np_filter, echo=FALSE, results='asis', eval=any(is_pacbio)}
+if (is.null(params$np_min) || is.na(params$np_min)) {
+
+  cat("\n⊗ **No np filter applied** (`np_min = NULL`). All PacBio reads retained.\n\n")
+
+} else {
+
+  cat(sprintf("\n✓ **Applying np filter:** dropping PacBio reads with np < %d.\n\n",
+              as.integer(params$np_min)))
+
+  filter_rows <- list()
+
+  for (fs in names(read_metadata)) {
+
+    md_before <- read_metadata[[fs]]
+    reads_before <- nrow(md_before)
+
+    keep_idx <- !is.na(md_before$np) & md_before$np >= as.integer(params$np_min)
+    md_after <- md_before[keep_idx, , drop = FALSE]
+    reads_after <- nrow(md_after)
+
+    # Subset seq[[fs]] AND read_metadata[[fs]] together by surviving read names
+    keep_names <- md_after$read_name
+    seq_fs <- seq[[fs]]
+    if (!is.null(seq_fs)) {
+      seq[[fs]] <- seq_fs[names(seq_fs) %in% keep_names]
+    }
+    read_metadata[[fs]] <- md_after
+
+    pct_kept <- if (reads_before > 0) reads_after / reads_before * 100 else NA_real_
+    filter_rows[[fs]] <- data.frame(
+      file_stem    = fs,
+      reads_before = reads_before,
+      reads_after  = reads_after,
+      pct_kept     = pct_kept,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  np_filter_summary <- do.call(rbind, filter_rows)
+  rownames(np_filter_summary) <- NULL
+
+  cat("\n\n**Per-sample filter outcomes:**\n\n")
+  for (i in seq_len(nrow(np_filter_summary))) {
+    cat(sprintf("- %s: %s → %s reads (%.1f%% retained)\n",
+                np_filter_summary$file_stem[i],
+                scales::comma(np_filter_summary$reads_before[i]),
+                scales::comma(np_filter_summary$reads_after[i]),
+                np_filter_summary$pct_kept[i]))
+  }
+  cat("\n\n")
+
+  # Export filter summary
+  write_excel_function(
+    named_list = list("np_filter_summary" = np_filter_summary),
+    path = file.path(qc_dir, "qc.xlsx"),
+    overwrite_sheet = TRUE
+  )
+}
+```
+
+```{r pacbio_summary_table, echo=FALSE, eval=any(is_pacbio)}
+# Per-sample summary of np and rq
+pacbio_summary <- do.call(rbind, lapply(names(read_metadata), function(fs) {
+  md <- read_metadata[[fs]]
+  data.frame(
+    file_stem   = fs,
+    n_reads     = nrow(md),
+    mean_np     = mean(md$np, na.rm = TRUE),
+    median_np   = median(md$np, na.rm = TRUE),
+    sd_np       = sd(md$np, na.rm = TRUE),
+    mean_rq     = mean(md$rq, na.rm = TRUE),
+    median_rq   = median(md$rq, na.rm = TRUE),
+    sd_rq       = sd(md$rq, na.rm = TRUE),
+    stringsAsFactors = FALSE
+  )
+}))
+rownames(pacbio_summary) <- NULL
+```
+
+## Pass count (np) distribution
+
+```{r pacbio_np_plot, echo=FALSE, message=FALSE, eval=any(is_pacbio)}
+# Per-sample median np values — one point per sample, summarised
+n_pacbio_samples <- nrow(pacbio_summary)
+
+p_pacbio_np <- ggplot(pacbio_summary, aes(x = "All PacBio samples", y = median_np)) +
+  geom_boxplot(outlier.shape = NA, width = 0.4,
+               fill = "grey92", colour = "grey40") +
+  geom_jitter(height = 0, width = 0.1, alpha = 0.7,
+              size = 2.5, colour = "grey30") +
+  stat_summary(fun = mean, geom = "point", shape = 18,
+               colour = "red", size = 4, alpha = 0.6) +
+  stat_summary(fun = mean, geom = "text",
+               aes(label = sprintf("%.1f", after_stat(y))),
+               colour = "red", size = 3.5, vjust = -1.2, alpha = 0.7) +
+  scale_y_continuous(breaks = pretty_breaks(),
+                     expand = expansion(mult = c(0.1, 0.15))) +
+  labs(title    = "PacBio HiFi pass count (np) distribution",
+       subtitle = sprintf("%d PacBio sample%s  |  one point = per-sample median np  |  red diamond = mean across samples",
+                          n_pacbio_samples, ifelse(n_pacbio_samples == 1, "", "s")),
+       x = NULL,
+       y = "Median pass count (np) per sample") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+
+print(p_pacbio_np)
+
+plot_path <- file.path(plots_dir, "pacbio_np_distribution.png")
+if (!file.exists(plot_path) || !params$resume) {
+  ggsave(filename = plot_path, plot = p_pacbio_np,
+         width = 8, height = 6, dpi = params$plot_dpi, bg = "white")
+}
+```
+
+## Read quality (rq) distribution
+
+```{r pacbio_rq_plot, echo=FALSE, message=FALSE, eval=any(is_pacbio)}
+# Per-sample median rq values — one point per sample, summarised
+n_pacbio_samples <- nrow(pacbio_summary)
+
+p_pacbio_rq <- ggplot(pacbio_summary, aes(x = "All PacBio samples", y = median_rq)) +
+  geom_boxplot(outlier.shape = NA, width = 0.4,
+               fill = "grey92", colour = "grey40") +
+  geom_jitter(height = 0, width = 0.1, alpha = 0.7,
+              size = 2.5, colour = "grey30") +
+  stat_summary(fun = mean, geom = "point", shape = 18,
+               colour = "red", size = 4, alpha = 0.6) +
+  stat_summary(fun = mean, geom = "text",
+               aes(label = sprintf("%.4f", after_stat(y))),
+               colour = "red", size = 3.5, vjust = -1.2, alpha = 0.7) +
+  scale_y_continuous(breaks = pretty_breaks(),
+                     limits = c(NA, 1),
+                     expand = expansion(mult = c(0.1, 0.15))) +
+  labs(title    = "PacBio HiFi read quality (rq) distribution",
+       subtitle = sprintf("%d PacBio sample%s  |  one point = per-sample median rq  |  red diamond = mean across samples  |  rq capped at 1",
+                          n_pacbio_samples, ifelse(n_pacbio_samples == 1, "", "s")),
+       x = NULL,
+       y = "Median read quality (rq) per sample") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+
+print(p_pacbio_rq)
+
+plot_path <- file.path(plots_dir, "pacbio_rq_distribution.png")
+if (!file.exists(plot_path) || !params$resume) {
+  ggsave(filename = plot_path, plot = p_pacbio_rq,
+         width = 8, height = 6, dpi = params$plot_dpi, bg = "white")
+}
+```
+
+## np vs read length
+
+Per-read pass count plotted against per-read length. For PacBio HiFi the expected relationship is mildly negative: longer SMRT-bell inserts take longer to read so the polymerase makes fewer passes within a fixed movie. The linear fit and R² quantify the strength of that relationship across the cohort.
+
+```{r pacbio_np_vs_length, echo=FALSE, message=FALSE, eval=any(is_pacbio)}
+# Long-format np + read length per read, joined from seq widths
+np_len_long <- do.call(rbind, lapply(names(read_metadata), function(fs) {
+  md <- read_metadata[[fs]]
+  if (nrow(md) == 0) return(NULL)
+  seq_fs <- seq[[fs]]
+  if (is.null(seq_fs) || length(seq_fs) == 0) return(NULL)
+  len_df <- data.frame(read_name = names(seq_fs),
+                       read_length = width(seq_fs),
+                       stringsAsFactors = FALSE)
+  joined <- dplyr::inner_join(
+    md[, c("read_name", "np")],
+    len_df,
+    by = "read_name"
+  )
+  if (nrow(joined) == 0) return(NULL)
+  joined$file_stem <- fs
+  joined
+}))
+
+# Guard against empty data (e.g., aggressive np filter removed all reads)
+if (is.null(np_len_long) || nrow(np_len_long) == 0) {
+
+  message("No PacBio reads available for np vs length plot")
+
+} else {
+
+  # Downsample for plotting performance — honours params$pacbio_scatter_downsample
+  # NA / NULL / non-positive => plot all reads
+  n_points       <- nrow(np_len_long)
+  downsample_cap <- params$pacbio_scatter_downsample
+  valid_cap      <- !is.null(downsample_cap) && !is.na(downsample_cap) &&
+                    is.numeric(downsample_cap) && downsample_cap > 0
+  downsampled    <- valid_cap && n_points > downsample_cap
+  if (downsampled) {
+    set.seed(123)
+    np_len_long <- np_len_long[sample(seq_len(n_points), downsample_cap), ]
+  }
+
+  # Linear model (robust to degenerate data)
+  lm_fit <- tryCatch(
+    lm(np ~ read_length, data = np_len_long),
+    error = function(e) NULL
+  )
+
+  eq_label <- NA_character_
+  if (!is.null(lm_fit) && all(!is.na(coef(lm_fit)))) {
+    slope     <- unname(coef(lm_fit)["read_length"])
+    intercept <- unname(coef(lm_fit)["(Intercept)"])
+    r2        <- summary(lm_fit)$r.squared
+    n_obs     <- nobs(lm_fit)
+
+    sign_str   <- if (intercept >= 0) "+" else "\u2212"  # en-dash for negative
+    eq_label <- sprintf(
+      "np = %.4f \u00d7 length %s %.2f\nR\u00b2 = %.3f  |  n = %s",
+      slope, sign_str, abs(intercept),
+      r2, scales::comma(n_obs)
+    )
+  }
+
+  p_pacbio_np_len <- ggplot(np_len_long,
+                            aes(x = read_length, y = np)) +
+    geom_point(alpha = 0.2, size = 0.5, colour = "grey30") +
+    geom_smooth(method = "lm", formula = y ~ x, se = TRUE) +
+    scale_x_continuous(labels = scales::comma, breaks = pretty_breaks()) +
+    scale_y_continuous(breaks = pretty_breaks()) +
+    labs(title    = "PacBio HiFi pass count vs read length",
+         subtitle = if (downsampled) {
+           sprintf("Showing %s of %s reads (random subset)",
+                   scales::comma(nrow(np_len_long)),
+                   scales::comma(n_points))
+         } else {
+           sprintf("%s read%s", scales::comma(n_points), ifelse(n_points == 1, "", "s"))
+         },
+         x = "Read length (bp)",
+         y = "Pass count (np)") +
+    theme_minimal()
+
+  if (!is.na(eq_label)) {
+    p_pacbio_np_len <- p_pacbio_np_len +
+      annotate("text", x = Inf, y = Inf, label = eq_label,
+               hjust = 1.05, vjust = 1.5,
+               size = 3.8)
+  }
+
+  print(p_pacbio_np_len)
+
+  plot_path <- file.path(plots_dir, "pacbio_np_vs_length.png")
+  if (!file.exists(plot_path) || !params$resume) {
+    ggsave(filename = plot_path, plot = p_pacbio_np_len,
+           width = 10, height = 6, dpi = params$plot_dpi, bg = "white")
+  }
+}
+```
+
+## Per-sample table
+
+```{r pacbio_table_export, echo=FALSE, eval=any(is_pacbio)}
+DT::datatable(
+  pacbio_summary,
+  caption = "PacBio HiFi per-sample np and rq summary",
+  options = list(
+    pageLength = 25,
+    scrollX = TRUE,
+    scrollY = "500px",
+    autoWidth = TRUE,
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel')
+  ),
+  rownames = FALSE,
+  filter = 'top',
+  class = 'cell-border stripe compact',
+  style = 'bootstrap',
+  fillContainer = FALSE
+) %>%
+  DT::formatStyle(columns = colnames(pacbio_summary), fontSize = '85%') %>%
+  DT::formatRound(columns = c('mean_np', 'median_np', 'sd_np',
+                              'mean_rq', 'median_rq', 'sd_rq'), digits = 3)
+
+write_excel_function(
+  named_list = list("pacbio_summary" = pacbio_summary),
+  path = file.path(qc_dir, "qc.xlsx"),
+  overwrite_sheet = TRUE
+)
+```
+
+```{r t_pacbio_end, echo=FALSE, eval=any(is_pacbio)}
+timings["PacBio metrics"] <- proc.time()["elapsed"] - .t
 ```
 
 ---
@@ -769,6 +1129,16 @@ sequencing_qc_summary <-
 timings["QC metrics"] <- proc.time()["elapsed"] - .t
 ```
 
+```{r qc_summary_pacbio_merge, echo=FALSE}
+if (exists("pacbio_summary")) {
+  sequencing_qc_summary <- sequencing_qc_summary %>%
+    dplyr::left_join(
+      pacbio_summary %>% dplyr::select(-n_reads),
+      by = "file_stem"
+    )
+}
+```
+
 ## QC metrics
 
 ```{r qc_plot, echo=FALSE, message=FALSE}
@@ -809,7 +1179,7 @@ ggsave(
 # Display table
 DT::datatable(
   sequencing_qc_summary,
-  caption = "Sequencing QC",
+  caption = "Sequencing QC (np/rq columns populated for PacBio HiFi samples only)",
   options = list(
     pageLength = 25,
     scrollX = TRUE,
@@ -1357,7 +1727,10 @@ module1_output <- list(
   trim_summary     = if (exists("count_trimmed")) count_trimmed else NULL,
   trim_by_adapter  = if (exists("trim_by_adapter")) trim_by_adapter else NULL,
   trim_by_sample   = if (exists("trim_by_sample")) trim_by_sample else NULL,
-  final_summary    = final_summary
+  final_summary    = final_summary,
+  is_pacbio        = if (exists("is_pacbio")) is_pacbio else NULL,
+  read_metadata    = if (exists("read_metadata")) read_metadata else NULL,
+  pacbio_summary   = if (exists("pacbio_summary")) pacbio_summary else NULL
 )
 
 # Create results directory
@@ -1411,11 +1784,14 @@ manifest <- data.frame(
   description = c(
     "Trimmed sequences ready for alignment (named list of XStringSet, one per sample)",
     "Input file metadata: names, formats, paths, paired-end status",
-    "Per-sample QC metrics: read count, mean/median length, Phred quality",
+    "Per-sample QC metrics: read count, mean/median length, Phred quality (plus np/rq summaries for PacBio samples)",
     "Read counts by adapter and sample (NULL if trimming disabled)",
     "Trimming statistics per adapter across all samples (NULL if trimming disabled)",
     "Trimming statistics per adapter per sample (NULL if trimming disabled)",
-    "Final read counts and mean lengths after all processing steps"
+    "Final read counts and mean lengths after all processing steps",
+    "Logical vector of PacBio HiFi detection per sample, named by file_stem (all FALSE for non-PacBio cohorts)",
+    "Per-read aux tags (read_name, np, rq, ec, zm, bq) for PacBio samples only — named list keyed by file_stem (NULL if no PacBio samples)",
+    "Per-sample np/rq summary (mean, median, sd) for PacBio samples (NULL if no PacBio samples)"
   ),
   class = sapply(module1_output, function(x) if (is.null(x)) "NULL" else class(x)[1]),
   size = sapply(module1_output, function(x) {

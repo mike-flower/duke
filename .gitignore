@@ -4,12 +4,10 @@
 .RData
 .Ruserdata
 .Rapp.history
-
+ 
 # Exclude specific files
-/scripts/duke_run_local.R
 /scripts/duke_run_local-fs.R
-scripts/duke_run_temp.R
-
+ 
 # Exclude specific folders
 /demo/
 /logs/
@@ -18,9 +16,9 @@ scripts/duke_run_temp.R
 /dev_files/
 /scripts/archive/
 /modules/archive/
-
+ 
 # Temporary files
 *.tmp
-
+ 
 # macOS system junk
 .DS_Store

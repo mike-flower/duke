@@ -1102,48 +1102,66 @@ DT::datatable(
   DT::formatRound(columns = c('mean_pre', 'mean_left', 'mean_mid', 'mean_right', 'mean_post'), digits = 1)
 ```
 
-```{r plot_mid_length, echo=FALSE, fig.height=5, fig.width=5}
-# Summarise to one median mid length per sample (avoids 420k-point histogram)
-mid_summary <- alignment_split %>%
-  filter(!is.na(mid)) %>%
+```{r plot_segment_lengths, echo=FALSE, fig.height=5, fig.width=8}
+# Per-sample median for each of the five segments (pre, left, mid, right, post)
+segment_medians <- alignment_split %>%
   group_by(file_stem) %>%
-  dplyr::summarise(median_mid_bp = median(nchar(mid), na.rm = TRUE),
-                   n_reads       = n(),
-                   .groups = "drop")
+  dplyr::summarise(
+    pre   = median(nchar(pre),   na.rm = TRUE),
+    left  = median(nchar(left),  na.rm = TRUE),
+    mid   = median(nchar(mid),   na.rm = TRUE),
+    right = median(nchar(right), na.rm = TRUE),
+    post  = median(nchar(post),  na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  tidyr::pivot_longer(
+    cols      = c(pre, left, mid, right, post),
+    names_to  = "segment",
+    values_to = "median_length_bp"
+  ) %>%
+  dplyr::mutate(
+    segment = factor(segment, levels = c("pre", "left", "mid", "right", "post"))
+  )
 
-n_samples <- nrow(mid_summary)
+n_samples <- length(unique(segment_medians$file_stem))
 
-if (nrow(mid_summary) > 0) {
-  p_mid_length <- ggplot(mid_summary, aes(x = "", y = median_mid_bp)) +
+if (nrow(segment_medians) > 0 && any(!is.na(segment_medians$median_length_bp))) {
+  p_segment_lengths <- ggplot(segment_medians,
+                              aes(x = segment, y = median_length_bp)) +
     geom_boxplot(outlier.shape = NA, width = 0.35,
                  fill = "grey92", colour = "grey40") +
-    geom_jitter(width = 0.08, height = 0, size = 3,
-                colour = "#619CFF", alpha = 0.8) +
+    geom_jitter(width = 0.08, height = 0, size = 2,
+                colour = "#619CFF", alpha = 0.6) +
     stat_summary(fun = mean, geom = "point", shape = 18,
                  colour = "red", size = 4, alpha = 0.6) +
-    scale_y_continuous(labels = scales::comma) +
-    labs(title    = "Repeat region length (mid segment)",
-         subtitle = sprintf("Median per sample  |  n = %d samples", n_samples),
-         x        = NULL,
-         y        = "Median mid segment length (bp)") +
-    theme_bw() +
-    theme(axis.ticks.x = element_blank())
+    stat_summary(fun = mean, geom = "text",
+                 aes(label = scales::comma(after_stat(y), accuracy = 1)),
+                 colour = "red", size = 3.5, alpha = 0.8,
+                 angle = 45, hjust = -0.2, vjust = -0.5) +
+    scale_y_continuous(labels = scales::comma,
+                       expand = expansion(mult = c(0.05, 0.18))) +
+    labs(title    = "Segment lengths",
+         subtitle = sprintf("Median per sample  |  n = %d sample%s  |  red diamond = mean across samples",
+                            n_samples, ifelse(n_samples == 1, "", "s")),
+         x        = "Segment",
+         y        = "Median segment length (bp)") +
+    theme_bw()
 
-  print(p_mid_length)
+  print(p_segment_lengths)
 
   ggsave(
-    filename = file.path(plots_dir, "repeat_segment_length.png"),
-    plot     = p_mid_length,
-    width    = 5,
+    filename = file.path(plots_dir, "segment_lengths.png"),
+    plot     = p_segment_lengths,
+    width    = 8,
     height   = 5,
     dpi      = params$plot_dpi,
     bg       = "white"
   )
-  rm(p_mid_length)
+  rm(p_segment_lengths)
 } else {
-  message("No valid mid segments for plotting")
+  message("No valid segment lengths for plotting")
 }
-rm(mid_summary)
+rm(segment_medians)
 
 # Per-sample plots (gated by plot_per_sample)
 if (params$plot_per_sample) {

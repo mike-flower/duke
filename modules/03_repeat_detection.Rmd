@@ -455,9 +455,16 @@ if (mean_conc >= 0.95) {
 
 # Flank length QC
 
-The left and right flank lengths reflect the Module 3 repeat tract repositioning. Total combined flank length (left + right) should be stable per allele — the repeat is the primary source of read-to-read variation. Variation in total flank length indicates chimeras, truncated reads, or alignment boundary shifts.
+Left and right flank lengths are determined by where Module 3 places the repeat tract boundaries within each read — i.e. they reflect how the repeat detection step has split each read into `[pre][left flank][repeat][right flank][post]` segments. Total combined flank length (left + right) should be stable per allele — the repeat is the primary source of read-to-read variation. Variation in total flank length indicates chimeras, truncated reads, or alignment boundary shifts.
 
 **Flank length filtering:** controlled by `rm_flank_length_outliers` (default `FALSE`) and `flank_iqr_multiplier`. If enabled, reads with outlier combined flank lengths are removed from `alignment_counts` here and the filtered table propagates to all downstream modules (4-7). Review the plots and sweep table below before enabling — the effect on the count method comparison immediately below shows whether outlier reads cluster at particular repeat lengths.
+
+**What the plots in this section show:**
+
+1. **Flank length distributions** — boxplot + histogram of combined flank length per sample. Tight, unimodal distributions are healthy.
+2. **Flank outlier filter sweep** — % of reads each sample would lose at each IQR multiplier from 0 to 5. Vertical lines mark 1.5× (reference) and your current `flank_iqr_multiplier` setting if different. The flatter the curve, the less sensitive that sample is to threshold choice. Use this to pick a multiplier that removes obvious outliers without trimming the bulk of reads.
+3. **Filter effect on read counts** — only meaningful when `rm_flank_length_outliers = TRUE`; compares per-sample read counts before/after the applied filter.
+4. **Count method comparison under hypothetical filter thresholds** — *what-if* view of per-sample mean repeat counts at no filter / 1.5× / your setting. **This is hypothetical** — the only filter actually applied to `alignment_counts` is what `rm_flank_length_outliers` controls. Use it to predict the downstream impact of changing the threshold.
 
 ```{r t_flank_start, echo=FALSE}
 .t <- proc.time()["elapsed"]
@@ -1065,9 +1072,9 @@ p_cmc_overlay <- ggplot(cmc_overlay,
   scale_fill_manual(values  = series_colours, name = NULL) +
   scale_x_continuous(limits = c(ax_all_min - ax_all_pad, ax_all_max + ax_all_pad)) +
   scale_y_continuous(limits = c(ax_all_min - ax_all_pad, ax_all_max + ax_all_pad)) +
-  labs(title    = "Count method comparison: effect of flank IQR filter",
+  labs(title    = "Count method comparison: hypothetical filter outcomes",
        subtitle = sprintf(
-         "Dashed = identity | Shaded = 95%% CI | n = %d samples%s",
+         "Each series shows what per-sample mean would be IF that filter were applied — not the currently-applied state. Dashed = identity | shaded = 95%% CI | n = %d samples%s",
          nrow(cmc_all),
          if (is.null(cmc_custom)) "" else
            sprintf(" | Orange = %.1f x IQR (user setting)", iqr_mult)),
@@ -1150,6 +1157,9 @@ if (params$plot_histograms) {
 n_samples <- length(unique(alignment_counts$file_stem))
 
 # Build ordered sample index (used by heatmap and lookup table)
+# Order: dataset order (first appearance in alignment_counts), NOT by median repeat count
+sample_order <- unique(alignment_counts$file_stem)
+
 repeat_summary_scatter <- alignment_counts %>%
   group_by(file_stem) %>%
   dplyr::summarise(
@@ -1158,8 +1168,10 @@ repeat_summary_scatter <- alignment_counts %>%
     q75_rc    = quantile(repeat_count, 0.75, na.rm = TRUE),
     .groups   = "drop"
   ) %>%
-  dplyr::arrange(median_rc) %>%
-  dplyr::mutate(sample_idx = seq_len(n()))
+  dplyr::mutate(file_stem = factor(file_stem, levels = sample_order)) %>%
+  dplyr::arrange(file_stem) %>%
+  dplyr::mutate(file_stem  = as.character(file_stem),
+                sample_idx = seq_len(n()))
 
 # --- Heatmap: distribution across all samples ---
 # Samples on x (indexed by median order — no crowded labels)
@@ -1191,9 +1203,9 @@ p_heatmap <- ggplot(heatmap_data, aes(x = sample_idx, y = rc_bin, fill = frac)) 
   scale_y_continuous(breaks = scales::pretty_breaks(n = 10), expand = c(0, 0)) +
   labs(title    = "Repeat count distribution heatmap",
        subtitle = sprintf(
-         "Samples ordered by median repeat count  |  Fill = %% of reads  |  n = %d samples  |  See heatmap_sample_index in repeat_detection.xlsx",
+         "Samples in dataset order  |  Fill = %% of reads  |  n = %d samples  |  See heatmap_sample_index in repeat_detection.xlsx for sample_idx \u2194 file_stem lookup",
          n_samples),
-       x        = "Sample index (ordered by median repeat count)",
+       x        = "Sample index (dataset order)",
        y        = "Repeat count") +
   theme_bw() +
   theme(panel.grid  = element_blank(),
@@ -1262,12 +1274,14 @@ if (requireNamespace("ggridges", quietly = TRUE)) {
   ridge_point_jitter_height <- if (!is.null(params$ridge_point_jitter_height)) params$ridge_point_jitter_height else 0.1
 
   p_ridge_all <- ggplot(alignment_counts,
-                        aes(x = repeat_count, y = file_stem, fill = file_stem))
+                        aes(x = repeat_count, y = file_stem))
 
   if (isTRUE(ridge_show_points)) {
     p_ridge_all <- p_ridge_all +
       stat_density_ridges(
         geom             = "density_ridges",
+        fill             = "#619CFF",
+        colour           = "grey30",
         alpha            = 0.7, scale = 2,
         jittered_points  = TRUE,
         point_size       = ridge_point_size,
@@ -1276,7 +1290,8 @@ if (requireNamespace("ggridges", quietly = TRUE)) {
       )
   } else {
     p_ridge_all <- p_ridge_all +
-      geom_density_ridges(alpha = 0.7, scale = 2)
+      geom_density_ridges(fill = "#619CFF", colour = "grey30",
+                          alpha = 0.7, scale = 2)
   }
 
   p_ridge_all <- p_ridge_all +
@@ -1407,9 +1422,11 @@ module3_output <- list(
 repeat_excel_path <- file.path(repeat_dir, "repeat_detection.xlsx")
 
 heatmap_sample_index <- clean_summary %>%
-  dplyr::select(file_stem, median_repeats) %>%
-  dplyr::arrange(median_repeats) %>%
-  dplyr::mutate(sample_index = row_number()) %>%
+  dplyr::mutate(file_stem = factor(file_stem,
+                                   levels = unique(alignment_counts$file_stem))) %>%
+  dplyr::arrange(file_stem) %>%
+  dplyr::mutate(file_stem    = as.character(file_stem),
+                sample_index = row_number()) %>%
   dplyr::select(sample_index, file_stem, median_repeats)
 
 write_excel_function(

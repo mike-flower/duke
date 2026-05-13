@@ -97,6 +97,14 @@ option_list <- list(
   make_option("--check_duplicate_readnames", type="logical", default=TRUE,
               help="Check for duplicate read names and keep longest copy. Safe to set FALSE for PacBio CCS data [default: %default]"),
   
+  make_option("--np_min", type="integer", default=NULL,
+              help="Drop PacBio HiFi reads with np < N (applies only to detected PacBio samples; FASTQ/FASTA/non-PacBio BAM are unaffected) [default: NULL = no filter]",
+              metavar="N"),
+  
+  make_option("--pacbio_scatter_downsample", type="integer", default=50000,
+              help="Max points to render in the PacBio np-vs-read-length scatter (NA = plot all, may be slow for very large cohorts). Applies only to detected PacBio samples [default: %default]",
+              metavar="N"),
+  
   # ===========================================================================
   # Adapter trimming
   # ===========================================================================
@@ -459,6 +467,8 @@ params <- list(
   r2_pattern = args$r2_pattern,
   select_one_of_pair = args$select_one_of_pair,
   downsample = if (!is.null(args$downsample)) args$downsample else NA,
+  np_min = if (!is.null(args$np_min)) args$np_min else NULL,
+  pacbio_scatter_downsample = args$pacbio_scatter_downsample,
   trim = args$trim,
   trim_max_mismatch = args$trim_max_mismatch,
   trim_with_indels = args$trim_with_indels,
@@ -584,6 +594,10 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "select_one_of_pair", params$select_one_of_pair))
   cat(sprintf("%-35s: %s\n", "downsample", if(is.na(params$downsample)) "NA (disabled)" else params$downsample))
   cat(sprintf("%-35s: %s\n", "check_duplicate_readnames", params$check_duplicate_readnames))
+  cat(sprintf("%-35s: %s\n", "np_min",
+              if (is.null(params$np_min)) "NULL (no filter; PacBio only)" else paste0(params$np_min, " (PacBio only)")))
+  cat(sprintf("%-35s: %s\n", "pacbio_scatter_downsample",
+              if (is.na(params$pacbio_scatter_downsample)) "NA (plot all)" else params$pacbio_scatter_downsample))
   
   cat("\n═══════════════════════════════════════════════════════════════\n")
   cat("ADAPTER TRIMMING\n")
