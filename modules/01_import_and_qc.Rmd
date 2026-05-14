@@ -288,7 +288,7 @@ if (params$resume && safe_load_cache(my_path, environment())) {
 }
 ```
 
-## Optional pass-count (np) filter
+## Optional pass count filter
 
 ```{r pacbio_np_filter, echo=FALSE, results='asis', eval=any(is_pacbio)}
 if (is.null(params$np_min) || is.na(params$np_min)) {
@@ -370,7 +370,7 @@ pacbio_summary <- do.call(rbind, lapply(names(read_metadata), function(fs) {
 rownames(pacbio_summary) <- NULL
 ```
 
-## Pass count (np) distribution
+## Pass count distribution
 
 ```{r pacbio_np_plot, echo=FALSE, message=FALSE, eval=any(is_pacbio)}
 # Per-sample median np values — one point per sample, summarised
@@ -406,7 +406,7 @@ if (!file.exists(plot_path) || !params$resume) {
 }
 ```
 
-## Read quality (rq) distribution
+## Read quality distribution
 
 ```{r pacbio_rq_plot, echo=FALSE, message=FALSE, eval=any(is_pacbio)}
 # Per-sample median rq values — one point per sample, summarised
@@ -443,9 +443,9 @@ if (!file.exists(plot_path) || !params$resume) {
 }
 ```
 
-## np vs read length
+## Pass count vs read length
 
-Per-read pass count plotted against per-read length. For PacBio HiFi the expected relationship is mildly negative: longer SMRT-bell inserts take longer to read so the polymerase makes fewer passes within a fixed movie. The linear fit and R² quantify the strength of that relationship across the cohort.
+Per-read pass count (np) plotted against per-read length. For PacBio HiFi the expected relationship is mildly negative: longer SMRT-bell inserts take longer to read so the polymerase makes fewer passes within a fixed movie. The linear fit and R² quantify the strength of that relationship across the cohort.
 
 ```{r pacbio_np_vs_length, echo=FALSE, message=FALSE, eval=any(is_pacbio)}
 # Long-format np + read length per read, joined from seq widths
