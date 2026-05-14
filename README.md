@@ -1101,8 +1101,11 @@ grep "knit_root_dir" scripts/duke_run.R    # Should return a line
 
 Cross-cutting plot and clarity refinements following the v2.3.0 PacBio HiFi run review, plus a clustering bugfix.
 
+**Module 1 — Import and QC (clarity)**
+- 📝 PacBio HiFi section heading cleanup: dropped redundant `(np)` / `(rq)` parentheticals from subsection headings since the aux tags are defined once at the section top. Headings now read `Pass count distribution`, `Read quality distribution`, `Pass count vs read length`, etc. First prose mention under each heading uses the `Pass count (np)` convention
+
 **Module 2 — Alignment**
-- ✨ Segment lengths plot redesigned: all five segments (`pre`, `left`, `mid`, `right`, `post`) on a single x-axis in order, y-axis = per-sample median segment length, boxplot + jittered sample points + red mean diamond. Replaces the previous mid-only plot. Output PNG renamed `repeat_segment_length.png` → `segment_lengths.png`
+- ✨ Segment lengths plot redesigned: all five segments (`pre`, `left`, `mid`, `right`, `post`) on a single x-axis in order, y-axis = per-sample median segment length, boxplot + jittered sample points + red mean diamond, with mean values labelled above each diamond (rotated 45°). Replaces the previous mid-only plot. Output PNG renamed `repeat_segment_length.png` → `segment_lengths.png`
 
 **Module 3 — Repeat detection**
 - 📝 Rewrote the unclear "Module 3 repeat tract repositioning" sentence in the Flank length QC section to state plainly what determines flank lengths
@@ -1113,6 +1116,9 @@ Cross-cutting plot and clarity refinements following the v2.3.0 PacBio HiFi run 
 
 **Module 4 — Allele calling**
 - 🐛 R (`repeat_cluster`) and H (`haplotype_cluster`) columns now populated when clustering by a single dimension. Previously both columns were `NA_character_` for `cluster_by = "repeat"` or `cluster_by = "haplotype"`. Now `repeat_cluster = as.character(cluster_number)` for repeat-only, and `haplotype_cluster = as.character(cluster_number)` for haplotype-only. The `"both"` strategy behaviour is unchanged. R and H reflect original (pre-renumbering) cluster IDs, matching the `"both"` strategy convention
+
+**Module 6 — Range analysis (interpretation)**
+- 📝 New markdown section above the modal-vs-mean plot explains how to read per-sample skew (point position relative to identity line) and the three lm-fit patterns: slope ≈ 1 with intercept ≈ 0 (symmetric distributions, typical of narrow ranges); slope ≈ 1 with intercept > 0 (uniform right-skew across the cohort); slope < 1 with intercept > 0 (skew direction flips with mode — the signature of open-ended ranges capturing both the inherited and the expanded alleles). Plot chunk split to accommodate the prose
 
 ### v2.3.0 (May 2026)
 - ✨ **NEW:** PacBio HiFi auto-detection in Module 1 — per-sample, keyed by file_stem; checks the `np:i:` tag on the first record of each BAM and falls back to `@PG PN=ccs/skera/lima` header lines (case-insensitive). Mixed cohorts handled correctly

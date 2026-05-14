@@ -919,7 +919,25 @@ datatable(distribution_summary[, key_cols],
 timings["Distribution summaries"] <- proc.time()["elapsed"] - .t
 ```
 
-```{r plot_distributions, echo=FALSE, fig.width=10, fig.height=8, message=FALSE}
+## Modal vs mean repeat lengths by range
+
+The plot below has one panel per analysis range; each point is one sample, the dashed grey line is identity (mean = mode), and the blue line is a per-range linear-model fit.
+
+**Per-sample skew** is read from each point's position relative to identity:
+
+- Above the line → mean > mode → right-skewed (long upper tail of expansion)
+- On the line → symmetric
+- Below the line → mean < mode → left-skewed
+
+**Three patterns of the lm fit:**
+
+1. **Slope ≈ 1, intercept ≈ 0** — points sit on the identity line; distributions within the range are symmetric. Narrow ranges (e.g. `33–57`, `40–50`) enforce this almost by construction.
+2. **Slope ≈ 1, intercept > 0** — the fit parallels identity but offset upward; uniform right-skew across the cohort.
+3. **Slope < 1, intercept > 0** — the fit is shallower than identity and crosses it mid-range. Low-mode samples sit *above* the line (right-skewed); high-mode samples sit *on or below* it (symmetric or slightly left-skewed). This is the signature of open-ended ranges (e.g. `15–NA`) that capture both the inherited and the expanded alleles: at low modes the expansion tail pulls the mean up; at high modes the smaller inherited reads pull the mean slightly down.
+
+A slope of 1 does *not* mean "no skew" and a slope < 1 does *not* mean "left-skewed cohort" — the slope tells you whether the skew direction is consistent across the cohort or flips with mode. Open-ended ranges with slope < 1 effectively fingerprint the inherited↔expanded continuum in the data.
+
+```{r plot_modal_vs_mean, echo=FALSE, fig.width=10, fig.height=8, message=FALSE}
 # --- Clean non-finite values (NaN, Inf, -Inf) before plotting ---
 # Edge-case samples (e.g. all reads at modal → tail_balance = 0/0 = NaN,
 # mean ≈ 0 → CV = Inf) cause ggplot to fail when computing axis breaks.
@@ -966,7 +984,9 @@ p_modal_mean <- ggplot(distribution_summary,
 print(p_modal_mean)
 ggsave(file.path(plots_dir, "04_modal_vs_mean.png"),
        p_modal_mean, width = 16, height = 12, dpi = params$plot_dpi)
+```
 
+```{r plot_distributions, echo=FALSE, fig.width=10, fig.height=8, message=FALSE}
 # ── Plot 03: Distribution spread (SD) by range ──────────────────────────────────
 p_spread <- ggplot(distribution_summary,
                    aes(x = analysis_range_name, y = sd)) +
