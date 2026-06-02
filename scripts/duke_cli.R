@@ -303,6 +303,12 @@ option_list <- list(
   make_option("--control_aggregation_method", type="character", default="median",
               help="Control aggregation method: mean/median/trimmed_mean [default: %default]",
               metavar="METHOD"),
+
+  make_option("--cohort_plot_by", type="character", default="group,time",
+              help=paste("Dimensions for Module 6 group/time plots (comma-separated):",
+                         "'group,time', 'group', 'time', or '' for all samples combined.",
+                         "Intersected with what the settings file provides [default: %default]"),
+              metavar="DIMS"),
   
   # ===========================================================================
   # Module 7: Repeat Distribution Visualisation
@@ -405,6 +411,10 @@ if (length(cluster_by_parsed) == 1 && cluster_by_parsed[1] == "none") {
   cluster_by_parsed <- "none"
 }
 repeat_distribution_metrics <- strsplit(args$repeat_distribution_metrics, ",")[[1]]
+
+# cohort_plot_by: comma-separated -> character vector; trim blanks so "" -> character(0)
+cohort_plot_by <- trimws(strsplit(args$cohort_plot_by, ",")[[1]])
+cohort_plot_by <- cohort_plot_by[cohort_plot_by != ""]
 
 # Parse run_modules
 run_modules <- as.integer(strsplit(args$run_modules, ",")[[1]])
@@ -512,6 +522,7 @@ params <- list(
   control_sample_selection = args$control_sample_selection,
   control_setpoint_metric = args$control_setpoint_metric,
   control_aggregation_method = args$control_aggregation_method,
+  cohort_plot_by = cohort_plot_by,
   repeat_histogram = args$repeat_histogram,
   repeat_histogram_binwidth = args$repeat_histogram_binwidth,
   repeat_scatter = args$repeat_scatter,
@@ -670,6 +681,8 @@ if (args$dry_run) {
   cat(sprintf("%-35s: %s\n", "control_sample_selection", params$control_sample_selection))
   cat(sprintf("%-35s: %s\n", "control_setpoint_metric", params$control_setpoint_metric))
   cat(sprintf("%-35s: %s\n", "control_aggregation_method", params$control_aggregation_method))
+  cat(sprintf("%-35s: %s\n", "cohort_plot_by",
+              if (length(params$cohort_plot_by)) paste(params$cohort_plot_by, collapse = ", ") else "(all samples)"))
   
   cat("\n═══════════════════════════════════════════════════════════════\n")
   cat("REPEAT VISUALISATION (MODULE 7)\n")

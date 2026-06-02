@@ -637,13 +637,6 @@ if (params$repeat_density) {
     full_dir <- file.path(density_by_sample_dir, "full")
     if (!dir.exists(full_dir)) dir.create(full_dir, recursive = TRUE)
 
-    # Add group for fill colouring (matching Module 6 format)
-    sample_group <- distribution_summary %>%
-      filter(file_stem == my_sample) %>%
-      pull(group) %>%
-      unique() %>%
-      .[1]
-
     p_density_full <- ggplot(sample_data_full,
                              aes(x = .data[[repeat_method]], y = "")) +
       geom_density_ridges(fill = "steelblue", colour = "black",

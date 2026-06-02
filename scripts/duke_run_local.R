@@ -413,6 +413,17 @@ params <- list(
   #   - "trimmed_mean" = 10% trimmed mean (excludes extreme 10%)
   control_aggregation_method = "median",
   
+  # cohort_plot_by: Which dimensions to use for the "by group/time" plots in Module 6
+  #   (experiment map + density ridge plots). Expresses INTENT; the actual
+  #   dimensions used are the intersection with what the settings file provides.
+  #   - c("group", "time") = plot by both where available (default)
+  #   - c("group")         = plot by group only (ignore time even if present)
+  #   - c("time")          = plot by time only (ignore group even if present)
+  #   - character(0)        = single combined plot of all samples
+  #   Missing values within an active dimension are handled gracefully:
+  #     blank group -> "ungrouped"; blank time -> labelled "(t=)" and ordered last.
+  cohort_plot_by = c("group", "time"),
+  
   # -----------------------------------------------------------------------------
   # Module 7: Repeat Distribution Visualisation
   # -----------------------------------------------------------------------------

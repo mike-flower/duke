@@ -116,9 +116,9 @@ Settings Excel defines analysis ranges, group assignments, and control samples.
 - `floor`: Minimum frequency threshold per range (e.g., `[3][3]`)
 - `max_peaks`: Maximum peaks to detect per range (e.g., `[2][1]`)
 - `manual_control_repeat_length`: Optional manual control values (e.g., `[14][100]`)
-- `group`: Group assignment for comparisons
+- `group`: Group assignment for comparisons (optional; controls cohort plots via `cohort_plot_by`)
 - `group_control_sample`: Flag control samples (1 = control, NA = experimental)
-- `time`: Timepoint or order
+- `time`: Timepoint or order (optional; controls cohort plots via `cohort_plot_by`)
 - `exclude`: Flag samples to exclude from analysis
 
 ```{r load_settings, echo=FALSE}
@@ -144,6 +144,16 @@ if (file_ext == "csv") {
 # Convert file_name to file_stem (remove extensions)
 settings <- settings %>%
   mutate(file_stem = str_remove(file_name, "\\.(fastq|fasta|fa|bam)(\\.gz)?$"))
+
+# group, time, group_control_sample and exclude are optional (see settings spec)
+# but are referenced unconditionally downstream (joins, control selection). Ensure
+# they exist — created as all-NA if absent — so any combination of omitted optional
+# columns is safe. NA is the correct default in every case: no group/time, no
+# flagged controls (group_control_sample), and nothing excluded (exclude).
+for (.col in c("group", "time", "group_control_sample", "exclude")) {
+  if (!.col %in% names(settings)) settings[[.col]] <- NA
+}
+rm(.col)
 
 message("Settings loaded from: ", params$path_settings)
 message("  Format: ", toupper(file_ext))
@@ -283,16 +293,53 @@ for (rng in names(settings_parsed$ranges_list[[1]])) {
 # Experiment overview
 
 ```{r plot_experiment_map, echo=FALSE, fig.width=10, fig.height=5, message=FALSE}
-# Build sample map: group × time, bubble size = number of samples
+# ── group / time as optional plotting dimensions ────────────────────────────
+# params$cohort_plot_by expresses user INTENT (e.g. c("group", "time"), c("time"),
+# c("group"), or character(0)); the settings columns determine AVAILABILITY.
+# The dimensions actually used are the intersection of the two, so the report
+# degrades cleanly when a column is blank or only partially populated.
+cohort_plot_by <- params$cohort_plot_by
+if (is.null(cohort_plot_by)) cohort_plot_by <- c("group", "time")   # back-compatible default
+
+# Normalise group to character with blank/"" -> NA so "" (from CSV) and NA
+# (from Excel) are treated identically and a catch-all "ungrouped" level works.
+# Leave `time` untouched (preserves its type in the xlsx output) and derive a
+# numeric helper for ordering / availability instead.
+settings <- settings %>%
+  mutate(
+    group    = dplyr::na_if(trimws(as.character(group)), ""),
+    time_num = suppressWarnings(as.numeric(time))
+  )
+
+has_group <- any(!is.na(settings$group))
+has_time  <- any(!is.na(settings$time_num))
+
+effective_group <- ("group" %in% cohort_plot_by) && has_group
+effective_time  <- ("time"  %in% cohort_plot_by) && has_time
+
+# Tell the user when intent and availability disagree
+if (("group" %in% cohort_plot_by) && !has_group)
+  message("Note: cohort_plot_by includes 'group' but no group values are present — plotting without group.")
+if (("time" %in% cohort_plot_by) && !has_time)
+  message("Note: cohort_plot_by includes 'time' but no time values are present — plotting without time.")
+if (effective_group && any(is.na(settings$group)))
+  message("Note: ", sum(is.na(settings$group)),
+          " sample(s) have no group — shown as 'ungrouped'.")
+if (effective_time && any(is.na(settings$time_num)))
+  message("Note: ", sum(is.na(settings$time_num)),
+          " sample(s) have no time — labelled '(t=)' and ordered after timed samples.")
+
+# Build sample map using only the effective dimensions
 exp_map_data <- settings %>%
-  select(file_stem, group, time) %>%
-  mutate(time = suppressWarnings(as.numeric(time))) %>%
+  transmute(
+    file_stem,
+    group = if (effective_group) ifelse(is.na(group), "ungrouped", group) else "all",
+    time  = if (effective_time)  time_num else NA_real_
+  ) %>%
   group_by(group, time) %>%
   summarise(n_samples = n(), .groups = "drop")
 
-has_time <- any(!is.na(exp_map_data$time))
-
-if (has_time) {
+if (effective_time) {
   p_exp_map <- ggplot(exp_map_data,
                       aes(x = time, y = group, size = n_samples)) +
     geom_point(colour = "steelblue", alpha = 0.7) +
@@ -300,22 +347,28 @@ if (has_time) {
               fontface = "bold") +
     scale_size_continuous(range = c(6, 18), name = "Samples") +
     labs(title = "Experiment map",
-         subtitle = "Each bubble = one group × time combination. Size and label = number of samples.",
+         subtitle = if (effective_group)
+           "Each bubble = one group × time combination. Size and label = number of samples."
+         else
+           "Each bubble = one timepoint. Size and label = number of samples.",
          x = "Time",
-         y = "Group") +
+         y = if (effective_group) "Group" else NULL) +
     theme_bw() +
     theme(panel.grid.minor = element_blank())
 } else {
-  # No time data — just show sample counts per group as horizontal bars
+  # No usable time — show sample counts (per group if grouping is active)
   p_exp_map <- ggplot(exp_map_data %>% group_by(group) %>%
                         summarise(n_samples = sum(n_samples), .groups = "drop"),
                       aes(x = n_samples, y = group)) +
     geom_col(fill = "steelblue", alpha = 0.7, width = 0.6) +
     geom_text(aes(label = n_samples), hjust = -0.3, size = 4) +
     labs(title = "Experiment overview",
-         subtitle = "Number of samples per group (no time data provided).",
+         subtitle = if (effective_group)
+           "Number of samples per group (no time data plotted)."
+         else
+           "Total number of samples (no group or time data plotted).",
          x = "Number of samples",
-         y = "Group") +
+         y = if (effective_group) "Group" else NULL) +
     theme_bw()
 }
 
@@ -1133,30 +1186,48 @@ if (nrow(shape_data) > 0) {
   message("Distribution shape plot saved to: 09_distribution_shape.png")
 }
 
-# Plot 21: Density plots by group and time (full range + per analysis range)
-message("\nGenerating density plots by group and time...")
+# Plot 21: Density plots by group and/or time (full range + per analysis range)
+message("\nGenerating density plots (", paste(c("group", "time")[c(effective_group, effective_time)], collapse = " + "),
+        if (!effective_group && !effective_time) "all samples" else "", ")...")
 
-# Create directory for density plots
-density_by_group_and_time_dir <- file.path(plots_dir, "10_density_by_group_and_time")
-if (!dir.exists(density_by_group_and_time_dir)) {
-  dir.create(density_by_group_and_time_dir, recursive = TRUE)
+# Static output folder for the cohort-level density ridge plots. The dimensions
+# actually plotted are conveyed by each plot's title/subtitle and by the file
+# names within, so the folder name stays fixed (predictable for --resume and any
+# downstream scripts). "cohort" distinguishes these from Module 7's per-sample
+# density plots (density_by_sample/).
+density_cohort_dir <- file.path(plots_dir, "10_density_cohort")
+if (!dir.exists(density_cohort_dir)) {
+  dir.create(density_cohort_dir, recursive = TRUE)
 }
 
-# Prepare base data: join repeat counts with group/time metadata
+# Prepare base data: join repeat counts with group/time metadata.
+# group/time are optional — rows are NOT dropped for missing group/time. Instead:
+#   - missing group  -> "ungrouped" (only when grouping is active)
+#   - missing time   -> labelled "(t=)" and ordered after timed samples by name
+# When a dimension is not in effect, it collapses to a single value so the
+# existing facet / fill / loop / filename machinery keeps working unchanged.
 density_data_full <- alignment_clustered %>%
   left_join(
-    select(settings, file_stem, group, time),
+    select(settings, file_stem, group, time_num),
     by = "file_stem"
   ) %>%
-  filter(!is.na(group), !is.na(time),
-         !is.na(.data[[params$repeat_count_method]]),
+  filter(!is.na(.data[[params$repeat_count_method]]),
          is.finite(.data[[params$repeat_count_method]])) %>%
-  arrange(group, time) %>%
   mutate(
-    sample_label = paste0(file_stem, " (t=", time, ")"),
-    # Order samples by time within each group (earliest = lowest number)
-    time_order = as.numeric(time)
-  )
+    group = if (effective_group) ifelse(is.na(group), "ungrouped", group) else "all",
+    sample_label = if (effective_time)
+      paste0(file_stem, " (t=", ifelse(is.na(time_num), "", time_num), ")")
+    else
+      file_stem,
+    # Single numeric sort key used for the y-axis ordering (earliest/first at top):
+    #   - time active : order by time, missing time sinks to the bottom (Inf)
+    #   - time absent  : order alphabetically by sample name
+    sort_value = if (effective_time)
+      ifelse(is.na(time_num), Inf, time_num)
+    else
+      as.integer(factor(file_stem))
+  ) %>%
+  arrange(group, sort_value, file_stem)
 
 if (nrow(density_data_full) > 0) {
   
@@ -1204,27 +1275,37 @@ if (nrow(density_data_full) > 0) {
     }
     
     # Create subdirectory for this range
-    density_range_dir <- file.path(density_by_group_and_time_dir, range_name)
+    density_range_dir <- file.path(density_cohort_dir, range_name)
     if (!dir.exists(density_range_dir)) {
       dir.create(density_range_dir, recursive = TRUE)
     }
     
+    # Dimension-aware labels (shared by combined and per-group plots)
+    dims_title <- dplyr::case_when(
+       effective_group &&  effective_time ~ "by group and time",
+       effective_group && !effective_time ~ "by group",
+      !effective_group &&  effective_time ~ "by time",
+      TRUE                                ~ "(all samples)"
+    )
+    order_note <- if (effective_time) "ordered by time (earliest at top)" else "ordered by sample name"
+    y_lab      <- if (effective_time) "Sample (time)" else "Sample"
+
     # COMBINED PLOT: All groups in columns for this range
     p_density_combined <- ggplot(density_data_range, 
                               aes(x = .data[[params$repeat_count_method]], 
-                                  y = reorder(sample_label, -time_order),  # Earliest at top
+                                  y = reorder(sample_label, -sort_value),  # Earliest/first at top
                                   fill = group)) +
       geom_density_ridges(alpha = 0.7, scale = 2, rel_min_height = 0.01,
                           jittered_points = TRUE,
                           position = position_points_jitter(width = 0.5, height = 0.15),
                           point_shape = 16, point_size = 0.4, point_alpha = 0.2) +
-      facet_grid(~ group, scales = "free_y") +  # Groups as COLUMNS
+      facet_grid(~ group, scales = "free_y") +  # Groups as COLUMNS ("all" when not grouping)
       scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
       labs(
-        title = paste0("Repeat length distribution by group and time - ", range_name),
-        subtitle = "Samples ordered by time within each group (earliest at top)",
+        title = paste0("Repeat length distribution ", dims_title, " - ", range_name),
+        subtitle = paste0("Samples ", if (effective_group) "within each group, " else "", order_note),
         x = "Repeat count",
-        y = "Sample (Time)",
+        y = y_lab,
         fill = "Group"
       ) +
       theme_minimal() +
@@ -1262,18 +1343,18 @@ if (nrow(density_data_full) > 0) {
     
     message("    Combined plot saved: ", combined_filename)
     
-    # INDIVIDUAL PLOTS: One per group for this range
+    # INDIVIDUAL PLOTS: One per group for this range ("all" when not grouping)
     for (my_group in unique(density_data_range$group)) {
       group_data <- density_data_range %>%
         filter(group == my_group) %>%
-        arrange(time)
+        arrange(sort_value, file_stem)
       
       if (nrow(group_data) == 0) next
       
       # Create plot for this group
       p_density_group <- ggplot(group_data, 
                              aes(x = .data[[params$repeat_count_method]], 
-                                 y = reorder(sample_label, -time_order),  # Earliest at top
+                                 y = reorder(sample_label, -sort_value),  # Earliest/first at top
                                  fill = group)) +
         geom_density_ridges(alpha = 0.7, scale = 2, rel_min_height = 0.01,
                             jittered_points = TRUE,
@@ -1282,9 +1363,9 @@ if (nrow(density_data_full) > 0) {
         scale_x_continuous(breaks = scales::pretty_breaks(n = 15)) +
         labs(
           title = paste0("Repeat length distribution - ", my_group, " (", range_name, ")"),
-          subtitle = "Samples ordered by time (earliest at top)",
+          subtitle = paste0("Samples ", order_note),
           x = "Repeat count",
-          y = "Sample (Time)",
+          y = y_lab,
           fill = "Group"
         ) +
         theme_minimal() +
@@ -1318,11 +1399,11 @@ if (nrow(density_data_full) > 0) {
     }
   }
   
-  message("\n  All ridge plots saved to: ", density_by_group_and_time_dir)
+  message("\n  All ridge plots saved to: ", density_cohort_dir)
   message("  (Not printed inline — open files directly to view)")
   
 } else {
-  message("  Warning: No data available for ridge plots (missing group/time metadata)")
+  message("  Warning: No reads available for ridge plots (no finite repeat counts after filtering)")
 }
 
 
@@ -1354,7 +1435,13 @@ Group controls provide baseline reference values for calculating instability met
 ```
 
 ```{r group_controls, echo=FALSE, message=FALSE}
-if (params$group_control) {
+if (params$group_control && !has_group) {
+  message("Group controls requested (group_control = TRUE) but no group values are ",
+          "present in settings — skipping group control analysis.")
+  group_controls <- NULL   # keep defined so downstream !is.null() guards are safe
+}
+
+if (params$group_control && has_group) {
   
   # Map control_setpoint_metric to column name
   metric_column_map <- c(
@@ -1407,11 +1494,19 @@ if (params$group_control) {
     
     # Select control samples based on method
     if (params$control_sample_selection == "earliest") {
-      # Use earliest timepoint
-      control_data <- control_data %>%
-        group_by(group) %>%
-        filter(time == min(time, na.rm = TRUE)) %>%
-        ungroup()
+      if (has_time) {
+        # Use earliest timepoint per group (numeric); samples lacking a time are
+        # excluded from the "earliest" pick rather than corrupting the min().
+        control_data <- control_data %>%
+          mutate(.tnum = suppressWarnings(as.numeric(time))) %>%
+          group_by(group) %>%
+          filter(!is.na(.tnum) & .tnum == min(.tnum, na.rm = TRUE)) %>%
+          ungroup() %>%
+          select(-.tnum)
+      } else {
+        message("  Note: control_sample_selection = 'earliest' but no time data ",
+                "available — using all samples in each group instead.")
+      }
     } else if (params$control_sample_selection == "flagged") {
       # Use flagged controls
       control_data <- control_data %>%
@@ -1476,7 +1571,10 @@ if (params$group_control) {
     DT::formatStyle(columns = colnames(group_controls), fontSize = '10px')
   
 } else {
-  message("\nGroup controls disabled (group_control = FALSE)")
+  # Reached when group_control = FALSE, or when group_control = TRUE but no group
+  # data is present (already messaged above). Only show the "disabled" note for
+  # the genuine FALSE case to avoid a misleading message.
+  if (!params$group_control) message("\nGroup controls disabled (group_control = FALSE)")
   group_controls <- NULL
 }
 ```

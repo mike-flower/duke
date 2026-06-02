@@ -242,6 +242,14 @@ Each row represents one sample.
 | `time` | Timepoint for longitudinal analysis | `0`, `6`, `12` |
 | `exclude` | Exclude from analysis | `TRUE` / `FALSE` |
 
+`group` and `time` are optional and drive the Module 6 cohort plots (experiment map and density ridges) via `cohort_plot_by`. Three situations are all handled, and the first two behave identically:
+
+- **Column header absent** — the column is not in the settings file at all. It is created as all-`NA` immediately after loading, so nothing errors.
+- **Column header present but all cells blank** — treated the same as an absent column (no usable group/time).
+- **Column partially filled** — samples with a value use it; samples with a blank cell fall back (no `group` → shown as `"ungrouped"`; no `time` → labelled `(t=)` and ordered after the timed samples).
+
+In every case the plots automatically fall back to whichever dimensions are actually available (intersected with `cohort_plot_by`), and a note is logged when a requested dimension has no data. The same all-`NA`-when-absent handling applies to the other optional columns (`group_control_sample`, `exclude`), so a settings file containing only the required columns runs cleanly.
+
 ##### Bracketed parameter format
 
 Each bracketed value corresponds to one analysis range. The number of values must be consistent across all bracketed columns in a row.
@@ -472,6 +480,7 @@ Quantitative analysis of repeat distributions within user-defined length ranges.
 - ~30 distribution statistics per sample per range (mean, median, SD, skewness, CV, tail ratios...)
 - Instability metrics: expansion index, contraction index, z-scores relative to controls
 - Group and timepoint comparisons
+- Cohort plots — an experiment map (samples across group × time) and density ridge plots by group and time. The dimensions used are controlled by `cohort_plot_by` and intersected with the columns actually present in the settings file. `group` and `time` are both optional: whether a column is absent, present but all blank (treated identically), or only partially filled, the plots degrade gracefully (blank group → `"ungrouped"`; blank time → labelled `(t=)` and ordered last) rather than dropping samples or erroring
 - **Output:** `range_analysis.xlsx` with comprehensive tables; instability and distribution plots
 
 ### Module 7: Repeat visualisation
@@ -585,6 +594,7 @@ Publication-quality repeat length distribution figures.
 - `--control_sample_selection` — `"flagged"`, `"earliest"`, or `"all"` (default: `"flagged"`)
 - `--control_setpoint_metric` — `"modal_length"`, `"mean_length"`, or `"median_length"` (default: `"median_length"`)
 - `--control_aggregation_method` — `"mean"`, `"median"`, or `"trimmed_mean"` (default: `"median"`)
+- `--cohort_plot_by` — Dimensions for the Module 6 cohort plots (experiment map + density ridges), comma-separated: `group,time`, `group`, `time`, or `""` for a single combined plot. Intersected with the columns actually present in the settings file (default: `group,time`)
 
 #### Repeat visualisation (Module 7)
 - `--repeat_histogram` — Generate frequency histograms (full-range and per analysis range) (default: TRUE)
@@ -1119,6 +1129,13 @@ Cross-cutting plot and clarity refinements following the v2.3.0 PacBio HiFi run 
 
 **Module 6 — Range analysis (interpretation)**
 - 📝 New markdown section above the modal-vs-mean plot explains how to read per-sample skew (point position relative to identity line) and the three lm-fit patterns: slope ≈ 1 with intercept ≈ 0 (symmetric distributions, typical of narrow ranges); slope ≈ 1 with intercept > 0 (uniform right-skew across the cohort); slope < 1 with intercept > 0 (skew direction flips with mode — the signature of open-ended ranges capturing both the inherited and the expanded alleles). Plot chunk split to accommodate the prose
+
+**Module 6 — Range analysis (optional group/time plots)**
+- ✨ **NEW:** `cohort_plot_by` controls which dimensions the Module 6 cohort plots (experiment map + density ridges) use: `c("group", "time")`, `c("group")`, `c("time")`, or `character(0)`. The requested dimensions are intersected with the columns actually present in the settings file, with a note logged when intent and availability disagree. CLI flag `--cohort_plot_by` (comma-separated)
+- 🐛 **FIXED:** `group` and `time` are now genuinely optional for the cohort plots. Previously a blank `time` column emptied the density-plot data frame (hard `!is.na(time)` filter) and produced no ridge plots at all, and individual blank cells in either column silently dropped those samples. Now missing values are handled gracefully — blank `group` → `"ungrouped"`; blank `time` → labelled `(t=)` and ordered after timed samples by name. The cohort density plots are written to a fixed folder, `10_density_cohort` (the dimensions plotted are conveyed by each plot's title/subtitle and file names)
+- 🐛 **FIXED:** Omitting any optional settings column (`group`, `time`, `group_control_sample`, `exclude`) no longer errors. These columns are now created as all-NA when absent immediately after the settings file is loaded, so any combination of required-only / partial settings files runs cleanly. NA is the correct default in every case (no group/time, no flagged controls, nothing excluded). Previously the columns were referenced unconditionally and a missing one aborted Module 6
+- 🐛 **FIXED:** `control_sample_selection = "earliest"` now guards on time availability and coerces `time` numerically before taking the per-group minimum (previously it could do a lexicographic `min()` or drop a group's controls silently when time was blank); group controls skip with an explicit message when no group is present
+- 🧹 **TIDY:** Removed dead `sample_group` lookup in Module 7's per-sample density block (computed but never used; the plot fill is a fixed colour)
 
 ### v2.3.0 (May 2026)
 - ✨ **NEW:** PacBio HiFi auto-detection in Module 1 — per-sample, keyed by file_stem; checks the `np:i:` tag on the first record of each BAM and falls back to `@PG PN=ccs/skera/lima` header lines (case-insensitive). Mixed cohorts handled correctly
