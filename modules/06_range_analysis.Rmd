@@ -1912,11 +1912,16 @@ instability_metrics <- bind_rows(instability_metrics_list) %>%
            setpoint_metric, setpoint_aggregation)
 
 # Add relative distribution statistics (modal, median, mean differences from setpoint)
+# and carry the per-sample metadata (time, group_control_sample, exclude) so the
+# sheet is self-sufficient for longitudinal/group analysis without re-joining.
+# NB: do NOT re-join `group` here — it is already present (from sample_group) and
+# re-joining would create a group.x/group.y collision.
 instability_metrics <- instability_metrics %>%
   left_join(
     distribution_summary %>% 
       select(file_stem, analysis_range_name, 
-             modal_length, median_length, mean_length),
+             modal_length, median_length, mean_length,
+             group_control_sample, time, exclude),
     by = c("file_stem", "analysis_range_name")
   ) %>%
   mutate(
@@ -1925,9 +1930,9 @@ instability_metrics <- instability_metrics %>%
     median_diff = median_length - setpoint_repeat_length,
     mean_diff = mean_length - setpoint_repeat_length
   ) %>%
-  # Reorder columns logically
-  relocate(file_stem, analysis_range_name, group, setpoint_type,
-           setpoint_metric, setpoint_aggregation,
+  # Reorder columns logically (per-sample metadata grouped at the front)
+  relocate(file_stem, analysis_range_name, group, group_control_sample, time, exclude,
+           setpoint_type, setpoint_metric, setpoint_aggregation,
            setpoint_repeat_length, 
            modal_length, median_length, mean_length,
            modal_diff, median_diff, mean_diff)
