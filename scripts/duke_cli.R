@@ -131,6 +131,11 @@ option_list <- list(
   make_option("--visualise_alignment_downsample", type="integer", default=1000,
               help="Max reads to plot per sample (NA = plot all, may be slow) [default: %default]"),
   
+  make_option("--keep_bam", type="logical", default=FALSE,
+              help=paste("Retain the sorted+indexed alignment BAMs (one per sample x reference)",
+                         "in <dir_out>/02_alignment/bam/ for IGV inspection, instead of deleting",
+                         "them after reading. Can be large. [default: %default]")),
+  
   # ===========================================================================
   # Repeat detection and counting
   # ===========================================================================
@@ -485,6 +490,7 @@ params <- list(
   minimap2_args = args$minimap2_args,
   visualise_alignment = args$visualise_alignment,
   visualise_alignment_downsample = args$visualise_alignment_downsample,
+  keep_bam = args$keep_bam,
   rpt_pattern = args$rpt_pattern,
   rpt_min_repeats = args$rpt_min_repeats,
   rpt_max_mismatch = args$rpt_max_mismatch,
@@ -622,6 +628,7 @@ if (args$dry_run) {
   cat("═══════════════════════════════════════════════════════════════\n\n")
   cat(sprintf("%-35s: %s\n", "minimap2_args", params$minimap2_args))
   cat(sprintf("%-35s: %s\n", "visualise_alignment", params$visualise_alignment))
+  cat(sprintf("%-35s: %s\n", "keep_bam", params$keep_bam))
   cat(sprintf("%-35s: %s\n", "visualise_alignment_downsample", 
               if(is.na(params$visualise_alignment_downsample)) "NA (plot all)" else params$visualise_alignment_downsample))
   

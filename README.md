@@ -372,6 +372,8 @@ result_duke/
 ├── 02_alignment/
 │   ├── alignment.xlsx                # alignment_summary | flank_filtering | strand_summary
 │   │                                 # alignment_quality | sequence_segments | timing | manifest
+│   ├── bam/                          # Sorted+indexed alignment BAMs, one per sample×reference (only when --keep_bam TRUE)
+│   │   └── {sample}-{ref}.bam(.bai)
 │   └── plots/
 │       └── coverage_by_sample/
 ├── 03_repeat_detection/
@@ -547,6 +549,7 @@ Publication-quality repeat length distribution figures.
 - `--minimap2_args` — minimap2 settings (default: `"-t 2 -x sr -w 1"`)
 - `--visualise_alignment` — Generate coverage plots (default: TRUE)
 - `--visualise_alignment_downsample` — Max reads to plot (default: 1,000)
+- `--keep_bam` — Retain the sorted+indexed alignment BAMs (one per sample × reference) in `<dir_out>/02_alignment/bam/` for inspection in IGV, instead of deleting them after they are read into R (default: FALSE). Independent of `--remove_temp` / `--remove_intermediate`. Useful for confirming structural variants (e.g. a promoter deletion) at the read level, but can be large across a cohort. Takes effect only when alignment actually runs (not on a resumed cache hit)
 
 #### Repeat detection
 - `--rpt_pattern` — Repeat motif (default: `"CAG"`)
@@ -567,14 +570,14 @@ Publication-quality repeat length distribution figures.
 
 #### Clustering
 - `--cluster` — Enable clustering (default: TRUE)
-- `--cluster_by` — `"repeat"`, `"haplotype"`, or both (default: `"repeat"`)
+- `--cluster_by` — clustering strategy: `repeat`, `haplotype`, both as a comma-separated list `repeat,haplotype`, or `none` (default: `repeat`). Note "both" is expressed as `--cluster_by repeat,haplotype`, not the word "both"
 - `--haplotype_cluster_max` — Max haplotype clusters (default: 10)
 - `--repeat_cluster_max` — Max repeat clusters (default: 20)
 - `--repeat_cluster_downsample` — Max reads for cluster optimisation (default: 10,000)
 - `--haplotype_cluster_downsample` — Max reads for haplotype optimisation (default: 5,000)
-- `--haplotype_region` — Which flanks to use: `"left"`, `"right"`, or `"both"` (default: `"both"`)
+- `--haplotype_region` — Which flanks to use for haplotype clustering: `"left"` (5′/upstream of the repeat), `"right"` (3′/downstream), or `"both"` (default: `"both"`)
 - `--haplotype_method` — Distance metric: `"levenshtein"` or `"hamming"` (default: `"levenshtein"`)
-- `--haplotype_trim_length` — Trim flank sequences before haplotype clustering: `"auto"` trims to the modal flank length per sample; a number specifies a fixed bp length; `"NA"` disables trimming (default: `"auto"`). Trimming is strongly recommended — variable-length flanks inflate Levenshtein distances and degrade cluster quality.
+- `--haplotype_trim_length` — Trim flank sequences before haplotype clustering: `"auto"` trims to the modal flank length per sample; a number specifies a fixed total bp length (split across the two flanks, ~half each); `"NA"` disables trimming (default: `"auto"`). Trimming always **keeps the bases adjacent to the repeat and discards the outer ends** — for the left/5′ flank it removes the 5′ (distal) end, for the right/3′ flank it removes the 3′ (distal) end — because bases nearest the repeat are the most reliably sequenced. For ordinary haplotype calling, trimming is recommended: variable-length flanks inflate Levenshtein distances and degrade cluster quality. **Caveat:** if your variant of interest sits *far from the repeat* (e.g. a promoter deletion in the upstream flank), trimming can discard it — use `"NA"` (or a length long enough to span the variant) so the relevant region is retained, and keep `--haplotype_method levenshtein` so length-changing indels are handled
 
 #### Consensus and variant calling
 - `--cluster_consensus` — Generate consensus sequences (default: TRUE)
@@ -610,8 +613,8 @@ Publication-quality repeat length distribution figures.
 #### Runtime
 - `--threads` — CPU cores (default: 12)
 - `--resume` — Skip completed modules (default: TRUE)
-- `--remove_intermediate` — Free RAM between modules (default: TRUE)
-- `--remove_temp` — Delete temp files on completion (default: FALSE)
+- `--remove_intermediate` — Free RAM between modules (default: TRUE). Controls in-memory R objects only — it does not delete any files
+- `--remove_temp` — Delete the `temp/` directory (RData caches) on completion (default: FALSE). Note: the per-sample alignment BAMs are deleted *during* Module 2 regardless of this flag, immediately after being read into R — to retain them, use `--keep_bam` (which writes them outside `temp/`, so they survive this cleanup)
 - `--run_modules` — Which modules to run (default: `1,2,3,4,5,6,7`)
 
 ---
@@ -1136,6 +1139,7 @@ Cross-cutting plot and clarity refinements following the v2.3.0 PacBio HiFi run 
 - 🐛 **FIXED:** Omitting any optional settings column (`group`, `time`, `group_control_sample`, `exclude`) no longer errors. These columns are now created as all-NA when absent immediately after the settings file is loaded, so any combination of required-only / partial settings files runs cleanly. NA is the correct default in every case (no group/time, no flagged controls, nothing excluded). Previously the columns were referenced unconditionally and a missing one aborted Module 6
 - 🐛 **FIXED:** `control_sample_selection = "earliest"` now guards on time availability and coerces `time` numerically before taking the per-group minimum (previously it could do a lexicographic `min()` or drop a group's controls silently when time was blank); group controls skip with an explicit message when no group is present
 - 🧹 **TIDY:** Removed dead `sample_group` lookup in Module 7's per-sample density block (computed but never used; the plot fill is a fixed colour)
+- ✨ **NEW:** `--keep_bam` (Module 2, default FALSE) retains the sorted+indexed alignment BAMs (one per sample × reference) in `<dir_out>/02_alignment/bam/` for IGV inspection, instead of deleting them after they are read into R. The BAMs are written outside `temp/`, so they are independent of `--remove_temp`/`--remove_intermediate`; failed-alignment BAMs are still cleaned up, and it takes effect only when alignment actually runs (not on a resumed cache hit)
 - ✨ **NEW:** The `instability_metrics` sheet now carries the per-sample metadata columns `group_control_sample`, `time` and `exclude` (joined from `distribution_summary`; `group` was already present), grouped at the front of the sheet. This makes it self-sufficient for longitudinal (instability vs `time`) and group-level analysis and for filtering controls / excluded samples, without joining back to `distribution_summary` or the settings file
 
 ### v2.3.0 (May 2026)

@@ -46,7 +46,9 @@ minimap2_align_sample <- function(sample_name,
                                   ref_sequences,
                                   out_dir,
                                   minimap2_args = "-x map-ont",
-                                  resume = FALSE) {
+                                  resume = FALSE,
+                                  keep_bam = FALSE,
+                                  bam_dir = NULL) {
   
   # Extract DNA stringset for this sample
   dna_stringset <- sequences[[sample_name]]
@@ -184,8 +186,26 @@ minimap2_align_sample <- function(sample_name,
                       mismatches = tag.NM,
                       aligned_subsequence = seq)
       
-      # Clean up temp files
-      temp_files <- c(query_path, ref_path, sam_path, bam_path, paste0(bam_path, ".bai"))
+      # Clean up temp files. When keep_bam = TRUE, retain the sorted+indexed BAM
+      # (move it out of the temp dir to a stable location so --remove_temp can't
+      # wipe it later); always remove the query FASTA/FASTQ, reference and SAM.
+      if (keep_bam && file.exists(bam_path)) {
+        dest_dir <- if (!is.null(bam_dir)) bam_dir else out_dir
+        if (!dir.exists(dest_dir)) dir.create(dest_dir, recursive = TRUE)
+        for (f in c(bam_path, paste0(bam_path, ".bai"))) {
+          if (file.exists(f)) {
+            dest <- file.path(dest_dir, basename(f))
+            # file.rename can fail across filesystems; fall back to copy + remove
+            if (!suppressWarnings(file.rename(f, dest))) {
+              file.copy(f, dest, overwrite = TRUE)
+              file.remove(f)
+            }
+          }
+        }
+        temp_files <- c(query_path, ref_path, sam_path)
+      } else {
+        temp_files <- c(query_path, ref_path, sam_path, bam_path, paste0(bam_path, ".bai"))
+      }
       file.remove(temp_files[file.exists(temp_files)])
       
       return(alignment_df)

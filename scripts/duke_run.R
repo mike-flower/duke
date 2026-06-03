@@ -152,6 +152,11 @@ params <- list(
   visualise_alignment = TRUE,  # Generate alignment coverage plots
   visualise_alignment_downsample = 1000,  # Max reads to plot per sample (NA = plot all, may be slow)
   
+  # keep_bam: retain sorted+indexed alignment BAMs (one per sample x reference) in
+  # <dir_out>/02_alignment/bam/ for IGV inspection, instead of deleting them after
+  # reading into R. Independent of remove_temp/remove_intermediate. Can be large.
+  keep_bam = FALSE,
+  
   # -----------------------------------------------------------------------------
   # Repeat detection and counting
   # -----------------------------------------------------------------------------

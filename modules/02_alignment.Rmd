@@ -85,11 +85,14 @@ timings <- c()
 # Create output directories
 temp_dir <- file.path(params$dir_out, "temp")
 alignment_dir <- file.path(params$dir_out, "02_alignment")  # Consolidated alignment outputs
+bam_dir <- file.path(alignment_dir, "bam")  # Retained per-sample/reference BAMs (only when keep_bam = TRUE)
 results_dir <- file.path(params$dir_out, "module_data")
 plots_dir <- file.path(params$dir_out, file.path("02_alignment", "plots"))
 
 if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
 if (!dir.exists(alignment_dir)) dir.create(alignment_dir, recursive = TRUE)
+# Pre-create the BAM output dir once (avoids a race when workers run in parallel)
+if (isTRUE(params$keep_bam) && !dir.exists(bam_dir)) dir.create(bam_dir, recursive = TRUE)
 if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE)
 if (!dir.exists(plots_dir)) dir.create(plots_dir, recursive = TRUE)
 ```
@@ -195,8 +198,14 @@ if (params$resume && safe_load_cache(alignment_cache_path, environment())) {
     ref_sequences = ref_sequences,
     out_dir = temp_dir,
     minimap2_args = params$minimap2_args,
-    resume = params$resume
+    resume = params$resume,
+    keep_bam = isTRUE(params$keep_bam),
+    bam_dir = bam_dir
   )
+
+  if (isTRUE(params$keep_bam)) {
+    message("  Retaining aligned BAMs (keep_bam = TRUE) in: ", bam_dir)
+  }
   
   # Extract results
   alignments <- extract_apply_fn_result(alignments)
