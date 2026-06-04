@@ -1451,7 +1451,7 @@ message("Module 3 outputs saved to: ", output_path)
 ```{r export_read_counts, echo=FALSE}
 if (isTRUE(params$export_read_counts)) {
 
-  rc_dir <- file.path(params$dir_out, "03_repeat_detection", "read_counts")
+  rc_dir <- file.path(params$dir_out, "03_repeat_detection", "read_repeat_counts")
   if (!dir.exists(rc_dir)) dir.create(rc_dir, recursive = TRUE)
 
   samples <- unique(alignment_counts$file_stem)

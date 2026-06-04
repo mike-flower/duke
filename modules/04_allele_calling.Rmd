@@ -868,6 +868,7 @@ if (exists("consensus_summary") && !is.null(consensus_summary)) {
   consensus_export <- consensus_summary %>%
     dplyr::left_join(
       cluster_summary %>% dplyr::select(file_stem, cluster_number,
+                                        repeat_cluster, haplotype_cluster,
                                         reads_in_cluster = read_count),
       by = c("file_stem", "cluster_number")
     ) %>%
@@ -879,6 +880,7 @@ if (exists("consensus_summary") && !is.null(consensus_summary)) {
       right_length_bp = nchar(consensus_right)
     ) %>%
     dplyr::select(file_stem, cluster_number,
+                  repeat_cluster, haplotype_cluster,
                   reads_in_cluster, reads_for_consensus,
                   full_length_bp, left_length_bp, mid_length_bp, right_length_bp,
                   consensus_full, consensus_left, consensus_mid, consensus_right)
@@ -886,6 +888,7 @@ if (exists("consensus_summary") && !is.null(consensus_summary)) {
   # Use lengths-only version for the inline DT table
   consensus_display <- consensus_export %>%
     dplyr::select(file_stem, cluster_number,
+                  repeat_cluster, haplotype_cluster,
                   reads_in_cluster, reads_for_consensus,
                   full_length_bp, left_length_bp, mid_length_bp, right_length_bp)
 
@@ -1002,11 +1005,13 @@ if (exists("variant_results") && !is.null(variant_results) && nrow(variant_resul
     consensus_summary %>%
       dplyr::left_join(
         cluster_summary %>% dplyr::select(file_stem, cluster_number,
+                                          repeat_cluster, haplotype_cluster,
                                           reads_in_cluster = read_count),
         by = c("file_stem", "cluster_number")
       ) %>%
       dplyr::rename(reads_for_consensus = n_seqs_consensus) %>%
-      dplyr::select(file_stem, cluster_number, reads_in_cluster, reads_for_consensus)
+      dplyr::select(file_stem, cluster_number, repeat_cluster, haplotype_cluster,
+                    reads_in_cluster, reads_for_consensus)
   } else {
     NULL
   }

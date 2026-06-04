@@ -192,7 +192,10 @@ summarise_variants <- function(variant_df) {
     ) %>%
     pivot_wider(names_from = variant_type, 
                 values_from = count, 
-                values_fill = 0)
+                values_fill = 0) %>%
+    # Counts are per-base (one row per differing position), so label units explicitly
+    rename_with(~ paste0(.x, "_bases"),
+                .cols = any_of(c("deletion", "insertion", "mismatch", "SNP")))
   
   return(variant_summary)
 }

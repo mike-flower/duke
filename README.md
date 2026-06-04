@@ -379,16 +379,18 @@ result_duke/
 ├── 03_repeat_detection/
 │   ├── repeat_detection.xlsx         # count_summary | tract_detection | count_method_comparison
 │   │                                 # heatmap_sample_index | flank_summary | timing | manifest
-│   ├── read_counts/                  # Per-read repeat counts (one .tsv.gz per sample)
+│   ├── read_repeat_counts/           # Per-read repeat counts (one .tsv.gz per sample)
 │   │   └── {sample}.tsv.gz          # read_id | repeat_count_full | repeat_count_match | repeat_count_tracts
 │   └── plots/
 │       └── flank/
 ├── 04_allele_calling/
 │   ├── allele_calling.xlsx           # cluster_summary | timing | manifest
 │   ├── consensus/
-│   │   ├── consensus.xlsx
+│   │   ├── consensus.xlsx            # file_stem | cluster_number | repeat_cluster | haplotype_cluster | reads_in_cluster | reads_for_consensus | *_length_bp | consensus_* sequences
 │   │   ├── consensus_sequences.fasta
 │   │   └── vcf_by_sample/
+│   ├── variants/
+│   │   └── variant.xlsx              # summary (deletion_bases | insertion_bases | mismatch_bases per cluster) | all_variants (per-position calls); both carry repeat_cluster | haplotype_cluster
 │   └── plots/
 ├── 05_waterfall/
 │   ├── waterfall.xlsx                # timing
@@ -410,7 +412,7 @@ result_duke/
 
 **Excel files** contain the same data as the HTML tables. Each includes `timing` and `manifest` sheets.
 
-**Per-read count files** (`read_counts/{sample}.tsv.gz`) are written by Module 3 when `export_read_counts = TRUE` (default). One file per sample, one row per read, with all three repeat count methods. Load in Python with `pd.read_csv('sample.tsv.gz', sep='\t')` or in R with `readr::read_tsv('sample.tsv.gz')`.
+**Per-read count files** (`read_repeat_counts/{sample}.tsv.gz`) are written by Module 3 when `export_read_counts = TRUE` (default). One file per sample, one row per read, with all three repeat count methods. Load in Python with `pd.read_csv('sample.tsv.gz', sep='\t')` or in R with `readr::read_tsv('sample.tsv.gz')`.
 
 ---
 
@@ -1141,6 +1143,8 @@ Cross-cutting plot and clarity refinements following the v2.3.0 PacBio HiFi run 
 - 🧹 **TIDY:** Removed dead `sample_group` lookup in Module 7's per-sample density block (computed but never used; the plot fill is a fixed colour)
 - ✨ **NEW:** `--keep_bam` (Module 2, default FALSE) retains the sorted+indexed alignment BAMs (one per sample × reference) in `<dir_out>/02_alignment/bam/` for IGV inspection, instead of deleting them after they are read into R. The BAMs are written outside `temp/`, so they are independent of `--remove_temp`/`--remove_intermediate`; failed-alignment BAMs are still cleaned up, and it takes effect only when alignment actually runs (not on a resumed cache hit)
 - 🐛 **FIXED (Module 4):** Two-step clustering (`--cluster_by repeat,haplotype`) aborted the clustering chunk with "the condition has length > 1". The clustering function supported the length-2 vector, but the Module 4 chunk still used scalar guards (`%in% c("haplotype","both")`, `== "repeat"`); these are now vector-safe. Valid values are `repeat`, `haplotype`, `repeat,haplotype`, or `none` — the literal word "both" is not accepted
+- 🔧 **CHANGED:** Module 3's per-read output directory renamed `read_counts/` → `read_repeat_counts/`, since the files hold the repeat count per read (not a count of reads) and the old name collided with the `read_counts` sheet in `range_analysis.xlsx`
+- 🔧 **CHANGED (Module 4):** `variant.xlsx` `summary` columns renamed `deletion`/`insertion`/`mismatch` → `deletion_bases`/`insertion_bases`/`mismatch_bases` to make explicit that they are per-base counts (one row per differing consensus position). `consensus.xlsx`, and both `variant.xlsx` tabs (`summary`, `all_variants`), now also carry `repeat_cluster` and `haplotype_cluster`, so a consensus/variant row identifies its allele without joining back to `cluster_summary`
 - ✨ **NEW:** The `instability_metrics` sheet now carries the per-sample metadata columns `group_control_sample`, `time` and `exclude` (joined from `distribution_summary`; `group` was already present), grouped at the front of the sheet. This makes it self-sufficient for longitudinal (instability vs `time`) and group-level analysis and for filtering controls / excluded samples, without joining back to `distribution_summary` or the settings file
 
 ### v2.3.0 (May 2026)
