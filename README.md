@@ -250,6 +250,8 @@ Each row represents one sample.
 
 In every case the plots automatically fall back to whichever dimensions are actually available (intersected with `cohort_plot_by`), and a note is logged when a requested dimension has no data. The same all-`NA`-when-absent handling applies to the other optional columns (`group_control_sample`, `exclude`), so a settings file containing only the required columns runs cleanly.
 
+`group` and analysis range names may contain any characters. Characters that are unsafe in filenames (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`, and whitespace) are automatically replaced with `-` when building Module 6/7 output paths; this is logged as a note, and the original text is kept unchanged in all plot titles, legends, axes and tables. Two names that differ only by such characters (e.g. `P15/05` vs `P15-05`) would map to the same file, so the run stops early with a collision error – give them names that differ in some other way.
+
 ##### Bracketed parameter format
 
 Each bracketed value corresponds to one analysis range. The number of values must be consistent across all bracketed columns in a row.

@@ -1234,6 +1234,12 @@ if (nrow(density_data_full) > 0) {
   # Get unique analysis ranges from settings
   all_ranges <- unique(unlist(lapply(settings_parsed$ranges_list, names)))
   
+  # Fail informatively before plotting if group/range names will collide once
+  # sanitised for output paths (e.g. names differing only by '/'). Display
+  # labels are left untouched; only the on-disk filenames are sanitised below.
+  if (effective_group) warn_if_sanitised(density_data_full$group, "group")
+  warn_if_sanitised(all_ranges, "analysis range")
+  
   # Create a list of range definitions: "Full" + each analysis range
   range_list <- c(
     list(Full = c(-Inf, Inf)),  # Full range (all data)
@@ -1274,8 +1280,10 @@ if (nrow(density_data_full) > 0) {
       next
     }
     
-    # Create subdirectory for this range
-    density_range_dir <- file.path(density_cohort_dir, range_name)
+    # Create subdirectory for this range (sanitise name for filesystem safety;
+    # the title/subtitle still carry the original range_name for display)
+    range_name_safe <- safe_path(range_name)
+    density_range_dir <- file.path(density_cohort_dir, range_name_safe)
     if (!dir.exists(density_range_dir)) {
       dir.create(density_range_dir, recursive = TRUE)
     }
@@ -1328,7 +1336,7 @@ if (nrow(density_data_full) > 0) {
     combined_filename <- if (range_name == "Full") {
       "density.png"
     } else {
-      paste0("density-", range_name, ".png")
+      paste0("density-", range_name_safe, ".png")
     }
     
     ggsave(
@@ -1378,11 +1386,13 @@ if (nrow(density_data_full) > 0) {
       n_samples_group <- length(unique(group_data$file_stem))
       group_height <- max(6, min(40, n_samples_group * 0.5))
       
-      # Determine filename based on range
+      # Determine filename based on range (sanitise group/range for filesystem
+      # safety — a group like "postmortem-P15/05" would otherwise be read as a
+      # subdirectory and ggsave would fail. Plot title above keeps the original.)
       group_filename <- if (range_name == "Full") {
-        paste0("density-", my_group, ".png")
+        paste0("density-", safe_path(my_group), ".png")
       } else {
-        paste0("density-", my_group, "-", range_name, ".png")
+        paste0("density-", safe_path(my_group), "-", range_name_safe, ".png")
       }
       
       ggsave(

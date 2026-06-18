@@ -163,3 +163,51 @@ extract_apply_fn_result <- function(result) {
   }
   return(result)
 }
+
+# ------------------------------------------------------------------------------
+# Filesystem-safe path components
+# ------------------------------------------------------------------------------
+# Some label columns (group, analysis range names) are free text and may contain
+# characters that are illegal or ambiguous in file/directory names — most
+# importantly '/', which the OS interprets as a path separator. Sanitise these
+# ONLY at the point a label becomes a path; keep the original string for every
+# display context (plot titles, legends, axes, tables) so figures are unaffected.
+# file_stem is derived from on-disk filenames and so is already path-safe.
+
+# safe_path: turn an arbitrary label into a string safe to use as ONE path
+#   component. Replaces the separators '/' and '\' and other reserved/awkward
+#   characters with `replacement`, collapses whitespace, and trims. Vectorised.
+safe_path <- function(x, replacement = "-") {
+  x <- as.character(x)
+  x <- gsub("[/\\\\:*?\"<>|[:cntrl:]]", replacement, x, perl = TRUE)   # reserved + separators
+  x <- gsub("[[:space:]]+", replacement, x)                           # collapse whitespace
+  x <- gsub(paste0("^", replacement, "+|", replacement, "+$"), "", x)  # trim leading/trailing
+  x[is.na(x) | x == ""] <- "unnamed"
+  x
+}
+
+# warn_if_sanitised: emit an informative log note when safe_path() alters any
+#   label, and stop with a clear message if two DISTINCT labels collapse to the
+#   same token (which would otherwise silently overwrite each other's outputs).
+#   Returns the sanitised tokens invisibly.
+warn_if_sanitised <- function(original, what = "label") {
+  original <- unique(as.character(original))
+  safe <- safe_path(original)
+  changed <- original != safe
+  if (any(changed)) {
+    message("Note: ", sum(changed), " ", what, "(s) contain characters unsafe ",
+            "for filenames; sanitised for output paths (display labels unchanged):")
+    for (i in which(changed)) message("    '", original[i], "'  ->  '", safe[i], "'")
+  }
+  dup <- unique(safe[duplicated(safe)])
+  if (length(dup) > 0) {
+    collisions <- vapply(dup, function(d)
+      paste0("'", paste(original[safe == d], collapse = "', '"), "' -> '", d, "'"),
+      character(1))
+    stop("Sanitising ", what, " names for output paths produced collisions ",
+         "(distinct names map to the same file):\n  ",
+         paste(collisions, collapse = "\n  "),
+         "\n  Rename so they differ by more than just '/', '\\', ':' etc.")
+  }
+  invisible(safe)
+}

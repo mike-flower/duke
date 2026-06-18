@@ -415,10 +415,11 @@ if (params$repeat_histogram) {
       p_range <- p_range +
         labs(fill = "Analysis range", x = "Repeat length", y = "Number of reads")
 
-      range_dir <- file.path(hist_by_sample_dir, my_range)
+      my_range_safe <- safe_path(my_range)
+      range_dir <- file.path(hist_by_sample_dir, my_range_safe)
       if (!dir.exists(range_dir)) dir.create(range_dir, recursive = TRUE)
 
-      ggsave(file.path(range_dir, paste0(my_sample, "-histogram-", my_range, ".png")),
+      ggsave(file.path(range_dir, paste0(my_sample, "-histogram-", my_range_safe, ".png")),
              p_range, width = 10, height = 6, dpi = params$plot_dpi)
     }
   }
@@ -582,10 +583,11 @@ if (params$repeat_scatter) {
       # Add metric points with numeric-only labels
       p_range <- add_metric_points_scatter(p_range, range_points)
 
-      range_dir <- file.path(scatter_by_sample_dir, my_range)
+      my_range_safe <- safe_path(my_range)
+      range_dir <- file.path(scatter_by_sample_dir, my_range_safe)
       if (!dir.exists(range_dir)) dir.create(range_dir, recursive = TRUE)
 
-      ggsave(file.path(range_dir, paste0(my_sample, "-scatter-", my_range, ".png")),
+      ggsave(file.path(range_dir, paste0(my_sample, "-scatter-", my_range_safe, ".png")),
              p_range, width = 12, height = 4, dpi = params$plot_dpi)
     }
   }
