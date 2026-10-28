@@ -11,7 +11,7 @@
 #SBATCH --mail-user=michael.flower@ucl.ac.uk
 
 # ==============================================================================
-# Duke 3.0.0 - New Kathleen Job Script (Slurm)
+# Duke 3.0.1 - New Kathleen Job Script (Slurm)
 # Config: 80 tasks across 2 nodes, 2GB/task = 160GB total, 48h
 # Note: submit with sbatch (not qsub); no chmod needed
 # See README.md for resource guidance and SGE vs Slurm command reference

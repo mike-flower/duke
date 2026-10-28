@@ -53,12 +53,17 @@ read_bam_records <- function(path, n = NULL) {
   out
 }
 
+# The PacBio tags read in the same pass are kept in the object's metadata
+# (metadata(x)$bam_tags, a data.frame like extract_pacbio_metadata() returns),
+# so Module 1 reads each BAM once. Module 1 removes them after use.
 bam_import <- function(path) {
   r <- read_bam_records(path)
   seqs <- Biostrings::DNAStringSet(r$seq)
-  if (!nrow(r) || all(r$qual == "*")) { names(seqs) <- r$qname; return(seqs) }
-  out <- Biostrings::QualityScaledDNAStringSet(seqs, Biostrings::PhredQuality(r$qual))
+  out <- if (!nrow(r) || all(r$qual == "*")) seqs
+         else Biostrings::QualityScaledDNAStringSet(seqs, Biostrings::PhredQuality(r$qual))
   names(out) <- r$qname
+  S4Vectors::metadata(out)$bam_tags <- data.frame(read_name = r$qname, np = r$np, rq = r$rq, ec = r$ec, zm = r$zm,
+                                                  bq = r$bq, stringsAsFactors = FALSE)
   out
 }
 
@@ -111,7 +116,8 @@ detect_pacbio <- function(path, format) {
 
 # extract_pacbio_metadata: Single-pass extraction of PacBio HiFi per-read aux
 #   tags from a BAM. Returns a data.frame with one row per read and columns
-#   read_name, np, rq, ec, zm, bq. Absent tags are NA.
+#   read_name, np, rq, ec, zm, bq. Absent tags are NA. Module 1 uses the tags
+#   kept by bam_import() instead; this re-reads the file and is the fallback.
 #
 #   Usage:
 #     md <- extract_pacbio_metadata(path = "/path/to/sample.bam")

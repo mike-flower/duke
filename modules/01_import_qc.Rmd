@@ -105,7 +105,12 @@ any_pacbio <- any(is_pacbio)
 read_metadata <- NULL; pacbio_summary <- NULL
 if (any_pacbio) {
   .t <- proc.time()["elapsed"]
-  read_metadata <- apply_fn(file_stem_vector[is_pacbio], function(fs) extract_pacbio_metadata(file_details$file_path[match(fs, file_details$file_stem)]))
+  # Tags were read with the sequences (bam_import); re-read only if they are missing
+  read_metadata <- lapply(setNames(names(file_stem_vector)[is_pacbio], names(file_stem_vector)[is_pacbio]), function(fs) {
+    md <- S4Vectors::metadata(seq[[fs]])$bam_tags
+    if (is.null(md)) md <- extract_pacbio_metadata(file_details$file_path[match(fs, file_details$file_stem)])
+    md
+  })
   if (!is.na(params$np_min)) {
     for (fs in names(read_metadata)) {
       keep <- read_metadata[[fs]]$read_name[!is.na(read_metadata[[fs]]$np) & read_metadata[[fs]]$np >= params$np_min]
@@ -120,6 +125,8 @@ if (any_pacbio) {
   }))
   timings["PacBio metrics"] <- proc.time()["elapsed"] - .t
 }
+# The tags are now in read_metadata; drop the copies held with the sequences
+for (fs in names(seq)) if (!is.null(S4Vectors::metadata(seq[[fs]])$bam_tags)) S4Vectors::metadata(seq[[fs]])$bam_tags <- NULL
 stage_counts$after_np_filter <- vapply(seq[stage_counts$file_stem], length, integer(1))
 cat(sprintf("%d of %d samples are PacBio HiFi BAMs.%s", sum(is_pacbio), length(is_pacbio),
             if (!is.na(params$np_min)) sprintf(" Reads with np < %d removed.", params$np_min) else ""))

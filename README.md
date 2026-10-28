@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.0.0** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.0.1** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -538,6 +538,9 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - Haplotype clustering compared the full ~2.5 kb flanks of every pair of reads by edit distance (as in v2), which takes hours per sample. It now uses variant k-mers: 14 PacBio samples in 1 min 20 s, and 20,000 reads in under 10 s. Tested with planted variants: haplotypes in 20–50% of reads are found with 98–100% accuracy, and on real data the haplotype split matches the CAG allele in 87–99% of reads.
 - BAMs are read with samtools instead of Rsamtools, so the "[samopen] no @SQ lines in the header" notice no longer appears for every PacBio BAM. The reads, qualities and PacBio tags are identical.
 - The reports no longer load MathJax, which removes pandoc's `--mathjax` warning.
+
+**v3.0.1**
+- Module 1 reads each BAM once: the PacBio tags (np, rq, ec, zm, bq) are kept from the same pass as the sequences instead of being read in a second pass over the whole file. Results are identical; the BAM reading step takes about a third less time.
 
 **Removed**
 - Per-sample × per-range histogram, scatter and density PNGs (replaced by the sample cards and heatmaps). Parameters for them are ignored with a message.
