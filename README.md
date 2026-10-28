@@ -67,6 +67,7 @@ duke/
 │   ├── duke_run.R            # all parameters with defaults, cluster paths
 │   ├── duke_run_local.R      # the same, laptop paths
 │   ├── duke_cli.R            # used by ./duke
+│   ├── update_readme_params.R  # rewrites the parameter tables in this README from lib/params.R
 │   ├── duke_myriad.sh, duke_kathleen.sh, duke_kathleen_slurm.sh
 └── www/                      # example reference, tracts table and settings files
 ```
@@ -113,13 +114,29 @@ One row per sample, `.xlsx` (first sheet) or `.csv`:
 | `manual_control_repeat_length` | no | `[14][120]` | Control setpoint per range; used only with `use_manual_controls = TRUE` |
 | `analysis_ranges_<measure>` (and `floor_<measure>`, `max_peaks_<measure>`, `manual_control_repeat_length_<measure>`) | no | `[NA-8][9-NA]` | Ranges for another tract or composite on its own scale (see below) |
 
-Group and range names may contain any characters; those that are unsafe in file names are replaced with `-` in output paths only. Examples: `www/settings_example.xlsx`, `www/settings_example_two_tracts.xlsx`.
+Rows whose file is not in `dir_data` are ignored, so one platemap-wide settings file can serve every run; if a file appears in more than one row, the first row is used. Group and range names may contain any characters; those that are unsafe in file names are replaced with `-` in output paths only. Examples: `www/settings_example.xlsx`, `www/settings_example_two_tracts.xlsx`.
 
 ### Other optional files
 
 - `path_tracts` – the tracts table (next section).
 - `path_trim_patterns` – adapter CSV (`adapter_name`, `adapter_sequence`) for `trim = TRUE`; `www/adapters.csv`.
 - `path_manual_exclusions` – reads to drop (`file_name`, `read_name`, `reason`; Excel sheet `Exclusions`); `www/read_exclusions_example.xlsx`.
+
+### Path parameters
+
+<!-- params:Paths:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `dir_data` | – | text | Input directory of BAM / FASTQ / FASTA files (required) |
+| `dir_out` | – | text | Output directory (required) |
+| `path_ref` | – | text | Reference FASTA with NNNNN marking the repeat region (required unless every tract in path_tracts names its own reference) |
+| `path_settings` | – | text | Settings .xlsx/.csv (ranges, groups, controls, time). Needed for Module 6 |
+| `path_tracts` | – | text | Optional tracts table (.csv or .xlsx sheet `tracts`; optional sheet `composites`). NA = one tract from rpt_pattern and path_ref |
+| `path_trim_patterns` | – | text | Adapter CSV (adapter_name, adapter_sequence), used when trim = TRUE |
+| `path_manual_exclusions` | – | text | Optional read exclusions file (file_name, read_name, reason) |
+
+<!-- params:Paths:end -->
 
 ---
 
@@ -170,6 +187,30 @@ Set these to match your own oligos. Reads are oriented to the reference first, s
 
 **Downstream.** Modules 6 and 7 report every distribution and metric for reads and for molecules (`unit` column). Each measure is collapsed separately, so a molecule's `CAG_CCG_sum` is the collapsed sum, not the sum of the collapsed CAG and CCG. `04_umi/molecules/{sample}.tsv.gz` lists every molecule.
 
+### UMI parameters (Module 4)
+
+<!-- params:UMI:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `umi` | `FALSE` | TRUE / FALSE | Extract UMIs and collapse reads to molecules |
+| `umi_flank_5` | `GTAAAACGACGGCCAGT` | text | Sequence immediately 5' of the UMI (default M13-F) |
+| `umi_flank_3` | `GGCGACCCTGGAAAAGCTGATGAA` | text | Sequence immediately 3' of the UMI (default ciosiF+1) |
+| `umi_flank_max_mismatch` | `3` | whole number | Edits allowed when locating each UMI flank (indel tolerant) |
+| `umi_search_window` | `250` | whole number | The 5' flank must start within this many bases of the read start |
+| `umi_len_min` | `12` | whole number | Shortest UMI accepted |
+| `umi_len_max` | `16` | whole number | Longest UMI accepted |
+| `umi_cluster_max_dist` | `1` | whole number | Edit distance for directional UMI clustering (0 = exact match; 1 or 2) |
+| `umi_min_reads` | `3` | whole number | Minimum reads for a molecule to be kept |
+| `umi_collapse_stat` | `top_cluster` | text | Per-molecule length: `top_cluster`, `median`, `mode` or `mean` |
+| `umi_top_cluster_k` | `2` | whole number | top_cluster: reads required in the window |
+| `umi_top_cluster_w` | `3` | number | top_cluster: constant part of the window half-width (repeats) |
+| `umi_top_cluster_wfrac` | `0.1` | number | top_cluster: length-proportional part of the window half-width |
+| `umi_allele_min_sep` | `20` | number | Minimum separation (repeats) between alleles when splitting UMI families |
+| `umi_split_mixed` | `TRUE` | TRUE / FALSE | Split a UMI family with at least 2 reads on each allele into two molecules |
+
+<!-- params:UMI:end -->
+
 ---
 
 ## How repeats are counted
@@ -188,6 +229,33 @@ Three counts per tract:
 
 Module 3 reports the modal length of every sample by every method (`modal_by_method`), and how often the methods agree.
 
+### Repeat detection parameters (Module 3)
+
+These settings apply to every tract unless the tracts table overrides them for one tract. The tracts-table column is the parameter name without `rpt_` (`flank_pad`, `max_gap`, ...), except `count_method` for `repeat_count_method` and `na_handling` for `na_repeat_handling`.
+
+<!-- params:Repeats:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `rpt_pattern` | `CAG` | text | Repeat motif (used when there is no tracts table) |
+| `rpt_tract_name` | – | text | Name for the single tract (default: the motif) |
+| `rpt_min_repeats` | `2` | whole number | Minimum tract length in repeat units |
+| `rpt_max_mismatch` | `0` | whole number | Mismatches allowed per repeat unit |
+| `rpt_start_perfect_repeats` | `2` | whole number | Perfect units required at the start of a tract |
+| `rpt_end_perfect_repeats` | `2` | whole number | Perfect units required at the end of a tract |
+| `rpt_max_gap` | `6` | whole number | Maximum bases between units inside a tract |
+| `rpt_max_tract_gap` | `18` | whole number | Maximum gap between sub-tracts before they are merged |
+| `rpt_return_option` | `longest` | text | Which tract to keep when several are found: `longest` or `first` |
+| `rpt_flank_pad` | `30` | whole number | Bases either side of the flank boundaries searched for the tract, so a tract can extend past where the aligner placed the flank |
+| `repeat_count_method` | `full` | text | Primary count: `full` (tract length / motif length), `match` (exact units) or `pure` (longest uninterrupted run) |
+| `na_repeat_handling` | `keep` | text | Reads that align but have no tract: `keep` (no length; counted in the detection rate only), `convert_to_zero` (length 0, as in v2; falls into ranges starting at 0 or NA) or `filter` (removed) |
+| `composites` | – | text list | Combined measures, e.g. `CAG_CCG_sum=CAG+CCG:sum` (pure units added) or `CAG_CCG_span=CAG+CCG:span` (first tract start to last tract end) |
+| `export_read_counts` | `TRUE` | TRUE / FALSE | Write per-read lengths to 03_repeat_detection/read_repeat_counts/ |
+| `rm_flank_length_outliers` | `FALSE` | TRUE / FALSE | Remove reads with outlying combined flank length |
+| `flank_iqr_multiplier` | `1.5` | number | IQR multiplier for the flank length filter |
+
+<!-- params:Repeats:end -->
+
 ---
 
 ## Instability metrics
@@ -196,7 +264,7 @@ For each sample × measure × range × unit, with setpoint s and d = length – 
 
 | Metric | Definition |
 |---|---|
-| `instability_index` (II) | mean(d) = EI + CI (Lee et al. 2010) |
+| `instability_index` (II) | mean(d) = EI + CI. With a modal setpoint this is the instability index of Lee et al. (2010); their threshold of 10% of the modal peak is `floor = 0.1` in the settings file |
 | `expansion_index` (EI) | sum of positive d ÷ n |
 | `contraction_index` (CI) | sum of negative d ÷ n |
 | `mean_expansion_size` | mean d of the reads above s (was "expansion index" in v2) |
@@ -204,7 +272,8 @@ For each sample × measure × range × unit, with setpoint s and d = length – 
 | `prop_at`, `prop_above`, `prop_below` | proportion within ±0.5 of s, above, below |
 | `prop_above_k`, `prop_below_k` | proportion at least k units above / below s (`expansion_thresholds`, default 5 and 10) |
 | `expansion_ratio`, `contraction_ratio` | reads above / at s, below / at s (unstable when few reads sit at s) |
-| `modal_diff`, `median_diff`, `mean_diff`, `z_score` | difference from the group control |
+| `modal_diff`, `median_diff`, `mean_diff` | the sample's modal, median and mean minus the group control's |
+| `z_score` | (sample value – control setpoint) ÷ SD across the control samples; blank with manual controls or a single control |
 
 Two setpoints are reported (`setpoint_type`):
 
@@ -212,6 +281,28 @@ Two setpoints are reported (`setpoint_type`):
 - `control_relative` – that metric aggregated (`control_aggregation_method`) across the group's control samples, so the metrics measure change since the control (e.g. t = 0). With `use_manual_controls = TRUE` a `manual_control_repeat_length` replaces it; `setpoint_source` records which was used.
 
 Distribution statistics (modal, median, mean, SD, IQR, 5th and 95th percentiles, skewness, kurtosis) are in `distribution_summary`.
+
+### Instability parameters (Module 6)
+
+<!-- params:Instability:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `range_peak_span` | `3` | whole number | Window for modal peak detection |
+| `group_control` | `TRUE` | TRUE / FALSE | Calculate group control setpoints |
+| `control_sample_selection` | `flagged` | text | `flagged`, `earliest` or `all` |
+| `control_setpoint_metric` | `median_length` | text | `modal_length`, `mean_length` or `median_length` |
+| `control_aggregation_method` | `median` | text | `mean`, `median` or `trimmed_mean` across control samples |
+| `use_manual_controls` | `FALSE` | TRUE / FALSE | Use manual_control_repeat_length from the settings file as the control setpoint (replacing the group control) for those samples and ranges |
+| `expansion_thresholds` | `5, 10` | whole-number list | k for proportion of reads at least k units above / below the setpoint |
+| `cohort_plot_by` | `group, time` | text list | Dimensions for cohort plots: group, time |
+| `headline_metrics` | `modal_length, median_length, mean_length, instability_index, expansion_index, prop_above_5` | text list | Metrics drawn as timecourses by group |
+| `headline_setpoint_type` | `control_relative` | text | Setpoint type for headline plots: `control_relative` or `sample_relative` |
+| `plot_ranges` | – | text list | Ranges drawn inline (default: the first two ranges of the primary measure) |
+| `measure_pairs` | – | text list | Pairs of measures to plot against each other per read, e.g. `CAG:CCG` (default: every pair of tracts) |
+| `pair_max_points` | `4000` | whole number | Maximum reads per sample in per-read pair plots |
+
+<!-- params:Instability:end -->
 
 ---
 
@@ -242,7 +333,25 @@ Logs go to `logs/<date_time>/` in the Duke folder: the run log, the resolved par
 
 ## Parameters
 
-Every parameter, its default and a one-line explanation is in `scripts/duke_run.R` and `./duke --help`; both are generated from `lib/params.R`. The ones most often changed:
+Every parameter is listed in a table with its default, format and what it does. The tables for repeat detection, UMIs, instability and paths are in those sections; the rest are below.
+
+| Parameters | Table |
+|---|---|
+| Paths (`dir_data`, `path_ref`, `path_settings`, ...) | [Path parameters](#path-parameters) |
+| Module 1: import and QC | [Import parameters](#import-parameters-module-1) |
+| Module 2: alignment | [Alignment parameters](#alignment-parameters-module-2) |
+| Module 3: repeat detection (`rpt_*`, counting, composites) | [Repeat detection parameters](#repeat-detection-parameters-module-3) |
+| Module 4: UMI (`umi_*`) | [UMI parameters](#umi-parameters-module-4) |
+| Module 5: allele structure (clustering, waterfalls) | [Allele structure parameters](#allele-structure-parameters-module-5) |
+| Module 6: instability (controls, metrics, plots) | [Instability parameters](#instability-parameters-module-6) |
+| Module 7: repeat lengths | [Repeat length parameters](#repeat-length-parameters-module-7) |
+| Threads, resume, modules, plots | [Runtime parameters](#runtime-parameters) |
+
+**Setting a parameter.** On the command line, `--name value`: `--rpt_flank_pad 40`, `--umi TRUE`. A list is comma-separated, `--expansion_thresholds 5,10,20`, and a whole-number list can use ranges, `--run_modules 1:3,6`. In `scripts/duke_run.R` or `duke_run_local.R`, `name = value` (`rpt_flank_pad = 40L`, `expansion_thresholds = c(5, 10, 20)`). `NA` means not set (for a path) or no limit (for a filter); `–` means empty. `./duke --help` shows the same information, and `--dry_run` prints the values a run would use.
+
+The tables are generated from `lib/params.R`, which defines every parameter; after changing it, run `Rscript scripts/update_readme_params.R` to update them.
+
+### Most often changed
 
 | Parameter | Default | |
 |---|---|---|
@@ -265,6 +374,94 @@ Every parameter, its default and a one-line explanation is in `scripts/duke_run.
 
 Parameters from v2 that no longer exist are ignored with a message; the v2 count names (`repeat_count_full` etc.) are still accepted.
 
+### Import parameters (Module 1)
+
+<!-- params:Import:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `import_patterns` | `\.fastq$, \.fastq\.gz$, \.fq$, \.fq\.gz$, \.fasta$, \.fa$, \.bam$` | text list | Regex patterns for files to import |
+| `import_recursive` | `TRUE` | TRUE / FALSE | Search dir_data recursively |
+| `r1_pattern` | `_R1_` | text | Pattern identifying R1 files in paired-end data |
+| `r2_pattern` | `_R2_` | text | Pattern identifying R2 files in paired-end data |
+| `select_one_of_pair` | `R1` | text | Paired-end: import `R1`, `R2` or `all` |
+| `downsample` | `NA` | whole number | Maximum reads per sample (NA = all) |
+| `np_min` | `NA` | whole number | Drop PacBio HiFi reads with fewer passes than this (NA = no filter) |
+| `pacbio_scatter_downsample` | `50000` | whole number | Maximum points in the PacBio passes-vs-length plot |
+| `check_duplicate_readnames` | `FALSE` | TRUE / FALSE | Remove duplicate read names, keeping the longest. Off by default: PacBio and ONT read names are unique, and the check removed 0 reads in 36 M |
+| `trim` | `FALSE` | TRUE / FALSE | Trim adapters from read ends. Off by default: demultiplexed HiFi reads are already trimmed (20 of 36 M reads were trimmed in the msn run) |
+| `trim_max_mismatch` | `3` | whole number | Maximum errors in an adapter match |
+| `trim_with_indels` | `TRUE` | TRUE / FALSE | Allow indels in adapter matching |
+
+<!-- params:Import:end -->
+
+### Alignment parameters (Module 2)
+
+<!-- params:Alignment:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `minimap2_args` | `-t 1 -x sr -w 1` | text | minimap2 arguments for aligning reads to each flank |
+| `keep_bam` | `FALSE` | TRUE / FALSE | Keep the per-sample flank BAMs in 02_alignment/bam/ for IGV |
+| `visualise_alignment` | `TRUE` | TRUE / FALSE | Write per-sample flank alignment plots |
+| `visualise_alignment_downsample` | `1000` | whole number | Maximum reads per alignment plot |
+
+<!-- params:Alignment:end -->
+
+### Allele structure parameters (Module 5)
+
+`cluster_by = haplotype` is described in [Common workflows](#common-workflows).
+
+<!-- params:Allele structure:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `cluster` | `FALSE` | TRUE / FALSE | Cluster reads into alleles, build consensus sequences and call variants |
+| `cluster_by` | `repeat` | text list | `repeat`, `haplotype`, or `repeat,haplotype` |
+| `repeat_cluster_max` | `6` | whole number | Maximum repeat-length clusters per sample |
+| `repeat_cluster_min_prop` | `0.05` | number | Clusters holding fewer than this proportion of reads are merged into their nearest neighbour |
+| `repeat_cluster_downsample` | `10000` | whole number | Reads used to choose the number of repeat clusters |
+| `haplotype_cluster_max` | `6` | whole number | Maximum haplotype clusters per sample |
+| `haplotype_cluster_downsample` | `3000` | whole number | Reads used to define haplotype clusters |
+| `haplotype_region` | `both` | text | Flank(s) used for haplotypes: `left`, `right` or `both` |
+| `haplotype_trim_length` | `auto` | text | `auto`, a number of bases, or `NA` for no trimming |
+| `consensus_threshold` | `0.5` | number | Minimum agreement for a consensus base |
+| `consensus_downsample` | `50` | whole number | Maximum reads per consensus alignment |
+| `call_variants` | `TRUE` | TRUE / FALSE | Call variants in each cluster consensus against the reference |
+| `waterfall` | `TRUE` | TRUE / FALSE | Write per-sample waterfall plots |
+| `waterfall_downsample` | `1000` | whole number | Maximum reads per waterfall |
+| `waterfall_flank_bp` | `60` | whole number | Bases of flank drawn either side of the tract in waterfalls |
+| `waterfall_per_cluster` | `FALSE` | TRUE / FALSE | Also write one waterfall per cluster |
+
+<!-- params:Allele structure:end -->
+
+### Repeat length parameters (Module 7)
+
+<!-- params:Repeat lengths:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `sample_cards` | `TRUE` | TRUE / FALSE | Write one summary figure per sample |
+| `repeat_histogram_binwidth` | `1` | whole number | Histogram bin width in repeat units |
+
+<!-- params:Repeat lengths:end -->
+
+### Runtime parameters
+
+<!-- params:Runtime:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `plot_dpi` | `150` | whole number | Resolution of saved plots |
+| `plot_per_sample` | `TRUE` | TRUE / FALSE | Write per-sample plots in Modules 2 and 3 |
+| `threads` | `4` | whole number | CPU cores |
+| `resume` | `TRUE` | TRUE / FALSE | Reuse a module's results when the parameters that affect it are unchanged |
+| `remove_intermediate` | `TRUE` | TRUE / FALSE | Free memory between steps |
+| `remove_temp` | `FALSE` | TRUE / FALSE | Delete temp/ (per-sample caches) at the end |
+| `run_modules` | `1:7` | whole-number list | Modules to run |
+
+<!-- params:Runtime:end -->
+
 ---
 
 ## Resume
@@ -283,7 +480,7 @@ With `resume = TRUE` (default) a module is reused when its stored parameter hash
 
 Edit the paths in the script, then `qsub scripts/duke_myriad.sh` (or `sbatch` for Slurm). `--threads` is set from `$NSLOTS` / `$SLURM_NTASKS`. Each script lists the optional additions (tracts, UMIs, clustering, trimming) as comments.
 
-Monitoring: `qstat -u $USER`, `qdel <id>`, `qacct -j <id>` (SGE); `squeue -u $USER`, `scancel <id>`, `sacct -j <id>` (Slurm); `tail -f logs/duke_*.out`.
+Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data read so far), `qdel <id>`, `qacct -j <id>` (SGE); `squeue -u $USER`, `scancel <id>`, `sacct -j <id>` (Slurm). Duke's progress goes to the scheduler's `logs/duke_<id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's warnings and messages go to the run log only. Loading R on a compute node can take a few minutes before the first Duke line appears, and on shared filesystems new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file.
 
 **Run time.** Module 3 is vectorised (seconds per sample) and Module 7 writes one card per sample instead of one plot per sample × range × plot type, so Modules 3 to 7 take minutes rather than hours. Module 2 (minimap2) and, when enabled, trimming and clustering dominate. On 2 cores, 14 PacBio samples of 2,500 reads run Modules 1 to 7 with clustering in about 3 minutes.
 
@@ -291,7 +488,7 @@ Monitoring: `qstat -u $USER`, `qdel <id>`, `qacct -j <id>` (SGE); `squeue -u $US
 
 ## Common workflows
 
-**First look at new data** – run without a settings file; Modules 1–5 and 7 run, and the Module 3 and 7 plots show where to put the ranges.
+**First look at new data** – run without a settings file; every module except 6 runs (4 only with `umi = TRUE`), and the Module 3 and 7 plots show where to put the ranges.
 
 **Add or change the settings** – `./duke ... --path_settings new.xlsx --run_modules 6,7` (Modules 1–3 are reused).
 
@@ -310,7 +507,8 @@ Monitoring: `qstat -u $USER`, `qdel <id>`, `qacct -j <id>` (SGE); `squeue -u $US
 - **"Reference must contain exactly one N block"** – mask the repeat with one run of N; for separate tracts use separate references in the tracts table.
 - **A tract is detected in few reads** (Module 3 detection plot) – check the motif and that the N block covers the tract; lower `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` for very interrupted tracts.
 - **Few UMIs extracted** – the Module 4 outcome plot says which flank is missing; check the flank sequences and orientation, and `umi_search_window`.
-- **Module 6 skipped** – no settings file, or no file names in it match the data (`missing` samples are listed in the report).
+- **Module 6 skipped** – no settings file was given, or the path does not exist (the run log says "Skipped (no settings file ...)"; check the path).
+- **"No analysis ranges could be read from the settings file"** – none of the settings rows match a sample in `dir_data`, or the matching rows have no `analysis_ranges`. Check that `file_name` matches the input file names.
 - **Results did not change after updating Duke** – resume reused old modules; delete `module_data/`.
 - **"umi_min_reads must exceed umi_top_cluster_k"** – with exactly k reads `top_cluster` returns their median; raise `umi_min_reads` or change the statistic.
 
