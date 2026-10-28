@@ -11,7 +11,7 @@
 #$ -m bea
 
 # ==============================================================================
-# Duke 3.0.1 - Old Kathleen Job Script
+# Duke 3.0.2 - Old Kathleen Job Script
 # Config: 160 cores requested, 80 used (2G/core = 320GB total); threads set automatically from $NSLOTS
 # See README.md for resource guidance and Kathleen-specific notes
 # ==============================================================================

@@ -112,18 +112,21 @@ cluster_umis_directional <- function(umi_vec, d = 1L) {
   e2 <- pr[cnt[b] >= 2L * cnt[a] - 1L, .(from = b, to = a)]
   edges <- rbind(e1, e2)
   adj <- split(edges$to, factor(edges$from, levels = seq_along(u)))
+  # Work on integer positions (u[k] <-> position k): assigning into a named
+  # character vector by name costs O(n) per assignment, O(n^2) in all
+  hub <- seq_along(u)
   assigned <- rep(FALSE, length(u))
-  for (i in seq_along(u)) {          # u is sorted by abundance, so hubs come first
+  for (i in which(lengths(adj) > 0L)) {   # u is sorted by abundance, so hubs come first
     if (assigned[i]) next
-    queue <- i; assigned[i] <- TRUE; map[u[i]] <- u[i]
+    queue <- i; assigned[i] <- TRUE
     while (length(queue)) {
       v <- queue[1]; queue <- queue[-1]
       nb <- adj[[v]]
       nb <- nb[!assigned[nb]]
-      if (length(nb)) { assigned[nb] <- TRUE; map[u[nb]] <- u[i]; queue <- c(queue, nb) }
+      if (length(nb)) { assigned[nb] <- TRUE; hub[nb] <- i; queue <- c(queue, nb) }
     }
   }
-  list(map = map, pairs = pr, u = u, cnt = cnt)
+  list(map = setNames(u[hub], u), pairs = pr, u = u, cnt = cnt)
 }
 
 # Expected fraction of UMIs with at least one other UMI within d substitutions by chance

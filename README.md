@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.0.1** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.0.2** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -541,6 +541,9 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 
 **v3.0.1**
 - Module 1 reads each BAM once: the PacBio tags (np, rq, ec, zm, bq) are kept from the same pass as the sequences instead of being read in a second pass over the whole file. Results are identical; the BAM reading step takes about a third less time.
+
+**v3.0.2**
+- UMI clustering (Module 4) assigned UMIs to their groups by name, which slows down with the square of the number of distinct UMIs: 63,000 UMIs took 100 s and a sample with 300,000 about 40 minutes. It now works by position: 315,000 UMIs in 24 s, with identical groups.
 
 **Removed**
 - Per-sample × per-range histogram, scatter and density PNGs (replaced by the sample cards and heatmaps). Parameters for them are ignored with a message.
