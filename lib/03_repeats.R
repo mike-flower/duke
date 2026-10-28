@@ -1,510 +1,241 @@
 # ==============================================================================
-# Duke Pipeline - Repeat Detection Functions (Vectorized)
+# Duke - repeat tract detection and counting
 # ==============================================================================
-# Optimized functions for finding and counting repeat tracts
+# For each read, each tract is searched for in the region between the two flank
+# alignments, extended by `flank_pad` bases into each flank. The extension lets
+# a tract run on past the point where the aligner happened to place the flank
+# boundary (for example, an LOI allele whose last pure CAG minimap2 assigns to
+# the right flank). A tract must overlap the between-flanks region, so repeats
+# that lie wholly inside a flank are never picked up.
+#
+# Tracts sharing a reference are found in table order (5' to 3'): each is
+# searched for downstream of the previous one. The sequence between consecutive
+# tracts is kept per read.
+#
+# Finding a tract (all reads at once, vectorised):
+#   1. every occurrence of the motif (allowing max_mismatch per unit)
+#   2. occurrences no more than max_gap bases apart form a run; runs of at least
+#      min_repeats units are kept
+#   3. runs no more than max_tract_gap apart are merged into tracts
+#   4. each end is trimmed back to the first / last point where
+#      start_perfect_repeats / end_perfect_repeats exact units occur in a row
+#   5. the longest (or first) tract overlapping the between-flanks region is kept
+#
+# Three counts per tract:
+#   full  = tract length in bases / motif length (rounded). Includes bases of any
+#           interruption inside the tract.
+#   match = number of exact motif units inside the tract
+#   pure  = longest run of exact, uninterrupted units
 # ==============================================================================
 
-# Find repeat tracts in a single sequence
-find_repeat_tracts <- function(sequence,
-                               pattern,
-                               min_repeats = 3,
-                               max_mismatch = 0,
-                               start_perfect_repeats = 1,
-                               end_perfect_repeats = 1,
-                               max_gap = 3,
-                               max_tract_gap = NULL,
-                               return_option = "all") {
-  
-  # Exit if there is no sequence
-  if (is.na(sequence) || sequence == "") {
-    return(list(start = NA, end = NA, repeat_count = NA))
-  }
-  
-  # Find repeat units throughout the sequence
-  matches <- matchPattern(pattern = pattern, 
-                          subject = DNAString(sequence), 
-                          max.mismatch = max_mismatch)
-  
-  # Exit if no matches found
-  if (length(matches) == 0) {
-    return(list(start = NA, end = NA, repeat_count = NA))
-  }
-  
-  # Check if only one match is found
-  if (length(matches) == 1) {
-    if (min_repeats > 1) {
-      return(list(start = NA, end = NA, repeat_count = NA))
-    } else {
-      return(list(start = start(matches)[1], end = end(matches)[1], repeat_count = 1))
+.self_overlaps <- function(motif) {
+  L <- nchar(motif)
+  if (L < 2) return(TRUE)
+  any(vapply(1:(L - 1), function(k) substr(motif, 1, k) == substr(motif, L - k + 1, L), logical(1)))
+}
+
+# Long table of motif matches: read index (i) and start/end in window coordinates
+.motif_hits <- function(windows, motif, max_mismatch) {
+  dss <- Biostrings::DNAStringSet(windows)
+  m <- Biostrings::vmatchPattern(motif, dss, max.mismatch = max_mismatch, fixed = TRUE)
+  st <- Biostrings::startIndex(m)
+  n <- lengths(st)
+  if (sum(n) == 0) return(data.table::data.table(i = integer(), s = integer(), e = integer()))
+  L <- nchar(motif)
+  h <- data.table::data.table(i = rep.int(seq_along(st), n), s = unlist(st, use.names = FALSE))
+  h <- h[s >= 1]
+  h[, e := s + L - 1L]
+  h <- h[e <= nchar(windows)[i]]
+  data.table::setorder(h, i, s)
+  if (.self_overlaps(motif) || max_mismatch > 0) {
+    # Greedy non-overlapping selection (needed for self-overlapping motifs and
+    # for inexact matching, where e.g. CAG and GAG hits can overlap in CAGAG)
+    keep <- logical(nrow(h)); last_i <- -1L; last_e <- -1L
+    for (k in seq_len(nrow(h))) {
+      if (h$i[k] != last_i || h$s[k] > last_e) { keep[k] <- TRUE; last_i <- h$i[k]; last_e <- h$e[k] }
     }
+    h <- h[keep]
   }
-  
-  # Initiate lists to store repeat tract information
-  tracts <- list()
-  current_tract <- list(start = start(matches)[1], 
-                        end = end(matches)[1], 
-                        repeat_count = 1)
-  
-  # Analyse the matches to form repeat tracts
-  for (i in 2:length(matches)) {
-    
-    # Measure gap between this match and the next
-    gap_between_matches <- start(matches)[i] - end(matches)[i - 1] - 1
-    
-    # Use the gap to determine whether to end the current repeat tract
-    if (gap_between_matches <= max_gap) {
-      
-      # Update repeat tract end
-      current_tract$end <- end(matches)[i]
-      
-      # Increment repeat count
-      current_tract$repeat_count <- current_tract$repeat_count + 1
-      
-    } else {
-      
-      # Store the current tract if it is long enough
-      if (current_tract$repeat_count >= min_repeats) {
-        tracts[[length(tracts) + 1]] <- current_tract
-      }
-      
-      # Initiate a new tract starting at the current match
-      current_tract <- list(start = start(matches)[i], 
-                            end = end(matches)[i], 
-                            repeat_count = 1)
+  h
+}
+
+# Find one tract per window. Returns data.table(i, start, end) in window coords
+# for windows where a tract overlapping [core_lo, core_hi] was found.
+find_tracts_vectorised <- function(windows, core_lo, core_hi, motif, min_repeats = 2L,
+                                   max_mismatch = 0L, start_perfect = 2L, end_perfect = 2L,
+                                   max_gap = 6L, max_tract_gap = 18L, return_option = "longest") {
+  L <- nchar(motif)
+  empty <- data.table::data.table(i = integer(), start = integer(), end = integer())
+  hits <- .motif_hits(windows, motif, max_mismatch)
+  if (nrow(hits) == 0) return(empty)
+
+  # 2. runs
+  hits[, gap := s - data.table::shift(e) - 1L, by = i]
+  hits[, run := cumsum(is.na(gap) | gap > max_gap), by = i]
+  runs <- hits[, .(s = min(s), e = max(e), n = .N), by = .(i, run)][n >= min_repeats]
+  # A run may extend into the flank padding, but a run lying wholly inside the
+  # padding belongs to the flank and is never merged into the tract
+  runs <- runs[s <= core_hi[i] + 1L & e >= core_lo[i] - 1L]
+  if (nrow(runs) == 0) return(empty)
+
+  # 3. merge runs into tracts
+  data.table::setorder(runs, i, s)
+  runs[, gap := s - data.table::shift(e) - 1L, by = i]
+  runs[, tr := cumsum(is.na(gap) | gap > max_tract_gap), by = i]
+  tracts <- runs[, .(start = min(s), end = max(e)), by = .(i, tr)]
+
+  # 4. perfect-unit trimming from exact matches
+  exact <- if (max_mismatch == 0) hits[, .(i, s)] else .motif_hits(windows, motif, 0L)[, .(i, s)]
+  if (nrow(exact) == 0 && (start_perfect > 0 || end_perfect > 0)) return(empty)
+  if (nrow(exact) > 0 && (start_perfect > 0 || end_perfect > 0)) {
+    data.table::setorder(exact, i, s)
+    exact[, chain := cumsum(is.na(data.table::shift(s)) | (s - data.table::shift(s)) != L), by = i]
+    exact[, `:=`(pos = seq_len(.N), size = .N), by = .(i, chain)]
+    exact[, `:=`(fwd = size - pos + 1L, bwd = pos)]
+    tracts[, tid := .I]
+    # candidate starts: exact unit p inside the tract with >= start_perfect units ahead
+    if (start_perfect > 0) {
+      cs <- exact[fwd >= start_perfect, .(i, p = s)]
+      j <- cs[tracts, on = .(i), allow.cartesian = TRUE, nomatch = NULL][
+        p >= start & p + start_perfect * L - 1L <= end, .(new_start = min(p)), by = tid]
+      tracts[j, start := i.new_start, on = .(tid)]
+      tracts <- tracts[tid %in% j$tid]   # no qualifying perfect start: not a tract
     }
-  }
-  
-  # Store the current tract if it meets the minimum repeat requirement
-  if (current_tract$repeat_count >= min_repeats) {
-    tracts[[length(tracts) + 1]] <- current_tract
-  }
-  
-  # Optionally combine tracts that are within the tract_gap distance
-  if (!is.null(max_tract_gap) && length(tracts) > 1) {
-    
-    combined_tracts <- list()
-    current_tract <- tracts[[1]]
-    
-    for (i in 2:length(tracts)) {
-      
-      gap_between_tracts <- tracts[[i]]$start - current_tract$end - 1
-      
-      if (gap_between_tracts <= max_tract_gap) {
-        current_tract$end <- tracts[[i]]$end
-        current_tract$repeat_count <- current_tract$repeat_count + tracts[[i]]$repeat_count
-      } else {
-        combined_tracts[[length(combined_tracts) + 1]] <- current_tract
-        current_tract <- tracts[[i]]
-      }
+    if (end_perfect > 0) {
+      ce <- exact[bwd >= end_perfect, .(i, q = s + L - 1L)]
+      j <- ce[tracts, on = .(i), allow.cartesian = TRUE, nomatch = NULL][
+        q <= end & q - end_perfect * L + 1L >= start, .(new_end = max(q)), by = tid]
+      tracts[j, end := i.new_end, on = .(tid)]
+      tracts <- tracts[tid %in% j$tid]
     }
-    
-    combined_tracts[[length(combined_tracts) + 1]] <- current_tract
-    tracts <- combined_tracts
+    tracts <- tracts[end >= start]
   }
-  
-  # Trim the start and end points based on perfect repeat constraints
-  trimmed_tracts <- lapply(tracts, function(tract) {
-    
-    # Trim forward from the start for x perfect repeats
-    if (start_perfect_repeats > 0) {
-      for (pos in seq(tract$start, tract$end - (start_perfect_repeats * nchar(pattern)) + 1)) {
-        if (identical(substring(sequence, pos, pos + (start_perfect_repeats * nchar(pattern)) - 1), 
-                      paste(rep(pattern, start_perfect_repeats), collapse = ""))) {
-          tract$start <- pos
-          break
-        }
-      }
-    }
-    
-    # Trim backward from the end for y perfect repeats
-    if (end_perfect_repeats > 0) {
-      for (pos in seq(tract$end, tract$start + (end_perfect_repeats * nchar(pattern)) - 1, by = -1)) {
-        if (identical(substring(sequence, pos - (end_perfect_repeats * nchar(pattern)) + 1, pos), 
-                      paste(rep(pattern, end_perfect_repeats), collapse = ""))) {
-          tract$end <- pos
-          break
-        }
-      }
-    }
-    
-    return(tract)
-  })
-  
-  # Exit if no valid tracts
-  if (length(trimmed_tracts) == 0) {
-    return(list(start = NA, end = NA, repeat_count = NA))
-  }
-  
-  # Select which tract(s) to return
+
+  # 5. overlap with the between-flanks region, then choose one tract per read
+  tracts[, `:=`(clo = core_lo[i], chi = core_hi[i])]
+  tracts <- tracts[start <= chi + 1L & end >= clo - 1L]
+  if (nrow(tracts) == 0) return(empty)
   if (return_option == "first") {
-    return(trimmed_tracts[[1]])
-  } else if (return_option == "longest") {
-    longest <- which.max(sapply(trimmed_tracts, function(x) x$end - x$start + 1))
-    return(trimmed_tracts[[longest]])
+    data.table::setorder(tracts, i, start)
   } else {
-    return(trimmed_tracts)
+    tracts[, len := end - start + 1L]
+    data.table::setorder(tracts, i, -len, start)
   }
+  tracts[!duplicated(i), .(i, start, end)]
 }
 
-# ==============================================================================
-# VECTORIZED: Count repeats for a vector of sequences
-# ==============================================================================
-# Calculates three different repeat count methods:
-#   1. repeat_count_full: tract_length ÷ pattern_length (robust, includes errors)
-#   2. repeat_count_match: count of exact matches (stringent, excludes errors)
-#   3. repeat_count_tracts: tract structure like "3,2,2" (for QC visualization)
-# ==============================================================================
-
-count_repeats_vectorized <- function(sequences, pattern, round_digits = NA) {
-  
-  # Handle NA or empty sequences
-  is_valid <- !is.na(sequences) & sequences != ""
-  
-  # Initialize output vectors
-  n <- length(sequences)
-  repeat_count_full <- rep(NA_real_, n)
-  repeat_count_match <- rep(NA_integer_, n)
-  repeat_count_tracts <- rep(NA_character_, n)
-  
-  if (any(is_valid)) {
-    valid_seqs <- sequences[is_valid]
-    
-    # Vectorized: Calculate full repeat count
-    repeat_count_full[is_valid] <- nchar(valid_seqs) / nchar(pattern)
-    if (!is.na(round_digits)) {
-      repeat_count_full[is_valid] <- round(repeat_count_full[is_valid], digits = round_digits)
-    }
-    
-    # Vectorized: Count exact matches
-    repeat_count_match[is_valid] <- str_count(valid_seqs, pattern)
-    
-    # For tract counting, we need to iterate (can't fully vectorize this part)
-    # This calculates tract structure (e.g., "3,2,2" for three tracts)
-    # ANY gap (even 1bp) breaks tract continuity
-    for (i in which(is_valid)) {
-      matches <- str_locate_all(sequences[i], pattern)[[1]]
-      
-      if (nrow(matches) > 0) {
-        # Calculate gaps between consecutive matches
-        gaps <- matches[-1, 1] - matches[-nrow(matches), 2] - 1
-        
-        # Any gap > 0 breaks the tract (strict continuity)
-        stretch_starts <- c(1, which(gaps > 0) + 1)
-        stretch_ends <- c(which(gaps > 0), nrow(matches))
-        repeat_count_tracts[i] <- paste(stretch_ends - stretch_starts + 1, collapse = ",")
-      } else {
-        repeat_count_tracts[i] <- "0"
-      }
-    }
-  }
-  
-  # Return as data frame for easy merging
-  return(data.frame(
-    repeat_count_full = repeat_count_full,
-    repeat_count_match = repeat_count_match,
-    repeat_count_tracts = repeat_count_tracts,
-    stringsAsFactors = FALSE
-  ))
+# Counts for a vector of tract sequences
+count_tract_units <- function(seqs, motif) {
+  L <- nchar(motif)
+  n <- length(seqs)
+  out <- data.table::data.table(full = rep(NA_real_, n), match = NA_integer_, pure = NA_integer_,
+                                structure = NA_character_)
+  ok <- !is.na(seqs) & nchar(seqs) > 0
+  if (!any(ok)) return(out)
+  out$full[ok] <- floor(nchar(seqs[ok]) / L + 0.5)
+  h <- .motif_hits(seqs[ok], motif, 0L)
+  if (nrow(h) == 0) { out$match[ok] <- 0L; out$pure[ok] <- 0L; out$structure[ok] <- "0"; return(out) }
+  # contiguous chains of exact units (any gap breaks the chain)
+  h[, chain := cumsum(is.na(data.table::shift(e)) | s != data.table::shift(e) + 1L), by = i]
+  ch <- h[, .(n = .N), by = .(i, chain)]
+  agg <- ch[, .(match = sum(n), pure = max(n), structure = paste(n, collapse = ",")), by = i]
+  idx <- which(ok)
+  out$match[idx] <- 0L; out$pure[idx] <- 0L; out$structure[idx] <- "0"
+  out$match[idx[agg$i]] <- agg$match
+  out$pure[idx[agg$i]] <- agg$pure
+  out$structure[idx[agg$i]] <- agg$structure
+  out
 }
 
-# Apply find_repeat_tracts to a data frame - IMPROVED VERSION
-apply_find_repeat_tracts <- function(alignment_info,
-                                     sequence_column,
-                                     pattern,
-                                     min_repeats = 3,
-                                     max_mismatch = 0,
-                                     start_perfect_repeats = 1,
-                                     end_perfect_repeats = 1,
-                                     max_gap = 3,
-                                     max_tract_gap = NULL,
-                                     return_option = "all") {
-  
-  if (is.null(alignment_info) || nrow(alignment_info) == 0) return(NULL)
-  
-  # Store original read names for verification
-  original_qnames <- alignment_info$qname
-  
-  # Use pbapply for progress bar without rowwise()
-  results <- pblapply(seq_len(nrow(alignment_info)), function(i) {
-    seq_value <- alignment_info[[sequence_column]][i]
-    split_result <- find_repeat_tracts(
-      sequence = seq_value,
-      pattern = pattern,
-      min_repeats = min_repeats,
-      max_mismatch = max_mismatch,
-      start_perfect_repeats = start_perfect_repeats,
-      end_perfect_repeats = end_perfect_repeats,
-      max_gap = max_gap,
-      max_tract_gap = max_tract_gap,
-      return_option = return_option
-    )
-    
-    # Extract sequence segments
-    if (!is.na(split_result$start)) {
-      seq1 <- if (split_result$start > 1) {
-        substr(seq_value, 1, split_result$start - 1)
-      } else { NA_character_ }
-      
-      seq2 <- substr(seq_value, split_result$start, split_result$end)
-      
-      seq3 <- if (split_result$end < nchar(seq_value)) {
-        substr(seq_value, split_result$end + 1, nchar(seq_value))
-      } else { NA_character_ }
+# ------------------------------------------------------------------------------
+# All tracts for one sample and one reference group
+# ------------------------------------------------------------------------------
+# aln: Module 2 table for the sample (one row per read)
+# tr:  tracts rows for this reference, in 5'->3' order
+process_sample_repeats <- function(aln, tr) {
+  q <- aln$query_sequence
+  qlen <- nchar(q)
+  core_lo_read <- aln$left_qend + 1L
+  core_hi_read <- pmax(aln$right_qstart - 1L, aln$left_qend)
+  out <- data.table::data.table(file_stem = aln$file_stem, qname = aln$qname, ref_id = aln$ref_id,
+                                strand = aln$strand)
+  prev_end <- rep(NA_integer_, nrow(aln))   # end of the last tract found so far (search window)
+  prev_name <- NULL; prev_en <- NULL        # the immediately preceding tract
+  for (k in seq_len(nrow(tr))) {
+    t <- tr[k, ]
+    pad <- t$flank_pad
+    win_lo <- pmax(1L, aln$left_qend + 1L - pad)
+    win_hi <- pmin(qlen, aln$right_qstart - 1L + pad)
+    # later tracts are searched downstream of the previous tract
+    has_prev <- !is.na(prev_end)
+    win_lo[has_prev] <- pmax(win_lo[has_prev], prev_end[has_prev] + 1L)
+    bad <- win_hi < win_lo
+    win_hi[bad] <- win_lo[bad]
+    windows <- substring(q, win_lo, win_hi)
+    found <- find_tracts_vectorised(
+      windows, core_lo = core_lo_read - win_lo + 1L, core_hi = core_hi_read - win_lo + 1L,
+      motif = t$motif, min_repeats = t$min_repeats, max_mismatch = t$max_mismatch,
+      start_perfect = t$start_perfect_repeats, end_perfect = t$end_perfect_repeats,
+      max_gap = t$max_gap, max_tract_gap = t$max_tract_gap, return_option = t$return_option)
+    st <- rep(NA_integer_, nrow(aln)); en <- st
+    st[found$i] <- found$start + win_lo[found$i] - 1L
+    en[found$i] <- found$end + win_lo[found$i] - 1L
+    seqs <- ifelse(is.na(st), NA_character_, substring(q, st, en))
+    cnt <- count_tract_units(seqs, t$motif)
+    nm <- t$tract
+    out[, paste0(nm, "_start") := st]
+    out[, paste0(nm, "_end") := en]
+    out[, paste0(nm, "_full") := cnt$full]
+    out[, paste0(nm, "_match") := cnt$match]
+    out[, paste0(nm, "_pure") := cnt$pure]
+    out[, paste0(nm, "_structure") := cnt$structure]
+    out[, paste0(nm, "_seq") := seqs]
+    if (!is.null(prev_name)) {
+      # only when both this tract and the one immediately before it were found
+      bt <- ifelse(!is.na(prev_en) & !is.na(st), substring(q, prev_en + 1L, st - 1L), NA_character_)
+      out[, paste0("between_", prev_name, "_", nm) := bt]
+    }
+    prev_end <- ifelse(is.na(en), prev_end, en)
+    prev_name <- nm; prev_en <- en
+  }
+  out
+}
+
+# Primary-tract segments in the layout older Duke modules used (left / mid / right),
+# so existing downstream scripts that read alignment_counts_slim keep working.
+primary_segments <- function(aln, rt, primary) {
+  q <- aln$query_sequence
+  st <- rt[[paste0(primary, "_start")]]; en <- rt[[paste0(primary, "_end")]]
+  found <- !is.na(st)
+  left <- ifelse(found, substring(q, aln$left_qstart, st - 1L), substring(q, aln$left_qstart, aln$left_qend))
+  mid <- ifelse(found, substring(q, st, en), NA_character_)
+  right <- ifelse(found, substring(q, en + 1L, aln$right_qend),
+                  substring(q, aln$left_qend + 1L, aln$right_qend))
+  data.table::data.table(left = left, mid = mid, right = right)
+}
+
+# ------------------------------------------------------------------------------
+# Composite measures from the per-read tract table
+# ------------------------------------------------------------------------------
+compute_composites <- function(rt, composites, tracts) {
+  if (is.null(composites) || nrow(composites) == 0) return(rt)
+  for (k in seq_len(nrow(composites))) {
+    comps <- composites$components[[k]]
+    nm <- composites$name[k]
+    if (composites$mode[k] == "sum") {
+      vals <- lapply(comps, function(t) {
+        cm <- tracts$count_method[tracts$tract == t]
+        rt[[paste0(t, "_", cm)]]
+      })
+      rt[, (nm) := Reduce(`+`, vals)]
     } else {
-      seq1 <- seq_value
-      seq2 <- NA_character_
-      seq3 <- NA_character_
-    }
-    
-    return(list(
-      pattern_start = split_result$start,
-      pattern_end = split_result$end,
-      pattern_count = split_result$repeat_count,
-      seq1 = seq1,
-      seq2 = seq2,
-      seq3 = seq3
-    ))
-  })
-  
-  # Convert results to data frame
-  results_df <- data.frame(
-    pattern_start = sapply(results, `[[`, "pattern_start"),
-    pattern_end = sapply(results, `[[`, "pattern_end"),
-    pattern_count = sapply(results, `[[`, "pattern_count"),
-    stringsAsFactors = FALSE
-  )
-  
-  # Add sequence columns
-  seq1_col <- paste0(sequence_column, ".1")
-  seq2_col <- paste0(sequence_column, ".2")
-  seq3_col <- paste0(sequence_column, ".3")
-  
-  results_df[[seq1_col]] <- sapply(results, `[[`, "seq1")
-  results_df[[seq2_col]] <- sapply(results, `[[`, "seq2")
-  results_df[[seq3_col]] <- sapply(results, `[[`, "seq3")
-  
-  # Combine with original data
-  alignment_info <- cbind(alignment_info, results_df)
-  
-  # VERIFICATION: Check read names still match
-  if (!all(alignment_info$qname == original_qnames)) {
-    stop("CRITICAL ERROR: Read order has been scrambled!")
-  }
-  
-  # Rename pattern columns
-  names(alignment_info)[names(alignment_info) == "pattern_start"] <- 
-    paste0(sequence_column, "_pattern_start")
-  names(alignment_info)[names(alignment_info) == "pattern_end"] <- 
-    paste0(sequence_column, "_pattern_end")
-  names(alignment_info)[names(alignment_info) == "pattern_count"] <- 
-    paste0(sequence_column, "_pattern_count")
-  
-  # Remove original sequence column
-  alignment_info[[sequence_column]] <- NULL
-  
-  return(alignment_info)
-}
-
-# ==============================================================================
-# Apply count_repeats to alignment data - VECTORIZED VERSION
-# ==============================================================================
-# Calculates all three repeat counting methods and adds them as columns:
-#   - repeat_count_full: length-based (most robust for ONT data)
-#   - repeat_count_match: exact match counting (stringent)
-#   - repeat_count_tracts: tract structure string (for QC only)
-# 
-# The primary method is selected in duke_run.R via repeat_count_method parameter
-# ==============================================================================
-
-apply_count_repeats <- function(alignment_info, string_column, pattern, round_digits = 0) {
-  
-  if (is.null(alignment_info) || nrow(alignment_info) == 0) return(NULL)
-  
-  # Vectorized counting (much faster!)
-  count_results <- count_repeats_vectorized(
-    sequences = alignment_info[[string_column]],
-    pattern = pattern,
-    round_digits = round_digits
-  )
-  
-  # Add results as new columns
-  alignment_info$repeat_count_full <- count_results$repeat_count_full
-  alignment_info$repeat_count_match <- count_results$repeat_count_match
-  alignment_info$repeat_count_tracts <- count_results$repeat_count_tracts
-  
-  # Relocate new columns after the sequence column
-  col_idx <- which(names(alignment_info) == string_column)
-  alignment_info <- alignment_info[, c(
-    seq_len(col_idx),
-    which(names(alignment_info) %in% c("repeat_count_full", "repeat_count_match", "repeat_count_tracts")),
-    setdiff(seq_len(ncol(alignment_info)), 
-            c(seq_len(col_idx), 
-              which(names(alignment_info) %in% c("repeat_count_full", "repeat_count_match", "repeat_count_tracts"))))
-  )]
-  
-  return(alignment_info)
-}
-
-# Helper function: replace NA with blank
-na_to_blank <- function(string) {
-  ifelse(is.na(string), "", string)
-}
-
-# ==============================================================================
-# Per-sample wrapper for repeat tract finding (for use with apply_fn)
-# ==============================================================================
-find_repeat_tracts_sample <- function(file_stem,
-                                      alignment_split,
-                                      sequence_column = "mid",
-                                      pattern,
-                                      min_repeats = 3,
-                                      max_mismatch = 0,
-                                      start_perfect_repeats = 1,
-                                      end_perfect_repeats = 1,
-                                      max_gap = 3,
-                                      max_tract_gap = NULL,
-                                      return_option = "all",
-                                      out_dir = NULL,
-                                      resume = FALSE) {
-  
-  # Check for cached result
-  if (!is.null(out_dir) && resume) {
-    cache_file <- file.path(out_dir, paste0("repeat_tracts_", file_stem, ".RData"))
-    if (file.exists(cache_file)) {
-      load(cache_file)  # Loads 'sample_repeats'
-      return(sample_repeats)
+      starts <- do.call(pmin, lapply(comps, function(t) rt[[paste0(t, "_start")]]))
+      ends <- do.call(pmax, lapply(comps, function(t) rt[[paste0(t, "_end")]]))
+      bp <- ends - starts + 1L
+      L <- unique(nchar(tracts$motif[tracts$tract %in% comps]))
+      rt[, paste0(nm, "_bp") := bp]
+      rt[, (nm) := if (length(L) == 1) floor(bp / L + 0.5) else bp]
     }
   }
-  
-  # Get data for this sample
-  sample_data <- alignment_split[alignment_split$file_stem == file_stem, ]
-  
-  if (nrow(sample_data) == 0) {
-    warning("No data for sample: ", file_stem)
-    return(NULL)
-  }
-  
-  # Process this sample
-  sample_repeats <- apply_find_repeat_tracts(
-    alignment_info = sample_data,
-    sequence_column = sequence_column,
-    pattern = pattern,
-    min_repeats = min_repeats,
-    max_mismatch = max_mismatch,
-    start_perfect_repeats = start_perfect_repeats,
-    end_perfect_repeats = end_perfect_repeats,
-    max_gap = max_gap,
-    max_tract_gap = max_tract_gap,
-    return_option = return_option
-  )
-  
-  # Cache the result
-  if (!is.null(out_dir)) {
-    cache_file <- file.path(out_dir, paste0("repeat_tracts_", file_stem, ".RData"))
-    save(sample_repeats, file = cache_file)
-  }
-  
-  return(sample_repeats)
+  rt
 }
-
-# ==============================================================================
-# OPTIMIZED: Complete Module 3 processing per sample
-# ==============================================================================
-# Processes a single sample through ALL Module 3 steps:
-#   1. Find repeat tracts
-#   2. Reposition segments
-#   3. Count repeats
-# Result is cached for efficient resume
-# ==============================================================================
-
-process_sample_repeat_detection <- function(file_stem,
-                                     alignment_split,
-                                     pattern,
-                                     min_repeats = 3,
-                                     max_mismatch = 0,
-                                     start_perfect_repeats = 1,
-                                     end_perfect_repeats = 1,
-                                     max_gap = 3,
-                                     max_tract_gap = NULL,
-                                     return_option = "all",
-                                     repeat_count_method = "repeat_count_full",
-                                     round_digits = 0,
-                                     out_dir = NULL,
-                                     resume = FALSE) {
-  
-  # Check for cached counts (all three steps: find → reposition → count)
-  if (!is.null(out_dir) && resume) {
-    cache_file <- file.path(out_dir, paste0("count_", file_stem, ".RData"))
-    if (file.exists(cache_file)) {
-      load(cache_file)  # Loads 'sample_result'
-      return(sample_result)
-    }
-  }
-  
-  # Get data for this sample
-  sample_data <- alignment_split[alignment_split$file_stem == file_stem, ]
-  
-  if (nrow(sample_data) == 0) {
-    warning("No data for sample: ", file_stem)
-    return(NULL)
-  }
-  
-  # =============================================================================
-  # STEP 1: Find repeat tracts
-  # =============================================================================
-  sample_data <- apply_find_repeat_tracts(
-    alignment_info = sample_data,
-    sequence_column = "mid",
-    pattern = pattern,
-    min_repeats = min_repeats,
-    max_mismatch = max_mismatch,
-    start_perfect_repeats = start_perfect_repeats,
-    end_perfect_repeats = end_perfect_repeats,
-    max_gap = max_gap,
-    max_tract_gap = max_tract_gap,
-    return_option = return_option
-  )
-  
-  # =============================================================================
-  # STEP 2: Reposition segments around repeat tract
-  # =============================================================================
-  sample_data <- sample_data %>%
-    dplyr::mutate(
-      # Append mid.1 (pre-tract sequence) to left flank
-      left = paste0(na_to_blank(left), na_to_blank(mid.1)),
-      # Prepend mid.3 (post-tract sequence) to right flank
-      right = paste0(na_to_blank(mid.3), na_to_blank(right))
-    ) %>%
-    # Remove mid.1 and mid.3 (now incorporated into flanks)
-    dplyr::select(-mid.1, -mid.3) %>%
-    # Rename mid.2 to mid (this is now just the repeat tract)
-    dplyr::rename(mid = mid.2) %>%
-    # Remove pattern position columns
-    dplyr::select(-mid_pattern_start, -mid_pattern_end, -mid_pattern_count)
-  
-  # =============================================================================
-  # STEP 3: Count repeats (all three methods)
-  # =============================================================================
-  sample_data <- apply_count_repeats(
-    alignment_info = sample_data,
-    string_column = "mid",
-    pattern = pattern,
-    round_digits = round_digits
-  )
-  
-  # Add selected method as primary 'repeat_count' column
-  sample_data <- sample_data %>%
-    dplyr::mutate(repeat_count = !!sym(repeat_count_method))
-  
-  # =============================================================================
-  # Cache the counts (all three steps: find → reposition → count)
-  # =============================================================================
-  if (!is.null(out_dir)) {
-    sample_result <- sample_data
-    cache_file <- file.path(out_dir, paste0("count_", file_stem, ".RData"))
-    save(sample_result, file = cache_file)
-  }
-  
-  return(sample_data)
-}
-

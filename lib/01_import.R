@@ -21,22 +21,50 @@ fasta_import <- function(path) {
   readDNAStringSet(path, format = "fasta")
 }
 
-# Function to import bam
+# ------------------------------------------------------------------------------
+# BAM reading via samtools
+# ------------------------------------------------------------------------------
+# BAMs are read with `samtools view` rather than Rsamtools::scanBam. Rsamtools
+# prints "[samopen] no @SQ lines in the header" from C for every unaligned BAM
+# (all PacBio HiFi BAMs), three times per file, which R cannot silence; samtools'
+# stderr can simply be discarded. Secondary and supplementary records are
+# skipped (-F 0x900); the sequence is the stored SEQ, as scanBam returned it.
+# Returns data.table(qname, flag, seq, qual, np, rq, ec, zm, bq); absent tags NA.
+.bam_awk <- paste0("'BEGIN{FS=OFS=\"\\t\"} {np=rq=ec=zm=bq=\"NA\"; ",
+                   "for(i=12;i<=NF;i++){t=substr($i,1,2); v=substr($i,6); ",
+                   "if(t==\"np\")np=v; else if(t==\"rq\")rq=v; else if(t==\"ec\")ec=v; ",
+                   "else if(t==\"zm\")zm=v; else if(t==\"bq\")bq=v}; ",
+                   "print $1,$2,$10,$11,np,rq,ec,zm,bq}'")
+
+read_bam_records <- function(path, n = NULL) {
+  cmd <- paste("samtools view -F 0x900", shQuote(path), "2>/dev/null |",
+               if (!is.null(n)) paste("head -n", as.integer(n), "|") else "", "awk", .bam_awk)
+  cols <- c("qname", "flag", "seq", "qual", "np", "rq", "ec", "zm", "bq")
+  out <- tryCatch(data.table::fread(cmd = cmd, sep = "\t", header = FALSE, quote = "", na.strings = "NA",
+                                    colClasses = c("character", "integer", "character", "character",
+                                                   "integer", "numeric", "numeric", "integer", "integer"),
+                                    col.names = cols, showProgress = FALSE),
+                  error = function(e) NULL)
+  if (is.null(out) || !nrow(out)) {
+    if (is.null(n) && Sys.which("samtools") == "") stop("samtools is not on the PATH (needed to read BAM files)")
+    out <- data.table::data.table(qname = character(), flag = integer(), seq = character(), qual = character(),
+                                  np = integer(), rq = numeric(), ec = numeric(), zm = integer(), bq = integer())
+  }
+  out
+}
+
 bam_import <- function(path) {
-  bam_file <- BamFile(path)
-  bam_data <- scanBam(bam_file)
-  bam_sequences <- bam_data[[1]]$seq
-  bam_qualities <- bam_data[[1]]$qual
-  bam_read_names <- bam_data[[1]]$qname
-  quality_scaled_dnastringset <-
-    QualityScaledDNAStringSet(bam_sequences, bam_qualities)
-  names(quality_scaled_dnastringset) <- bam_read_names
-  return(quality_scaled_dnastringset)
+  r <- read_bam_records(path)
+  seqs <- Biostrings::DNAStringSet(r$seq)
+  if (!nrow(r) || all(r$qual == "*")) { names(seqs) <- r$qname; return(seqs) }
+  out <- Biostrings::QualityScaledDNAStringSet(seqs, Biostrings::PhredQuality(r$qual))
+  names(out) <- r$qname
+  out
 }
 
 # Function to import sequencing files
 import_sequencing <- function(path, format) {
-  if (format == "fastq" || format == "fastq.gz") {
+  if (format %in% c("fastq", "fastq.gz", "fq", "fq.gz")) {
     return(fastq_import(path))
   } else if (format == "fasta" || format == "fa") {
     return(fasta_import(path))
@@ -70,37 +98,13 @@ detect_pacbio <- function(path, format) {
   }
 
   tryCatch({
-
-    # Primary: read the np:i: tag from the first record
-    bf <- BamFile(path, yieldSize = 1)
-    open(bf)
-    on.exit(close(bf), add = TRUE)
-
-    first_record <- scanBam(bf, param = ScanBamParam(tag = "np"))
-    np_tag <- first_record[[1]]$tag$np
-    if (!is.null(np_tag) && length(np_tag) > 0 && !all(is.na(np_tag))) {
-      return(TRUE)
-    }
-
-    # Secondary: scan @PG header lines for ccs / skera / lima
-    hdr <- scanBamHeader(path)
-    pg_block <- hdr[[1]]$text
-    if (!is.null(pg_block) && length(pg_block) > 0) {
-      pg_entries <- pg_block[names(pg_block) == "@PG"]
-      if (length(pg_entries) > 0) {
-        pg_flat <- unlist(pg_entries, use.names = FALSE)
-        pn_values <- grep("^PN:", pg_flat, value = TRUE, ignore.case = TRUE)
-        if (length(pn_values) > 0) {
-          pn_clean <- sub("^PN:", "", pn_values, ignore.case = TRUE)
-          if (any(grepl("^(ccs|skera|lima)$", pn_clean, ignore.case = TRUE))) {
-            return(TRUE)
-          }
-        }
-      }
-    }
-
-    FALSE
-
+    # Primary: the np:i: tag on the first record
+    first <- read_bam_records(path, n = 1)
+    if (nrow(first) && !is.na(first$np[1])) return(TRUE)
+    # Secondary: @PG header lines for ccs / skera / lima
+    hdr <- suppressWarnings(system(paste("samtools view -H", shQuote(path), "2>/dev/null"), intern = TRUE))
+    pn <- unlist(regmatches(hdr[startsWith(hdr, "@PG")], gregexpr("PN:[^\t]+", hdr[startsWith(hdr, "@PG")])))
+    any(grepl("^PN:(ccs|skera|lima)$", pn, ignore.case = TRUE))
   }, error = function(e) FALSE)
 }
 
@@ -112,46 +116,7 @@ detect_pacbio <- function(path, format) {
 #   Usage:
 #     md <- extract_pacbio_metadata(path = "/path/to/sample.bam")
 extract_pacbio_metadata <- function(path) {
-
-  bf <- BamFile(path)
-  open(bf)
-  on.exit(close(bf), add = TRUE)
-
-  bam_data <- scanBam(
-    bf,
-    param = ScanBamParam(
-      what = "qname",
-      tag  = c("np", "rq", "ec", "zm", "bq")
-    )
-  )
-
-  qnames <- bam_data[[1]]$qname
-  tags   <- bam_data[[1]]$tag
-  n_reads <- length(qnames)
-
-  # Pull a tag with NA padding when absent or wrong length
-  pull_tag <- function(tag_name, expected_type = NA_real_) {
-    v <- tags[[tag_name]]
-    if (is.null(v) || length(v) == 0) {
-      return(rep(expected_type, n_reads))
-    }
-    if (length(v) != n_reads) {
-      # Tag present on some records only — re-fill to length with NA padding
-      warning(sprintf(
-        "Tag '%s' length (%d) does not match read count (%d); padding with NA",
-        tag_name, length(v), n_reads))
-      return(rep(expected_type, n_reads))
-    }
-    v
-  }
-
-  data.frame(
-    read_name = qnames,
-    np = pull_tag("np", NA_integer_),
-    rq = pull_tag("rq", NA_real_),
-    ec = pull_tag("ec", NA_real_),
-    zm = pull_tag("zm", NA_integer_),
-    bq = pull_tag("bq", NA_integer_),
-    stringsAsFactors = FALSE
-  )
+  r <- read_bam_records(path)
+  data.frame(read_name = r$qname, np = r$np, rq = r$rq, ec = r$ec, zm = r$zm, bq = r$bq,
+             stringsAsFactors = FALSE)
 }

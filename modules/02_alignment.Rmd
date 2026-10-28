@@ -1,1399 +1,219 @@
 ---
-title: "Duke pipeline"
-subtitle: "Module 2: Alignment and Processing"
+title: "Duke"
+subtitle: "Module 2: Alignment"
 author: "Michael Flower"
 date: "`r Sys.Date()`"
-output: 
+output:
   html_document:
     toc: true
     toc_float: true
-    toc_depth: 4
+    toc_depth: 3
     number_sections: false
     code_folding: hide
     df_print: paged
+    mathjax: null
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = FALSE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6)
 ```
 
 ```{r set_tab_title, echo=FALSE, results='asis'}
-cat('<script>document.title = "Duke | Module 2: Alignment and Processing";</script>')
+cat('<script>document.title = "Duke | Module 2: Alignment";</script>')
+```
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(Biostrings); library(Rsamtools); library(GenomicAlignments)
+  library(dplyr); library(tidyr); library(data.table); library(ggplot2); library(scales); library(DT)
+})
+source("lib/load_all.R")
+module_start <- proc.time()["elapsed"]; timings <- c()
+aln_dir <- file.path(params$dir_out, "02_alignment"); plots_dir <- file.path(aln_dir, "plots")
+dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+temp_dir <- module_temp_dir(params$dir_out, "m2", params$module_hash)
+xlsx_path <- file.path(aln_dir, "alignment.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
 ```
 
 # Overview
 
-This module performs comprehensive alignment processing:
+**Module 2: Alignment**
 
-1. Load trimmed sequences from Module 1
-2. Parse reference sequence (split at NNNNN into left/right flanks)
-3. Align reads to reference flanks using minimap2
-4. **Filter alignments** for reads spanning both flanks
-5. **Analyse strand orientation**
-6. **Assess alignment quality**
-7. **Visualise alignments** (optional)
-8. **Correct strand orientation** (reverse complement antisense reads)
-9. **Filter for commonest reference order** (removes spurious alignments)
-10. **Allow manual read exclusion** (optional)
-11. **Split sequences** into pre/left/mid/right/post segments
+This module handles:
+
+1. Splitting each reference at its N block into a left and a right flank
+2. Aligning every read to each flank with minimap2 (`r params$minimap2_args`)
+3. Keeping, per read, the best alignment to each flank (highest MAPQ, then longest)
+4. Requiring both flanks, on the same strand, with the left flank before the right
+5. Reverse-complementing reads that aligned to the reverse strand, so every read reads 5' to 3' along the reference
+6. Optional manual read exclusions
 
 **Outputs:**
 
-- Filtered alignment tables for each sample
-- QC metrics and visualisations
-- Strand-corrected sequences split into functional segments
-- Sequences ready for repeat detection (Module 3)
-
-```{r load_packages, message=FALSE, warning=FALSE, echo=FALSE}
-# Set working directory
-# if (interactive()) {
-#   setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
-# } else {
-#   rmd_path <- knitr::current_input(dir = TRUE)
-#   if (!is.null(rmd_path) && rmd_path != "") {
-#     setwd(rmd_path)
-#   }
-# }
-
-# Required packages
-required_packages <- c("Biostrings", "Rsamtools", "GenomicAlignments",
-                      "pbapply", "dplyr", "tidyr", "data.table", "stringr", 
-                      "ggplot2", "scales", "DT", "openxlsx",
-                      "parallel", "pbmcapply", "tibble", "stringi", "forcats")
-
-# Load packages
-invisible(lapply(required_packages, library, character.only = TRUE))
-```
-
-```{r load_functions, echo=FALSE}
-# Source shared functions - works for both interactive and pipeline execution
-if (file.exists("lib/load_all.R")) {
-  source("lib/load_all.R")
-} else if (file.exists("../lib/load_all.R")) {
-  source("../lib/load_all.R")
-} else {
-  stop("Cannot find lib/load_all.R")
-}
-```
-
-```{r timing_init, echo=FALSE}
-module_start_time <- proc.time()["elapsed"]
-timings <- c()
-```
-
-```{r create_directories, echo=FALSE}
-# Create output directories
-temp_dir <- file.path(params$dir_out, "temp")
-alignment_dir <- file.path(params$dir_out, "02_alignment")  # Consolidated alignment outputs
-bam_dir <- file.path(alignment_dir, "bam")  # Retained per-sample/reference BAMs (only when keep_bam = TRUE)
-results_dir <- file.path(params$dir_out, "module_data")
-plots_dir <- file.path(params$dir_out, file.path("02_alignment", "plots"))
-
-if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
-if (!dir.exists(alignment_dir)) dir.create(alignment_dir, recursive = TRUE)
-# Pre-create the BAM output dir once (avoids a race when workers run in parallel)
-if (isTRUE(params$keep_bam) && !dir.exists(bam_dir)) dir.create(bam_dir, recursive = TRUE)
-if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE)
-if (!dir.exists(plots_dir)) dir.create(plots_dir, recursive = TRUE)
-```
+- `02_alignment/alignment.xlsx` – read accounting per sample, flank alignment quality
+- `02_alignment/plots/` – the figures in this report (per-sample alignment plots in `alignment_by_sample/`)
+- `module_data/02_alignment.RData` – strand-corrected reads with flank coordinates, for Module 3
 
 ---
 
-# Load Module 1 results
+# References
 
-Load the trimmed sequences from Module 1.
+Each distinct reference in the tracts table is aligned to separately. Tracts that share a reference are found in the same between-flanks region in Module 3.
 
-```{r load_module1, echo=FALSE, results='asis'}
-# Load Module 1 results
-module1_path <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
-safe_load_module(module1_path, module_num = 1, envir = environment())
-
-# Extract sequences and metadata
+```{r references}
+m1 <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
+safe_load_module(m1, 1)
 sequences <- module1_output$sequences
-file_details <- module1_output$file_details
-
-# Create named vectors (matching Module 1 pattern)
-file_stems <- names(sequences)
-file_stem_vector <- setNames(file_stems, file_stems)
-
-message("Loaded ", length(sequences), " samples from Module 1")
-
-# Format sample list for HTML
-n_samples <- length(file_stem_vector)
-if (n_samples <= 10) {
-  cat("\n\n**", n_samples, " samples:**\n\n", 
-      paste(names(file_stem_vector), collapse = ", "), "\n\n", sep="")
-} else {
-  cat("\n\n**", n_samples, " samples:**\n\n", 
-      paste(head(names(file_stem_vector), 10), collapse = ", "), 
-      ", ... and ", n_samples - 10, " more\n\n", sep="")
-}
-
-message("Total reads: ", format(sum(sapply(sequences, length)), big.mark = ","))
+samples <- setNames(names(sequences), names(sequences))
+tracts <- params$tracts_table
+refs <- lapply(unique(tracts$path_ref), parse_reference_sequence)
+names(refs) <- vapply(refs, `[[`, "", "ref_id")
+if (any(duplicated(names(refs)))) stop("Two references share the FASTA header name: ", paste(names(refs)[duplicated(names(refs))], collapse = ", "))
+ref_table <- dplyr::bind_rows(lapply(refs, `[[`, "summary")) %>%
+  dplyr::left_join(tibble(ref_id = names(refs), tracts = vapply(refs, function(r) paste(tracts$tract[tracts$path_ref == r$path], collapse = ", "), "")), by = "ref_id")
+dt_compact(ref_table, caption = "Reference flanks (first and last 20 bases of each)")
 ```
-
----
-
-# Reference sequences
-
-Parse the reference sequence file, which should contain a single sequence with the repeat region marked by at least 5 consecutive Ns (NNNNN). The sequence will be split into left and right flanking regions.
-
-```{r parse_reference, echo=FALSE}
-# Parse reference sequence
-ref_data <- parse_reference_sequence(params$path_ref)
-ref_sequences <- ref_data$sequences
-ref_summary <- ref_data$summary
-
-# Also save original full reference for downstream variant calling
-ref_original <- readDNAStringSet(params$path_ref)
-ref_full_sequence <- as.character(ref_original[[1]])
-
-# Display reference summary
-DT::datatable(
-  ref_summary,
-  caption = "Reference sequences",
-  options = list(pageLength = 10, scrollX = TRUE, dom = 't'),
-  rownames = FALSE,
-  class = 'cell-border stripe compact'
-)
-```
-
-**Reference structure:**
-
-- Left flank: `r ref_summary$ref_length[1]` bp
-- Right flank: `r ref_summary$ref_length[2]` bp
-- Repeat region marked by Ns in original reference
 
 ---
 
 # Alignment
 
-Align reads to left and right reference flanks separately using minimap2. This approach ensures that reads spanning the repeat region (which may vary in length) can align to both flanks independently.
-
-```{r t_align_start, echo=FALSE}
+```{r align}
 .t <- proc.time()["elapsed"]
+exclusions <- load_manual_read_exclusions(params$path_manual_exclusions)
+bam_dir <- file.path(aln_dir, "bam")
+results <- lapply(refs, function(ref) {
+  apply_fn(samples, function(s) process_sample_alignment(s, sequences[[s]], ref, temp_dir, params$minimap2_args,
+                                                         params$keep_bam, bam_dir, exclusions))
+})
+alignments <- lapply(results, function(r) rbindlist(lapply(r, `[[`, "table")))
+funnel <- dplyr::bind_rows(lapply(results, function(r) dplyr::bind_rows(lapply(r, `[[`, "funnel"))))
+rm(results); if (params$remove_intermediate) { rm(sequences); invisible(gc()) }
+timings["Alignment and filtering"] <- proc.time()["elapsed"] - .t
+cat(sprintf("%s of %s reads (%.1f%%) span both flanks in the correct order.",
+            comma(sum(funnel$final)), comma(sum(funnel$input)), 100 * sum(funnel$final) / max(1, sum(funnel$input))))
 ```
 
-```{r run_alignment, echo=FALSE, message=TRUE, results='asis'}
-# Check for cached alignments
-alignment_cache_path <- file.path(temp_dir, "02_alignments.RData")
+## Read accounting
 
-if (params$resume && safe_load_cache(alignment_cache_path, environment())) {
-  message("Loading cached alignments...")
-  
-  # Verify loaded data has proper names
-  if (is.null(names(alignments))) {
-    warning("Cached alignments have no names - reconstructing from file_stem_vector")
-    names(alignments) <- file_stem_vector
-  }
-  
-} else {
-  message("Running minimap2 alignment...")
-  
-  # Run alignment for each sample using named vector
-  alignments <- apply_fn(
-    file_stem_vector,  # Named vector ensures names are preserved
-    minimap2_align_sample,
-    sequences = sequences,
-    ref_sequences = ref_sequences,
-    out_dir = temp_dir,
-    minimap2_args = params$minimap2_args,
-    resume = params$resume,
-    keep_bam = isTRUE(params$keep_bam),
-    bam_dir = bam_dir
-  )
+Each line is one sample, and the box at each step summarises all samples: the percentage of the sample's input reads still present after that step. A drop at **both flanks** means reads that do not span the locus (primer dimers, truncated products, off-target reads); a drop at **same strand** or **correct order** means chimeric or rearranged reads.
 
-  if (isTRUE(params$keep_bam)) {
-    message("  Retaining aligned BAMs (keep_bam = TRUE) in: ", bam_dir)
-  }
-  
-  # Extract results
-  alignments <- extract_apply_fn_result(alignments)
-  
-  # Verify names were preserved (defensive check)
-  if (is.null(names(alignments))) {
-    warning("Names were lost during processing - restoring from file_stem_vector")
-    names(alignments) <- file_stem_vector
-  }
-  
-  # Save cache
-  save(alignments, file = alignment_cache_path)
-}
-
-# Final verification before proceeding
-if (is.null(names(alignments)) || length(names(alignments)) != length(alignments)) {
-  stop("ERROR: Alignment list is not properly named. Cannot proceed safely.")
-}
-
-# Format sample list for HTML display
-alignment_samples <- names(alignments)
-n_samples <- length(alignment_samples)
-
-cat("\n\n**Alignments retrieved for ", n_samples, " samples:**\n\n", sep="")
-if (n_samples <= 10) {
-  cat(paste(alignment_samples, collapse = ", "), "\n\n", sep="")
-} else {
-  cat(paste(head(alignment_samples, 10), collapse = ", "), 
-      ", ... and ", n_samples - 10, " more\n\n", sep="")
-}
-
-# Add file_stem column to each alignment table
-alignments <- lapply(file_stem_vector, function(my_file_stem, alignments) {
-  alignment_info <- alignments[[my_file_stem]]
-  if (!is.null(alignment_info) && nrow(alignment_info) > 0) {
-    alignment_info <- alignment_info %>%
-      dplyr::mutate(file_stem = my_file_stem) %>%
-      relocate(file_stem)
-  }
-  return(alignment_info)
-}, alignments = alignments)
-
-# Restore names after lapply (lapply returns unnamed list)
-names(alignments) <- file_stem_vector
-
-# Merge into single table for summary statistics
-alignment_info_merge <- data.table::rbindlist(alignments, fill = TRUE)
-
-message("Alignment complete!")
-message("Total alignments: ", format(nrow(alignment_info_merge), big.mark = ","))
+```{r funnel_plot, fig.height=5.5}
+steps <- c(input = "Input", aligned_left = "Left flank", aligned_right = "Right flank", both_flanks = "Both flanks",
+           same_strand = "Same strand", correct_order = "Correct order", final = "Final")
+fl <- funnel %>% dplyr::mutate(n_input = input) %>% pivot_longer(all_of(names(steps)), names_to = "step", values_to = "reads") %>%
+  dplyr::mutate(step = factor(steps[step], levels = steps), pct = reads / pmax(n_input, 1))
+p_funnel <- ggplot(fl, aes(step, pct)) +
+  geom_line(aes(group = interaction(file_stem, ref_id)), colour = "grey70", alpha = 0.5) +
+  geom_boxplot(outlier.shape = NA, fill = NA, colour = "grey30", width = 0.5) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, colour = "red") +
+  stat_summary(fun = mean, geom = "text", colour = "red", size = 3.2, vjust = -1.2, aes(label = percent(after_stat(y), 0.1))) +
+  scale_y_continuous(labels = pct_axis(), limits = c(0, 1.05)) +
+  facet_wrap(~ ref_id) +
+  labs(x = NULL, y = "Reads remaining (% of input)", title = "Reads remaining after each alignment step",
+       subtitle = "Grey lines = samples; red = cohort mean") + theme_bw()
+print(p_funnel); save_plot(p_funnel, file.path(plots_dir, "read_accounting.png"), 11, 5.5)
 ```
 
-```{r t_align_end, echo=FALSE}
-timings["Alignment"] <- proc.time()["elapsed"] - .t
+```{r funnel_table}
+dt_full(funnel, caption = "Reads per sample after each alignment step")
 ```
 
-## Alignment summary
+## Where the flank alignments end
 
-```{r alignment_summary, echo=FALSE}
-# Summarise alignments per sample
-alignment_summary <- alignment_info_merge %>%
-  group_by(file_stem) %>%
-  dplyr::summarise(
-    n_flank_alignments = n(),   # Two alignments per read (left + right flank)
-    unique_reads = n_distinct(qname),
-    mean_mapq = mean(mapq, na.rm = TRUE),
-    mean_mismatches = mean(mismatches, na.rm = TRUE),
-    .groups = "drop"
-  )
+The repeat-adjacent end of each flank should align to its last (left) or first (right) reference base. Each point is one sample: the percentage of its reads whose flank alignment stops at least one base short of the N block. Reads with a shortfall are not lost – Module 3 searches `r params$rpt_flank_pad` bases into each flank so the tract is still measured in full – but a sample with a high rate has sequence next to the repeat that differs from the reference, for example an interruption variant.
 
-DT::datatable(
-  alignment_summary,
-  caption = "Alignment summary per sample",
-  options = list(
-    pageLength = 25,
-    scrollX = TRUE,
-    scrollY = "500px",
-    autoWidth = TRUE,
-    dom = 'Bfrtip',
-    buttons = c('copy', 'csv', 'excel')
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact',
-  style = 'bootstrap',
-  fillContainer = FALSE
-) %>%
-  DT::formatStyle(columns = colnames(alignment_summary), fontSize = '85%') %>%
-  DT::formatRound(columns = c('mean_mapq', 'mean_mismatches'), digits = 1)
+```{r shortfall, fig.height=5}
+sf <- dplyr::bind_rows(lapply(names(alignments), function(r) {
+  a <- alignments[[r]]
+  if (!nrow(a)) return(NULL)
+  a[, .(`Left flank` = mean(left_end_shortfall > 0), `Right flank` = mean(right_start_shortfall > 0),
+        median_left_shortfall = as.numeric(median(left_end_shortfall)), median_right_shortfall = as.numeric(median(right_start_shortfall))), by = file_stem][, ref_id := r]
+}))
+p_sf <- sf %>% pivot_longer(c(`Left flank`, `Right flank`), names_to = "flank", values_to = "pct") %>%
+  ggplot(aes(flank, pct)) + box_points_mean(digits = 3) + facet_wrap(~ ref_id) +
+  scale_y_continuous(labels = pct_axis()) +
+  labs(x = NULL, y = "Reads whose flank alignment stops short of the N block", title = "Flank alignment boundaries, per sample") + theme_bw()
+print(p_sf); save_plot(p_sf, file.path(plots_dir, "flank_boundary_shortfall.png"), 8, 5)
 ```
 
----
+## Alignment quality and strand
 
-# Filter alignments
+Per-sample mean mapping quality for each flank, and the proportion of reads that aligned to the reverse strand and were reverse-complemented (`+c`). Amplicons sequenced from both ends give about half on each strand.
 
-Filter reads to retain only those that align to **both left and right flanks** of the same reference. This ensures the repeat region is bounded on both sides.
+```{r quality_plot, fig.height=5}
+qual <- dplyr::bind_rows(lapply(names(alignments), function(r) {
+  a <- alignments[[r]]; if (!nrow(a)) return(NULL)
+  a[, .(left_mapq = mean(left_mapq), right_mapq = mean(right_mapq), left_mismatch = mean(left_nm, na.rm = TRUE),
+        right_mismatch = mean(right_nm, na.rm = TRUE), reverse_strand = mean(strand == "+c"), reads = .N), by = file_stem][, ref_id := r]
+}))
+p_q1 <- qual %>% pivot_longer(c(left_mapq, right_mapq), names_to = "flank", values_to = "mapq") %>%
+  dplyr::mutate(flank = ifelse(flank == "left_mapq", "Left flank", "Right flank")) %>%
+  ggplot(aes(flank, mapq)) + box_points_mean() + facet_wrap(~ ref_id) +
+  labs(x = NULL, y = "Mean MAPQ", title = "Mapping quality per sample") + theme_bw()
+p_q2 <- ggplot(qual, aes(ref_id, reverse_strand)) + box_points_mean(digits = 3) + scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
+  labs(x = NULL, y = "Reads on the reverse strand", title = "Strand per sample") + theme_bw()
+p_quality <- patchwork::wrap_plots(p_q1, p_q2, widths = c(2, 1))
+print(p_quality); save_plot(p_quality, file.path(plots_dir, "alignment_quality_strand.png"), 11, 5)
+```
 
-**Filtering criteria:**
+```{r quality_table}
+dt_full(dplyr::left_join(qual, sf, by = c("file_stem", "ref_id")), caption = "Alignment quality per sample", digits = 3)
+```
 
-1. Read must align to both left AND right flank
-2. Both alignments must be on the same strand
-3. Keep only the best alignment to each flank (highest MAPQ, then longest)
-
-**Note:** Proper alignment order validation occurs AFTER strand correction, when query coordinates are reliable for all reads.
-
-```{r t_filter_start, echo=FALSE}
+```{r per_sample_alignment, eval=params$visualise_alignment && params$plot_per_sample}
 .t <- proc.time()["elapsed"]
-```
-
-```{r filter_alignments, echo=FALSE}
-# Add ref_id and ref_flank information
-alignment_info_merge <- alignment_info_merge %>%
-  left_join(ref_summary %>% dplyr::select(rname, ref_id, ref_flank),
-            by = "rname") %>%
-  relocate(ref_id, ref_flank, .after = "rname")
-
-# Check for cached filtered alignments
-cache_file <- file.path(temp_dir, "02_alignment_filtered.RData")
-
-if (params$resume && safe_load_cache(cache_file, environment())) {
-  message("Loading cached filtered alignments from: ", cache_file)
-} else {
-  # Apply filtering
-  message("Filtering alignments for dual-flank reads...")
-  alignment_filtered <- filter_dual_flank_alignments(alignment_info_merge, ref_summary)
-  
-  # Cache the result
-  save(alignment_filtered, file = cache_file)
-  message("Cached filtered alignments to: ", cache_file)
+by_sample_dir <- file.path(plots_dir, "alignment_by_sample")
+for (r in names(alignments)) {
+  a <- alignments[[r]]
+  for (s in unique(a$file_stem)) {
+    d <- a[file_stem == s]
+    if (nrow(d) > params$visualise_alignment_downsample) { set.seed(123); d <- d[sample(.N, params$visualise_alignment_downsample)] }
+    seg <- rbind(d[, .(read = qname, flank = "Left flank", start = left_rstart, end = left_rend, strand)],
+                 d[, .(read = qname, flank = "Right flank", start = right_rstart, end = right_rend, strand)])
+    seg[, read := factor(read, levels = d$qname[order(d$left_rstart, d$right_rend)])]
+    p <- ggplot(seg, aes(x = start, xend = end, y = read, yend = read, colour = strand)) + geom_segment(linewidth = 0.4) +
+      facet_wrap(~ flank, scales = "free_x") + scale_colour_manual(values = c(`+` = "#377eb8", `+c` = "#4daf4a")) +
+      labs(x = "Reference position (bp)", y = "Reads", title = paste("Flank alignments:", s),
+           subtitle = sprintf("%s of %s reads; +c = reverse-complemented", comma(nrow(d)), comma(sum(a$file_stem == s)))) +
+      theme_bw() + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+    save_plot(p, file.path(by_sample_dir, paste0(s, "-", safe_path(r), "-alignment.png")), 10, 6)
+  }
 }
-
-message("Dual-flank filtering complete!")
-message("Reads before filtering: ", format(n_distinct(alignment_info_merge$qname), big.mark = ","))
-message("Reads after filtering: ", format(n_distinct(alignment_filtered$qname), big.mark = ","))
-message("Retention rate: ", 
-        round(100 * n_distinct(alignment_filtered$qname) / n_distinct(alignment_info_merge$qname), 1), "%")
-```
-
-```{r t_filter_end, echo=FALSE}
-timings["Dual-flank filtering"] <- proc.time()["elapsed"] - .t
-```
-
-## Filtering summary
-
-```{r filtering_summary, echo=FALSE}
-# Count reads before and after filtering
-read_count_before <- alignment_info_merge %>%
-  group_by(file_stem) %>%
-  dplyr::summarise(before_filtering = n_distinct(qname), .groups = "drop")
-
-read_count_after <- alignment_filtered %>%
-  group_by(file_stem) %>%
-  dplyr::summarise(after_filtering = n_distinct(qname), .groups = "drop")
-
-filtering_summary <- read_count_before %>%
-  left_join(read_count_after, by = "file_stem") %>%
-  dplyr::mutate(
-    retained = after_filtering / before_filtering,
-    lost = before_filtering - after_filtering
-  )
-
-DT::datatable(
-  filtering_summary,
-  caption = "Reads retained after dual-flank filtering",
-  options = list(
-    pageLength = 25,
-    scrollX = TRUE,
-    scrollY = "500px",
-    autoWidth = TRUE,
-    dom = 'Bfrtip',
-    buttons = c('copy', 'csv', 'excel')
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact',
-  style = 'bootstrap',
-  fillContainer = FALSE
-) %>%
-  DT::formatStyle(columns = colnames(filtering_summary), fontSize = '85%') %>%
-  DT::formatRound(columns = 'retained', digits = 3)
-```
-
-```{r plot_filtering, echo=FALSE, fig.height=6, fig.width=8}
-n_samp <- nrow(filtering_summary)
-
-# Build long format with numeric stage position for consistent jitter
-filtering_plot_data <- filtering_summary %>%
-  pivot_longer(cols = c(before_filtering, after_filtering),
-               names_to = "stage", values_to = "read_count") %>%
-  dplyr::mutate(
-    stage     = factor(stage,
-                       levels = c("before_filtering", "after_filtering"),
-                       labels = c("Before\nfiltering", "After\nfiltering")),
-    stage_num = as.numeric(stage)
-  )
-
-# Consistent jitter offset per sample so connecting lines are perfectly vertical
-set.seed(123)
-jitter_df <- data.frame(
-  file_stem = unique(filtering_plot_data$file_stem),
-  x_offset  = runif(n_samp, -0.12, 0.12)
-)
-filtering_plot_data <- filtering_plot_data %>%
-  left_join(jitter_df, by = "file_stem") %>%
-  dplyr::mutate(x_pos = stage_num + x_offset)
-
-# Flag samples where reads were actually lost
-change_lookup <- filtering_summary %>%
-  dplyr::mutate(changed = after_filtering < before_filtering) %>%
-  dplyr::select(file_stem, changed)
-filtering_plot_data <- filtering_plot_data %>%
-  left_join(change_lookup, by = "file_stem")
-
-has_any_change <- any(change_lookup$changed)
-
-# Scale aesthetics to N
-point_size  <- if (n_samp <= 50) 2.5 else 1.5
-point_alpha <- if (n_samp <= 50) 0.8 else max(0.2, 1 - n_samp / 500)
-line_alpha  <- if (n_samp <= 50) 0.5 else max(0.1, 0.5 - n_samp / 1000)
-
-stage_labels <- levels(filtering_plot_data$stage)
-
-p_filtering <- ggplot(filtering_plot_data) +
-  geom_boxplot(aes(x = stage_num, y = read_count, group = stage_num),
-               outlier.shape = NA, width = 0.3,
-               fill = "grey90", colour = "grey40") +
-  geom_line(aes(x = x_pos, y = read_count, group = file_stem, colour = changed),
-            linewidth = 0.4, alpha = line_alpha) +
-  geom_point(aes(x = x_pos, y = read_count, colour = changed),
-             size = point_size, alpha = point_alpha) +
-  stat_summary(aes(x = stage_num, y = read_count, group = stage_num),
-               fun = mean, geom = "point", shape = 18,
-               colour = "red", size = 4, alpha = 0.6) +
-  scale_colour_manual(
-    values = c("FALSE" = "grey50", "TRUE" = "#E07B39"),
-    labels = c("FALSE" = "Unchanged", "TRUE" = "Reads lost"),
-    name   = NULL
-  ) +
-  scale_x_continuous(breaks = 1:2, labels = stage_labels, limits = c(0.6, 2.4)) +
-  scale_y_log10(labels = scales::comma) +
-  labs(title = "Read counts before and after dual-flank filtering",
-       x     = NULL,
-       y     = "Read count (log10 scale)") +
-  theme_bw()
-
-if (!has_any_change) p_filtering <- p_filtering + guides(colour = "none")
-
-print(p_filtering)
-
-ggsave(
-  filename = file.path(plots_dir, "filtering_stages.png"),
-  plot     = p_filtering,
-  width    = 8,
-  height   = 6,
-  dpi      = params$plot_dpi,
-  bg       = "white"
-)
-rm(p_filtering, filtering_plot_data, jitter_df, change_lookup)
-```
-
-```{r cleanup_alignment_merge, echo=FALSE}
-# Clean up large objects if requested
-if (params$remove_intermediate) {
-  rm(alignment_info_merge)
-}
+timings["Per-sample plots"] <- proc.time()["elapsed"] - .t
+cat("Per-sample alignment plots written to", by_sample_dir)
 ```
 
 ---
 
-# Correct strand orientation
-
-Reverse complement reads that aligned on the reverse strand (-) so that all reads are oriented 5' to 3' relative to the reference. After correction, these reads are marked with strand "+c" (corrected).
-
-**What happens:**
-
-1. Sequences are reverse complemented
-2. Query coordinates are flipped to match new orientation
-3. Strand is changed from "-" to "+c"
-
-```{r t_strand_start, echo=FALSE}
-.t <- proc.time()["elapsed"]
-```
-
-```{r correct_strand, echo=FALSE}
-# Check for cached strand-corrected data
-strand_cache_path <- file.path(temp_dir, "02_strand_corrected.RData")
-
-if (params$resume && safe_load_cache(strand_cache_path, environment())) {
-  message("Loading cached strand-corrected alignments...")
-} else {
-  message("Correcting strand orientation...")
-  
-  # Split alignments back into list by sample
-  alignment_list <- split(alignment_filtered, alignment_filtered$file_stem)
-  names(alignment_list) <- file_stem_vector[names(alignment_list)]
-  
-  # Apply strand correction using named vector
-  alignment_corrected <- apply_fn(
-    file_stem_vector,
-    correct_strand_orientation,
-    alignment_list = alignment_list,
-    out_dir = temp_dir,
-    resume = params$resume
-  )
-  
-  # Extract results
-  alignment_corrected <- extract_apply_fn_result(alignment_corrected)
-  
-  # Verify names were preserved
-  if (is.null(names(alignment_corrected))) {
-    warning("Names were lost during strand correction - restoring")
-    names(alignment_corrected) <- file_stem_vector
-  }
-  
-  # Save cache
-  save(alignment_corrected, file = strand_cache_path)
-}
-
-message("Strand correction complete!")
-```
-
-```{r t_strand_end, echo=FALSE}
-timings["Strand correction"] <- proc.time()["elapsed"] - .t
-```
-
-```{r cleanup_alignments, echo=FALSE}
-# Clean up if requested
-if (params$remove_intermediate) {
-  rm(alignment_list, alignment_filtered)
-}
-```
-
----
-
-# Validate reference order
-
-**Critical quality control:** After strand correction, all reads should show left→right reference order. This step validates the biologically expected order and removes reads with backwards or unusual patterns (spurious alignments).
-
-```{r validate_correct_order, echo=FALSE}
-# Validate correct reference order (left→right)
-order_validation_result <- validate_correct_reference_order(alignment_corrected)
-
-# Extract results
-alignment_validated <- order_validation_result$alignments
-validation_summary <- order_validation_result$validation_summary
-rm(order_validation_result)
-
-# Merge back into single table
-alignment_final <- data.table::rbindlist(alignment_validated, fill = TRUE)
-
-message("Reference order validation complete!")
-
-# Count before and after
-reads_before_validation <- sum(sapply(alignment_corrected, function(x) n_distinct(x$qname)))
-reads_after_validation <- n_distinct(alignment_final$qname)
-
-message("Reads before validation: ", format(reads_before_validation, big.mark = ","))
-message("Reads after validation: ", format(reads_after_validation, big.mark = ","))
-message("Reads with incorrect order removed: ", 
-        format(reads_before_validation - reads_after_validation, big.mark = ","))
-message("Retention rate: ", 
-        round(100 * reads_after_validation / reads_before_validation, 1), "%")
-```
-
-## Validation summary
-
-```{r validation_summary_table, echo=FALSE}
-DT::datatable(
-  validation_summary,
-  caption = "Reference order validation by sample",
-  options = list(
-    pageLength = 25,
-    scrollX = TRUE,
-    scrollY = "500px",
-    autoWidth = TRUE,
-    dom = 'Bfrtip',
-    buttons = c('copy', 'csv', 'excel')
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact',
-  style = 'bootstrap',
-  fillContainer = FALSE
-) %>%
-  DT::formatStyle(columns = colnames(validation_summary), fontSize = '85%') %>%
-  DT::formatRound(columns = 'retention_rate', digits = 3)
-```
-
-```{r plot_validation, echo=FALSE, fig.height=5, fig.width=5}
-n_val <- nrow(validation_summary)
-med_ret <- median(validation_summary$retention_rate)
-
-p_retention <- ggplot(validation_summary, aes(x = "", y = retention_rate)) +
-  geom_boxplot(outlier.shape = NA, width = 0.35,
-               fill = "grey92", colour = "grey40") +
-  geom_jitter(width = 0.08, height = 0, size = 3,
-              colour = "#619CFF", alpha = 0.8) +
-  stat_summary(fun = mean, geom = "point", shape = 18,
-               colour = "red", size = 4, alpha = 0.6) +
-  scale_y_continuous(labels = scales::label_percent(accuracy = 0.0001),
-                     expand = expansion(mult = c(0.05, 0.05))) +
-  labs(title    = "Retention rate after reference order validation",
-       subtitle = sprintf("n = %d samples", n_val),
-       x        = NULL,
-       y        = "Retention rate") +
-  theme_bw() +
-  theme(axis.ticks.x = element_blank())
-
-print(p_retention)
-
-ggsave(
-  filename = file.path(plots_dir, "retention_rates.png"),
-  plot     = p_retention,
-  width    = 5,
-  height   = 5,
-  dpi      = params$plot_dpi,
-  bg       = "white"
-)
-rm(p_retention)
-```
-
-```{r cleanup_corrected, echo=FALSE}
-# Clean up if requested
-if (params$remove_intermediate) {
-  rm(alignment_corrected, alignment_validated)
-}
-```
-
----
-
-# Strand analysis
-
-Analyse the strand orientation of **validated** alignments. After strand correction and order validation, reads are marked as "+" (originally forward) or "+c" (corrected from reverse).
-
-```{r strand_analysis, echo=FALSE}
-# Summarise strand distribution
-strand_summary <- alignment_final %>%
-  group_by(file_stem, strand) %>%
-  dplyr::summarise(read_count = n_distinct(qname), .groups = "drop") %>%
-  group_by(file_stem) %>%
-  dplyr::mutate(proportion = read_count / sum(read_count)) %>%
-  ungroup() %>%
-  # Fix strand label: "." should be "+" for display
-  dplyr::mutate(strand = dplyr::case_when(
-    strand == "." ~ "+",   # BAM "." = unstranded, treat as forward
-    TRUE          ~ as.character(strand)
-    # Note: NA strand is left as NA to surface in the summary for investigation
-  ))
-
-DT::datatable(
-  strand_summary,
-  caption = "Strand distribution (validated reads only)",
-  options = list(
-    pageLength = 25,
-    scrollX = TRUE,
-    scrollY = "500px",
-    autoWidth = TRUE,
-    dom = 'Bfrtip',
-    buttons = c('copy', 'csv', 'excel')
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact',
-  style = 'bootstrap',
-  fillContainer = FALSE
-) %>%
-  DT::formatStyle(columns = colnames(strand_summary), fontSize = '85%') %>%
-  DT::formatRound(columns = 'proportion', digits = 3)
-```
-
-```{r plot_strand, echo=FALSE, fig.height=5, fig.width=6}
-p_strand <- ggplot(strand_summary, aes(x = strand, y = proportion, fill = strand)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.6, width = 0.4) +
-  geom_jitter(aes(colour = strand), width = 0.1, height = 0,
-              alpha = 0.7, size = 2.5) +
-  stat_summary(fun = mean, geom = "point", shape = 18,
-               colour = "red", size = 4, alpha = 0.6) +
-  scale_fill_manual(values  = c("+" = "#619CFF", "+c" = "#00BA38")) +
-  scale_colour_manual(values = c("+" = "#619CFF", "+c" = "#00BA38")) +
-  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
-  labs(title    = "Strand distribution across samples",
-       subtitle = sprintf("Each point = one sample (n = %d)", n_samples),
-       x        = "Strand",
-       y        = "Proportion of reads") +
-  theme_bw() +
-  theme(legend.position = "none")
-
-print(p_strand)
-
-ggsave(
-  filename = file.path(plots_dir, "strand_distribution.png"),
-  plot     = p_strand,
-  width    = 6,
-  height   = 5,
-  dpi      = params$plot_dpi,
-  bg       = "white"
-)
-rm(p_strand)
-```
-
----
-
-# Alignment quality
-
-Assess alignment quality metrics for **validated** alignments only. These statistics reflect only high-quality reads with correct flank order.
-
-```{r alignment_quality, echo=FALSE}
-# Calculate quality metrics per sample and flank
-quality_summary <- alignment_final %>%
-  group_by(file_stem, ref_flank) %>%
-  dplyr::summarise(
-    n_alignments = n(),
-    mean_alignment_length = mean(alignment_length_on_ref, na.rm = TRUE),
-    median_alignment_length = median(alignment_length_on_ref, na.rm = TRUE),
-    mean_mapq = mean(mapq, na.rm = TRUE),
-    mean_mismatches = mean(mismatches, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-DT::datatable(
-  quality_summary,
-  caption = "Alignment quality metrics (validated reads only)",
-  options = list(
-    pageLength = 25,
-    scrollX = TRUE,
-    scrollY = "500px",
-    autoWidth = TRUE,
-    dom = 'Bfrtip',
-    buttons = c('copy', 'csv', 'excel')
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact',
-  style = 'bootstrap',
-  fillContainer = FALSE
-) %>%
-  DT::formatStyle(columns = colnames(quality_summary), fontSize = '85%') %>%
-  DT::formatRound(columns = c('mean_mapq', 'mean_alignment_length'), digits = 1)
-```
-
-```{r plot_alignment_length, echo=FALSE, fig.height=5, fig.width=6}
-n_samples <- length(unique(alignment_final$file_stem))
-
-# Summarise to one mean per sample per flank
-alignment_length_summary <- alignment_final %>%
-  group_by(file_stem, ref_flank) %>%
-  dplyr::summarise(mean_alignment_length = mean(alignment_length_on_ref, na.rm = TRUE),
-                   .groups = "drop")
-
-p_alignment_length <- ggplot(alignment_length_summary,
-                             aes(x = ref_flank, y = mean_alignment_length)) +
-  geom_boxplot(outlier.shape = NA, width = 0.35,
-               fill = "grey92", colour = "grey40") +
-  geom_jitter(width = 0.08, height = 0, size = 3,
-              colour = "#619CFF", alpha = 0.8) +
-  stat_summary(fun = mean, geom = "point", shape = 18,
-               colour = "red", size = 4, alpha = 0.6) +
-  labs(title    = "Mean alignment length by flank",
-       subtitle = sprintf("Each point = one sample (n = %d)", n_samples),
-       x        = "Reference flank",
-       y        = "Mean alignment length (bp)") +
-  theme_bw() +
-  theme(legend.position = "none")
-
-print(p_alignment_length)
-
-ggsave(
-  filename = file.path(plots_dir, "alignment_length_by_flank.png"),
-  plot     = p_alignment_length,
-  width    = 6,
-  height   = 5,
-  dpi      = params$plot_dpi,
-  bg       = "white"
-)
-rm(p_alignment_length, alignment_length_summary)
-
-# Per-sample plots (gated by plot_per_sample)
-if (params$plot_per_sample) {
-  alignment_length_by_sample_dir <- file.path(plots_dir, "alignment_length_by_flank_by_sample")
-  dir.create(alignment_length_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
-
-  for (sample in unique(alignment_final$file_stem)) {
-    plot_path <- file.path(alignment_length_by_sample_dir, paste0(sample, "-alignment_length_by_flank.png"))
-    if (file.exists(plot_path) && params$resume) next
-
-    sample_data <- alignment_final %>% filter(file_stem == sample)
-
-    p_alignment_sample <- ggplot(sample_data, aes(x = ref_flank, y = alignment_length_on_ref)) +
-      geom_jitter(height = 0, width = 0.2, alpha = 0.3, size = 1.2, color = "#619CFF") +
-      geom_boxplot(alpha = 0.3, outlier.shape = NA, width = 0.4, fill = "#619CFF") +
-      labs(title = paste("Alignment length by flank -", sample),
-           subtitle = "Validated reads only",
-           x = "Reference flank",
-           y = "Alignment length (bp)") +
-      theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-    ggsave(
-      filename = plot_path,
-      plot = p_alignment_sample,
-      width = 8,
-      height = 6,
-      dpi = params$plot_dpi,
-      bg = "white"
-    )
-  }
-}
-```
-
-```{r plot_mapq, echo=FALSE, fig.height=5, fig.width=6}
-n_samples <- length(unique(alignment_final$file_stem))
-
-# Summarise to one mean MAPQ per sample per flank
-mapq_summary <- alignment_final %>%
-  group_by(file_stem, ref_flank) %>%
-  dplyr::summarise(mean_mapq = mean(mapq, na.rm = TRUE),
-                   .groups = "drop")
-
-p_mapq <- ggplot(mapq_summary, aes(x = ref_flank, y = mean_mapq)) +
-  geom_boxplot(outlier.shape = NA, width = 0.35,
-               fill = "grey92", colour = "grey40") +
-  geom_jitter(width = 0.08, height = 0, size = 3,
-              colour = "#619CFF", alpha = 0.8) +
-  stat_summary(fun = mean, geom = "point", shape = 18,
-               colour = "red", size = 4, alpha = 0.6) +
-  labs(title    = "Mean MAPQ by flank",
-       subtitle = sprintf("Each point = one sample (n = %d)", n_samples),
-       x        = "Reference flank",
-       y        = "Mean mapping quality (MAPQ)") +
-  theme_bw() +
-  theme(legend.position = "none")
-
-print(p_mapq)
-
-ggsave(
-  filename = file.path(plots_dir, "mapq_distribution.png"),
-  plot     = p_mapq,
-  width    = 6,
-  height   = 5,
-  dpi      = params$plot_dpi,
-  bg       = "white"
-)
-rm(p_mapq, mapq_summary)
-
-# Per-sample plots (gated by plot_per_sample)
-if (params$plot_per_sample) {
-  mapq_by_sample_dir <- file.path(plots_dir, "mapq_distribution_by_sample")
-  dir.create(mapq_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
-
-  for (sample in unique(alignment_final$file_stem)) {
-    plot_path <- file.path(mapq_by_sample_dir, paste0(sample, "-mapq_distribution.png"))
-    if (file.exists(plot_path) && params$resume) next
-
-    sample_data <- alignment_final %>% filter(file_stem == sample)
-
-    p_mapq_sample <- ggplot(sample_data, aes(x = ref_flank, y = mapq)) +
-      geom_violin(alpha = 0.6, fill = "#619CFF") +
-      geom_jitter(height = 0, width = 0.2, alpha = 0.3, size = 1.2, color = "#619CFF") +
-      geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.3) +
-      labs(title = paste("MAPQ distribution by flank -", sample),
-           subtitle = "Validated reads only",
-           x = "Reference flank",
-           y = "Mapping quality (MAPQ)") +
-      theme_minimal() +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-    ggsave(
-      filename = plot_path,
-      plot = p_mapq_sample,
-      width = 8,
-      height = 6,
-      dpi = params$plot_dpi,
-      bg = "white"
-    )
-  }
-}
-```
-
----
-
-# Visualise alignments (optional)
-
-Visualise alignment positions on the reference sequence. **Only validated reads are shown** - spurious and backwards alignments have been removed.
-
-```{r alignment_vis_function, echo=FALSE}
-# Function to visualise alignments for one sample
-visualise_sample_alignments <- function(sample_data, sample_name, 
-                                       max_reads = 100) {
-  
-  # Exit if NULL or empty
-  if (is.null(sample_data) || nrow(sample_data) == 0) {
-    message("No data for ", sample_name)
-    return(NULL)
-  }
-  
-  # Get unique reads
-  unique_reads <- unique(sample_data$qname)
-  
-  # Check if unique_reads is valid
-  if (is.null(unique_reads) || length(unique_reads) == 0) {
-    message("No unique reads found for ", sample_name)
-    return(NULL)
-  }
-  
-  # Ensure max_reads has a default value
-  if (is.null(max_reads) || is.na(max_reads)) {
-    max_reads <- 100
-  }
-  
-  # Sample reads if too many
-  if (length(unique_reads) > max_reads) {
-    sampled_reads <- sample(unique_reads, max_reads)
-    sample_data <- sample_data %>%
-      dplyr::filter(qname %in% sampled_reads)
-    message("Sampled ", max_reads, " reads from ", sample_name, 
-            " (out of ", length(unique_reads), " total)")
-  }
-  
-  # Create plot
-  p <- ggplot(sample_data, aes(x = ref_start, xend = ref_end,
-                                y = qname, yend = qname,
-                                colour = strand)) +
-    geom_segment(linewidth = 2, alpha = 0.6) +
-    facet_wrap(~ rname, scales = "free_x") +
-    scale_colour_manual(values = c("+" = "#619CFF", "+c" = "#00BA38")) +
-    labs(title = paste("Alignments:", sample_name, "(validated reads only)"),
-         subtitle = "After strand correction and order validation",
-         x = "Reference position (bp)",
-         y = "Read",
-         colour = "Strand") +
-    theme_minimal() +
-    theme(axis.text.y = element_blank(),
-          axis.ticks.y = element_blank())
-  
-  return(p)
-}
-```
-
-```{r visualise_alignments, echo=FALSE, message=FALSE, fig.height=8, fig.width=12}
-if (params$visualise_alignment) {
-  message("Generating alignment visualisations...")
-
-  coverage_by_sample_dir <- file.path(plots_dir, "coverage_by_sample")
-  dir.create(coverage_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
-
-  if (params$plot_per_sample) {
-    alignment_by_sample <- split(alignment_final, alignment_final$file_stem)
-
-    for (sample_name in names(alignment_by_sample)) {
-      plot_path <- file.path(coverage_by_sample_dir, paste0(sample_name, "-coverage.png"))
-      if (file.exists(plot_path) && params$resume) next
-
-      sample_data <- alignment_by_sample[[sample_name]]
-
-      p <- visualise_sample_alignments(
-        sample_data,
-        sample_name,
-        max_reads = params$visualise_alignment_downsample
-      )
-
-      if (!is.null(p)) {
-        ggsave(
-          filename = plot_path,
-          plot = p,
-          width = 12,
-          height = 8,
-          dpi = params$plot_dpi,
-          bg = "white"
-        )
-      }
-    }
-
-    message("Coverage plots exported to: ", coverage_by_sample_dir)
-    rm(alignment_by_sample)
-  } else {
-    message("Per-sample coverage plots skipped (plot_per_sample = FALSE)")
-  }
-}
-```
-
----
-
-# Manual read exclusion (optional)
-
-Apply manual read exclusions if specified in the parameters.
-
-```{r t_exclusions_start, echo=FALSE}
-.t <- proc.time()["elapsed"]
-```
-
-```{r manual_exclusions, echo=FALSE}
-# Check if manual exclusion path is provided and valid
-has_exclusions <- !is.null(params$path_manual_exclusions) && 
-                  !is.na(params$path_manual_exclusions) && 
-                  params$path_manual_exclusions != ""
-
-if (has_exclusions) {
-  message("Loading manual read exclusions...")
-  
-  # Load exclusion list
-  exclusion_list <- load_manual_read_exclusions(params$path_manual_exclusions)
-  
-  if (!is.null(exclusion_list)) {
-    # Count before exclusion
-    reads_before_exclusion <- nrow(alignment_final)
-    
-    # Apply exclusions to each sample
-    for (sample_name in names(exclusion_list)) {
-      alignment_final <- apply_manual_exclusions(
-        alignment_final,
-        exclusion_list,
-        sample_name = sample_name
-      )
-    }
-    
-    # Count after exclusion
-    reads_after_exclusion <- nrow(alignment_final)
-    
-    message("Manual exclusion complete!")
-    message("Alignments excluded: ", 
-            format(reads_before_exclusion - reads_after_exclusion, big.mark = ","))
-  }
-} else {
-  message("No manual exclusions specified")
-}
-```
-
-```{r t_exclusions_end, echo=FALSE}
-timings["Manual exclusions"] <- proc.time()["elapsed"] - .t
-```
-
----
-
-# Split sequences
-
-Split each read into five segments based on alignment coordinates:
-
-- **pre**: sequence before left flank alignment
-- **left**: sequence aligned to left flank
-- **mid**: sequence between flanks (contains repeat region)
-- **right**: sequence aligned to right flank
-- **post**: sequence after right flank alignment
-
-```{r t_split_start, echo=FALSE}
-.t <- proc.time()["elapsed"]
-```
-
-```{r split_sequences, echo=FALSE}
-message("Splitting sequences into segments...")
-
-# Split sequences
-alignment_split <- split_sequences_enhanced(alignment_final)
-
-message("Sequence splitting complete!")
-message("Reads with all segments: ", sum(!is.na(alignment_split$mid)))
-```
-
-```{r t_split_end, echo=FALSE}
-timings["Split sequences"] <- proc.time()["elapsed"] - .t
-```
-
-## Segment length summary
-
-```{r segment_summary, echo=FALSE}
-# Calculate segment lengths
-segment_summary <- alignment_split %>%
-  dplyr::mutate(
-    pre_length = nchar(pre),
-    left_length = nchar(left),
-    mid_length = nchar(mid),
-    right_length = nchar(right),
-    post_length = nchar(post)
-  ) %>%
-  group_by(file_stem) %>%
-  dplyr::summarise(
-    n_reads = n(),
-    mean_pre = mean(pre_length, na.rm = TRUE),
-    mean_left = mean(left_length, na.rm = TRUE),
-    mean_mid = mean(mid_length, na.rm = TRUE),
-    mean_right = mean(right_length, na.rm = TRUE),
-    mean_post = mean(post_length, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-DT::datatable(
-  segment_summary,
-  caption = "Mean segment lengths (bp)",
-  options = list(
-    pageLength = 25,
-    scrollX = TRUE,
-    scrollY = "500px",
-    autoWidth = TRUE,
-    dom = 'Bfrtip',
-    buttons = c('copy', 'csv', 'excel')
-  ),
-  rownames = FALSE,
-  filter = 'top',
-  class = 'cell-border stripe compact',
-  style = 'bootstrap',
-  fillContainer = FALSE
-) %>%
-  DT::formatStyle(columns = colnames(segment_summary), fontSize = '85%') %>%
-  DT::formatRound(columns = c('mean_pre', 'mean_left', 'mean_mid', 'mean_right', 'mean_post'), digits = 1)
-```
-
-```{r plot_segment_lengths, echo=FALSE, fig.height=5, fig.width=8}
-# Per-sample median for each of the five segments (pre, left, mid, right, post)
-segment_medians <- alignment_split %>%
-  group_by(file_stem) %>%
-  dplyr::summarise(
-    pre   = median(nchar(pre),   na.rm = TRUE),
-    left  = median(nchar(left),  na.rm = TRUE),
-    mid   = median(nchar(mid),   na.rm = TRUE),
-    right = median(nchar(right), na.rm = TRUE),
-    post  = median(nchar(post),  na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  tidyr::pivot_longer(
-    cols      = c(pre, left, mid, right, post),
-    names_to  = "segment",
-    values_to = "median_length_bp"
-  ) %>%
-  dplyr::mutate(
-    segment = factor(segment, levels = c("pre", "left", "mid", "right", "post"))
-  )
-
-n_samples <- length(unique(segment_medians$file_stem))
-
-if (nrow(segment_medians) > 0 && any(!is.na(segment_medians$median_length_bp))) {
-  p_segment_lengths <- ggplot(segment_medians,
-                              aes(x = segment, y = median_length_bp)) +
-    geom_boxplot(outlier.shape = NA, width = 0.35,
-                 fill = "grey92", colour = "grey40") +
-    geom_jitter(width = 0.08, height = 0, size = 2,
-                colour = "#619CFF", alpha = 0.6) +
-    stat_summary(fun = mean, geom = "point", shape = 18,
-                 colour = "red", size = 4, alpha = 0.6) +
-    stat_summary(fun = mean, geom = "text",
-                 aes(label = scales::comma(after_stat(y), accuracy = 1)),
-                 colour = "red", size = 3.5, alpha = 0.8,
-                 angle = 45, hjust = -0.2, vjust = -0.5) +
-    scale_y_continuous(labels = scales::comma,
-                       expand = expansion(mult = c(0.05, 0.18))) +
-    labs(title    = "Segment lengths",
-         subtitle = sprintf("Median per sample  |  n = %d sample%s  |  red diamond = mean across samples",
-                            n_samples, ifelse(n_samples == 1, "", "s")),
-         x        = "Segment",
-         y        = "Median segment length (bp)") +
-    theme_bw()
-
-  print(p_segment_lengths)
-
-  ggsave(
-    filename = file.path(plots_dir, "segment_lengths.png"),
-    plot     = p_segment_lengths,
-    width    = 8,
-    height   = 5,
-    dpi      = params$plot_dpi,
-    bg       = "white"
-  )
-  rm(p_segment_lengths)
-} else {
-  message("No valid segment lengths for plotting")
-}
-rm(segment_medians)
-
-# Per-sample plots (gated by plot_per_sample)
-if (params$plot_per_sample) {
-  repeat_segment_by_sample_dir <- file.path(plots_dir, "repeat_segment_length_by_sample")
-  dir.create(repeat_segment_by_sample_dir, showWarnings = FALSE, recursive = TRUE)
-
-  for (sample in unique(alignment_split$file_stem)) {
-    plot_path <- file.path(repeat_segment_by_sample_dir, paste0(sample, "-repeat_segment_length.png"))
-    if (file.exists(plot_path) && params$resume) next
-
-    sample_data <- alignment_split %>% filter(file_stem == sample, !is.na(mid))
-    n_reads <- nrow(sample_data)
-
-    if (n_reads == 0) {
-      message("Skipping mid length plot for ", sample, " (no valid mid segments)")
-      next
-    }
-
-    if (n_reads >= 2) {
-      p_mid_sample <- ggplot(sample_data, aes(x = nchar(mid), y = 1)) +
-        geom_violin(fill = "lightblue", alpha = 0.6, width = 0.8) +
-        geom_jitter(width = 0, alpha = 0.3, size = 1.2, color = "#619CFF") +
-        geom_boxplot(height = 0.15, outlier.shape = NA, alpha = 0.3, fill = "white") +
-        labs(title    = paste("Repeat region length -", sample),
-             subtitle = paste0("Mid segment distribution (n = ", n_reads, ")"),
-             x        = "Mid segment length (bp)",
-             y        = "") +
-        theme_minimal() +
-        theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
-    } else {
-      p_mid_sample <- ggplot(sample_data, aes(x = nchar(mid), y = 1)) +
-        geom_point(size = 4, color = "#619CFF", alpha = 0.7) +
-        labs(title    = paste("Repeat region length -", sample),
-             subtitle = paste0("Mid segment (n = ", n_reads, " read)"),
-             x        = "Mid segment length (bp)",
-             y        = "") +
-        theme_minimal() +
-        theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
-    }
-
-    ggsave(
-      filename = plot_path,
-      plot     = p_mid_sample,
-      width    = 8,
-      height   = 6,
-      dpi      = params$plot_dpi,
-      bg       = "white"
-    )
-  }
-}
-
-message("All alignment plots exported to: ", plots_dir)
-```
-
----
-
-# Save outputs
-
-```{r save_alignment_xlsx, echo=FALSE}
-# Augment alignment_summary with strand breakdown and final read count
-strand_pivot <- strand_summary %>%
-  dplyr::select(file_stem, strand, read_count) %>%
-  # values_fill = 0: a sample missing one strand gets 0, not NA
-  tidyr::pivot_wider(names_from = strand, values_from = read_count, values_fill = 0)
-
-# Add missing strand columns with 0 when a strand is entirely absent from all
-# samples (common with FASTQ/amplicon data where all reads align forward)
-if (!("+"  %in% names(strand_pivot))) strand_pivot[["+"]]  <- 0L
-if (!("+c" %in% names(strand_pivot))) strand_pivot[["+c"]] <- 0L
-
-strand_pivot <- strand_pivot %>%
-  dplyr::rename(n_forward = `+`, n_reverse = `+c`) %>%
-  dplyr::mutate(pct_forward = n_forward / (n_forward + n_reverse))
-
-final_reads_lookup <- validation_summary %>%
-  dplyr::select(file_stem, final_reads = correct_order)
-
-alignment_summary_export <- alignment_summary %>%
-  left_join(final_reads_lookup, by = "file_stem") %>%
-  left_join(strand_pivot,       by = "file_stem") %>%
-  dplyr::select(file_stem, n_flank_alignments, unique_reads, final_reads,
-                n_forward, n_reverse, pct_forward, mean_mapq, mean_mismatches)
-
-# Rename segment_summary columns for clarity before export
-segment_summary_export <- segment_summary %>%
-  dplyr::rename(
-    n_reads              = n_reads,
-    pre_flank_mean_bp    = mean_pre,
-    left_flank_mean_bp   = mean_left,
-    repeat_region_mean_bp = mean_mid,
-    right_flank_mean_bp  = mean_right,
-    post_flank_mean_bp   = mean_post
-  )
-
-tables_to_write <- list(
-  "alignment_summary"  = alignment_summary_export,
-  "flank_filtering"    = filtering_summary,   # reads retained requiring alignment to both flanks
-  "order_validation"   = validation_summary,  # reads retained after left→right order check
-  "strand_summary"     = strand_summary,
-  "alignment_quality"  = quality_summary,     # alignment quality metrics (MAPQ, length) by flank
-  "sequence_segments"  = segment_summary_export  # mean bp lengths of pre/left/mid/right/post segments
-)
-
-# Remove NULL or zero-row tables (defensive — all should be populated by this point)
-tables_to_write <- Filter(function(x) !is.null(x) && nrow(x) > 0, tables_to_write)
-
-if (length(tables_to_write) > 0) {
-  write_excel_function(
-    named_list      = tables_to_write,
-    path            = file.path(alignment_dir, "alignment.xlsx"),
-    overwrite_sheet = TRUE
-  )
-  message("Saved ", length(tables_to_write), " tables to alignment.xlsx: ",
-          paste(names(tables_to_write), collapse = ", "))
-} else {
-  message("No tables to write to alignment.xlsx")
-}
-```
-
-Save the processed alignment data for use in Module 3.
-
-```{r save_outputs, echo=FALSE}
-# Compile module output
-module2_output <- list(
-  alignment_split     = alignment_split,
-  ref_summary         = ref_summary,
-  ref_sequences       = ref_sequences,
-  ref_full_sequence   = ref_full_sequence,
-  segment_summary     = segment_summary,
-  filtering_summary   = filtering_summary,
-  strand_summary      = strand_summary,
-  quality_summary     = quality_summary,
-  validation_summary  = validation_summary
-)
-
-# Save complete module output
-output_path <- file.path(results_dir, "02_alignment.RData")
+# Save output
+
+```{r save}
+write_excel_function(list(references = ref_table, read_accounting = funnel, alignment_quality = dplyr::left_join(qual, sf, by = c("file_stem", "ref_id"))), xlsx_path)
+module2_output <- list(alignments = alignments, refs = refs, funnel = funnel, quality = qual, hash = params$module_hash)
+output_path <- file.path(params$dir_out, "module_data", "02_alignment.RData")
 save(module2_output, file = output_path)
-
-message("Module 2 outputs saved to: ", output_path)
 ```
 
-**Module 2 Complete!**
-
-Results saved to: `r output_path`
-
-- **`r nrow(alignment_split)`** reads processed
-- **`r length(unique(alignment_split$file_stem))`** samples
-- Mean repeat region length: **`r round(mean(nchar(alignment_split$mid), na.rm = TRUE))` bp**
-
-Ready for Module 3: Repeat Detection
+**`r comma(sum(funnel$final))`** reads passed to Module 3.
 
 ---
 
-# Module diagnostics
+# Diagnostics
 
-## Timing
-
-```{r timing_table, echo=FALSE}
+```{r diagnostics}
 timing_df <- build_timing_table(timings)
-DT::datatable(
-  timing_df,
-  caption = "Section timing — Module 2",
-  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
-  rownames = FALSE,
-  class = 'cell-border stripe compact',
-  colnames = c("Section", "Seconds", "Elapsed (mm:ss)", "Cumulative (mm:ss)")
-) %>%
-  DT::formatStyle("section", target = "row",
-                  fontWeight = DT::styleEqual("Total", "bold"))
+manifest <- build_manifest(module2_output, c(
+  alignments = "Per reference: one row per read with the strand-corrected sequence and flank coordinates",
+  refs = "Parsed references (flanks, N block position)", funnel = "Reads per sample after each alignment step",
+  quality = "Mean MAPQ, mismatches and strand per sample", hash = "Parameter hash used for resume"))
+write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)
+dt_compact(timing_df, caption = "Section timing")
+dt_compact(manifest, caption = sprintf("module2_output – %s on disk", format_size(file.size(output_path))))
 ```
-
-## Output objects
-
-```{r manifest_table, echo=FALSE}
-manifest <- data.frame(
-  object = names(module2_output),
-  description = c(
-    "Per-read alignment data with sequences split into pre/left/mid/right/post segments",
-    "Reference sequence metadata (flank names, lengths)",
-    "Reference flank sequences as DNAStringSet (left and right flanks)",
-    "Full original reference sequence for variant calling",
-    "Per-sample mean lengths of each sequence segment (bp)",
-    "Read counts before and after dual-flank alignment filtering",
-    "Strand orientation breakdown per sample (+, +c)",
-    "Alignment quality metrics: MAPQ and mismatch rates per flank",
-    "Read counts retained after left-to-right coordinate order validation"
-  ),
-  class = sapply(module2_output, function(x) if (is.null(x)) "NULL" else class(x)[1]),
-  size = sapply(module2_output, function(x) {
-    format_size(if (is.null(x)) 0 else as.numeric(object.size(x)))
-  }),
-  bytes = sapply(module2_output, function(x) {
-    if (is.null(x)) 0L else as.numeric(object.size(x))
-  }),
-  stringsAsFactors = FALSE
-)
-
-DT::datatable(
-  manifest[, c("object", "description", "class", "size")],
-  caption = sprintf("Objects saved to module2_output — RData file: %s on disk (%s)",
-                    format_size(file.size(output_path)), output_path),
-  options = list(pageLength = 15, scrollX = TRUE, dom = 't'),
-  rownames = FALSE,
-  class = 'cell-border stripe compact',
-  colnames = c("Object", "Description", "Class", "In-memory size")
-)
-```
-
-```{r diagnostics_export, echo=FALSE}
-write_excel_function(
-  named_list = list("timing" = timing_df, "manifest" = manifest),
-  path = file.path(alignment_dir, "alignment.xlsx"),
-  overwrite_sheet = TRUE
-)
-message(sprintf("Module 2 complete — total time: %s  |  RData: %s",
-                format_elapsed(sum(timings)), format_size(file.size(output_path))))
-```
-
----
 
 # Session info
 
-```{r session_info, echo=FALSE}
+```{r session_info}
 sessionInfo()
 ```

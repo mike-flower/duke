@@ -1,876 +1,238 @@
 #!/usr/bin/env Rscript
 # ==============================================================================
-# Duke Pipeline
+# Duke - run script
 # ==============================================================================
-# Runs the modular Duke pipeline for amplicon sequencing analysis
+# Cluster version (Myriad / Kathleen paths). duke_run_local.R is the laptop version.
+# Edit the parameters below, then run from RStudio (Source) or with
+#   Rscript scripts/<this file>
+# Every parameter is listed with its default; see README.md for detail. The
+# same parameters are available on the command line: ./duke --help
 # ==============================================================================
 
-# Set the working directory where this script is saved
-# Works from both RStudio and command line
-# This script lives in scripts/ subdirectory, so we need to go up one level
-# to reach the duke installation root where lib/ and modules/ are located
-
-if (interactive()) {
-  # Running in RStudio
-  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
-    script_dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
-    duke_root <- dirname(script_dir)  # Go up one level from scripts/
-    setwd(duke_root)
+# Find the Duke root (the folder holding lib/ and modules/)
+duke_root <- local({
+  if (interactive() && requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    dirname(dirname(rstudioapi::getActiveDocumentContext()$path))
   } else {
-    # Running interactively but not in RStudio
-    cat("Note: Running interactively. Make sure you're in the duke root directory.\n")
+    f <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))
+    if (length(f)) dirname(dirname(normalizePath(f))) else getwd()
   }
-} else {
-  # Running from command line (Rscript)
-  args <- commandArgs(trailingOnly = FALSE)
-  file_arg <- grep("^--file=", args, value = TRUE)
-  if (length(file_arg) > 0) {
-    script_path <- sub("^--file=", "", file_arg)
-    script_dir <- dirname(normalizePath(script_path))
-    duke_root <- dirname(script_dir)  # Go up one level from scripts/
-    setwd(duke_root)
-  } else {
-    cat("Note: Could not detect script location. Make sure you're in the duke root directory.\n")
-  }
-}
-
-# Clear objects
-rm(list = setdiff(ls(), "env_duke"))
-
-
-# Load required libraries
-library(rmarkdown)
-
-# ==============================================================================
-# CONFIGURATION
-# ==============================================================================
+})
+setwd(duke_root)
+source("lib/load_all.R")
 
 params <- list(
-  
-  # -----------------------------------------------------------------------------
-  # File paths and directories
-  # -----------------------------------------------------------------------------
+  # --- Paths -------------------------------------------------------------------
+  # Input directory of BAM / FASTQ / FASTA files (required)
   dir_data = "/home/skgtmdf/Scratch/data/2025.12.17_pb_test/data",
+  # Output directory (required)
   dir_out = "/home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke",
-  
-  path_ref = "/home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta",  # Reference with NNNNN separator
-  
-  # Optional paths
-  path_trim_patterns = "/home/skgtmdf/Scratch/refs/adapters/adapters.csv",
-  path_manual_exclusions = NA,  # Path to file with reads to exclude
-  
-  # -----------------------------------------------------------------------------
-  # File import options
-  # -----------------------------------------------------------------------------
-  import_patterns = c("\\.fastq$", "\\.fastq.gz$", "\\.fasta$", "\\.fa$", "\\.bam$"),
-  import_recursive = TRUE,
-  
-  # Paired-end read handling
-  r1_pattern = "_R1_",
-  r2_pattern = "_R2_",
-  select_one_of_pair = "R1",  # "R1", "R2", or "all" to import both directions as separate samples
-  
-  # Downsampling (set to NA to disable)
-  downsample = NA,  # e.g., 1000 to keep 1000 reads per sample
-  
-  # np_min: Drop PacBio HiFi reads with np (pass count) below this threshold.
-  #   - NULL = no filter (default; preserves all reads)
-  #   - integer (e.g., 3) = drop reads with np < N
-  #   Applies only to samples auto-detected as PacBio HiFi BAMs in Module 1.
-  #   FASTQ, FASTA, and non-PacBio BAMs are unaffected; mixed cohorts are
-  #   handled correctly on a per-sample basis.
-  np_min = NULL,
-  
-  # pacbio_scatter_downsample: Max points to render in the PacBio np-vs-read-length scatter
-  #   - integer (default 50000) = downsample if cohort exceeds this; the lm fit
-  #     and CI band are computed on the rendered subset (the slope/R² estimates
-  #     are essentially identical to the full-cohort values at n=50k)
-  #   - NA = plot all reads (may be slow and produce a large PNG for very large cohorts)
-  #   Applies only to samples auto-detected as PacBio HiFi BAMs in Module 1.
-  pacbio_scatter_downsample = 50000,
-  
-  # check_duplicate_readnames: Scan for reads sharing the same name and keep
-  #   only the longest copy of each duplicate.
-  #   - TRUE  = run the check (default; important for ONT data)
-  #   - FALSE = skip the check and pass sequences through unchanged
-  #   Note: PacBio CCS data (Revio/Sequel) cannot have duplicate read names by
-  #   design, so FALSE is safe and saves significant time on large datasets.
-  #   For ONT data, duplicates can occur depending on basecaller settings.
-  check_duplicate_readnames = TRUE,
-  
-  # -----------------------------------------------------------------------------
-  # Adapter trimming (from both 5' and 3' ends using Biostrings::trimLRPatterns)
-  # -----------------------------------------------------------------------------
-  
-  # trim: Enable or disable adapter trimming
-  #   - TRUE = trim adapters using patterns from path_trim_patterns
-  #   - FALSE = skip adapter trimming (sequences pass through untrimmed)
-  #   Note: If trim=TRUE, path_trim_patterns must be provided
-  trim = TRUE,
-  
-  # trim_max_mismatch: Maximum mismatches allowed when matching adapters
-  #   - 0 = Perfect match only
-  #   - 3 = Good for ONT (~10% error for 30bp adapter)
-  #   - 5 = Very tolerant (risk of false matches)
-  #   Example: "AGATCGGAAGAGC" with max_mismatch=3 matches "AGATCGGTAGAGC"
-  
-  # trim_with_indels: Allow insertions/deletions (gaps) in adapter matching
-  #   - TRUE = More sensitive, better for ONT (finds adapters with indel errors)
-  #   - FALSE = Faster, better for Illumina/PacBio HiFi (no indel tolerance)
-  #   Example: "AGATCGG--AAGAGC" (2bp deletion) matches if TRUE
-  
-  trim_max_mismatch = 3,
-  trim_with_indels = TRUE,
-  
-  # -----------------------------------------------------------------------------
-  # Alignment with minimap2
-  # -----------------------------------------------------------------------------
-  minimap2_args = "-t 2 -x sr -w 1",
-  # Using short-read mode (-x sr) with maximum sensitivity (-w 1) for amplicon sequencing
-  # This setting works optimally for variable flank lengths (short to long amplicons)
-  # 
-  # Why -x sr for ONT amplicons?
-  #   - Amplicon targets are short sequences (flanks typically 100-1500bp)
-  #   - Short-read mode provides better sensitivity than long-read mode for these targets
-  #   - Works regardless of sequencing platform (ONT, PacBio, or Illumina)
-  # 
-  # Why -w 1?
-  #   - Minimizer window size = 1 gives maximum sensitivity
-  #   - Ensures alignment detection for both short (<300bp) and long (>800bp) flanks
-  #   - Critical for detecting all reads in amplicon data
-  # 
-  # Threading: -t <int> sets minimap2 internal threads (separate from params$threads)
-  # 
-  # Required flags (added automatically): -a (SAM output), --MD (mismatches), --cs (CIGAR)
-  # 
-  # Alternative presets for other applications:
-  #   "-t 2 -x map-ont -k 15"  # For long genomic reads (>1kb), not amplicons
-  #   "-t 2 -x map-hifi"       # For PacBio HiFi genomic data
-  #   "-t 2 -x map-pb"         # For PacBio CLR genomic data
-  
-  # Visualization options
-  visualise_alignment = TRUE,  # Generate alignment coverage plots
-  visualise_alignment_downsample = 1000,  # Max reads to plot per sample (NA = plot all, may be slow)
-  
-  # keep_bam: retain sorted+indexed alignment BAMs (one per sample x reference) in
-  # <dir_out>/02_alignment/bam/ for IGV inspection, instead of deleting them after
-  # reading into R. Independent of remove_temp/remove_intermediate. Can be large.
-  keep_bam = FALSE,
-  
-  # -----------------------------------------------------------------------------
-  # Repeat detection and counting
-  # -----------------------------------------------------------------------------
-  # These parameters control how CAG/CTG repeats are identified in sequences
-  #
-  # OVERVIEW:
-  # Duke finds repeat tracts by scanning for imperfect runs of a motif (e.g., CAG).
-  # It tolerates small interruptions (mismatches, gaps) but requires perfect repeats
-  # at tract boundaries to confidently identify start/end positions.
-  #
-  # KEY CONCEPTS:
-  # - "Perfect repeat" = exact match to motif (e.g., "CAG")
-  # - "Mismatch" = substitution in motif (e.g., "CAT" instead of "CAG")
-  # - "Gap" = inserted bases between repeats (e.g., "CAG-TA-CAG" has 2bp gap)
-  # - "Tract" = continuous run of repeats (may contain small gaps/mismatches)
-  #
-  # PARAMETER GUIDE:
-  
-  # rpt_pattern: Repeat motif to search for
-  #   Examples: "CAG" for Huntington's disease, "CTG" for DM1, "CGG" for fragile X
-  rpt_pattern = "CAG",
-  
-  # rpt_min_repeats: Minimum repeat count to consider a valid tract
-  #   Lower = more sensitive but more false positives
-  #   Higher = stricter, may miss short expansions
-  rpt_min_repeats = 2,
-  
-  # rpt_max_mismatch: Max substitution errors tolerated in each repeat unit
-  #   0 = strict perfect matching (best for high-accuracy data)
-  #   1+ = tolerant to sequencing errors (better for ONT/PacBio CLR)
-  rpt_max_mismatch = 0,
-  
-  # rpt_start_perfect_repeats: Perfect (error-free) repeats required at tract START
-  #   Higher = more confident boundaries, less likely to include flanking sequence
-  #   Lower = may include partial repeats at edges
-  rpt_start_perfect_repeats = 2,
-  
-  # rpt_end_perfect_repeats: Perfect (error-free) repeats required at tract END
-  #   Higher = more confident boundaries
-  #   Lower = may include partial repeats at edges
-  rpt_end_perfect_repeats = 2,
-  
-  # rpt_max_gap: Max inserted bases allowed WITHIN a single repeat tract
-  #   Example: "CAG-TA-CAG" has a 2bp gap
-  #   Higher = more tolerant of interruptions (may merge separate tracts)
-  #   Lower = stricter tract definition (may split into multiple tracts)
-  rpt_max_gap = 6,
-  
-  # rpt_max_tract_gap: Max gap between separate repeat tracts to merge them
-  #   Example: "CAG(x5)--18bp--CAG(x3)" would be merged if rpt_max_tract_gap >=18
-  #   Higher = merges distant tracts (reports combined length)
-  #   Lower = keeps tracts separate (reports longest only if rpt_return_option="longest")
-  rpt_max_tract_gap = 18,
-  
-  # rpt_return_option: Which tract to return if multiple found in one read
-  #   "longest" = use the biggest tract (recommended for repeat expansions)
-  #   "all" = keep all tracts (use for complex repeat structures)
-  rpt_return_option = "longest",
-  
-  # Repeat counting method (used for clustering and distribution analysis):
-  # 
-  # Three methods are calculated, but only one is used as the primary count:
-  # 
-  # "repeat_count_full" (RECOMMENDED for ONT data):
-  #   - Formula: Tract length ÷ pattern length
-  #   - Example: 51 bases ÷ 3bp = 17 CAG repeats
-  #   - Includes: All bases in the tract (tolerates sequencing errors)
-  #   - Best for: Oxford Nanopore data, robust counting after tract isolation
-  # 
-  # "repeat_count_match":
-  #   - Formula: Count of exact pattern matches only
-  #   - Example: Counts only perfect "CAG" sequences, ignoring errors
-  #   - Excludes: Sequencing errors and interruptions
-  #   - Best for: High-accuracy data (PacBio HiFi, Illumina), stringent counting
-  # 
-  # "repeat_count_tracts":
-  #   - Formula: Reports structure as "3,2,2" (tract sizes separated by gaps)
-  #   - Example: "3,2,2" means three tracts containing 3, 2, and 2 perfect repeats
-  #   - Note: Returns a STRING, not a number - cannot be used as repeat_count_method
-  #   - Available in data for QC visualization only (any gap >0bp breaks a tract)
-  #
-  repeat_count_method = "repeat_count_full",
-  
-  # How to handle reads where no repeat tract was found (repeat_count = NA):
-  # 
-  # These could be:
-  #   - Sequencing artifacts (e.g., duplicated flanks, chimeric reads)
-  #   - Genuine deletions (e.g., CRISPR-edited samples with repeat removed)
-  #   - Off-target amplification (non-HTT sequences)
-  # 
-  # "convert_to_zero" (default):
-  #   - Assign repeat_count = 0 for reads where no tract was detected
-  #   - Appropriate because Module 2's dual-flank filter already requires reads
-  #     to align to both flanks, so any read reaching Module 3 genuinely spans
-  #     the locus; a missing tract means no (or sub-threshold) repeat is present
-  #
-  # "filter":
-  #   - Remove reads with no detectable tract entirely
-  #   - Use when you want these reads excluded from all downstream analysis
-  #
-  # NA:
-  #   - Leave repeat_count as NA and propagate as-is
-  #   - Useful for inspecting these reads before deciding how to handle them
-  #   - Downstream analyses that ignore NAs will exclude them automatically
-  #
-  na_repeat_handling = "convert_to_zero",
-
-  # export_read_counts: Export per-read repeat counts to gzipped TSV files
-  #   - TRUE  = write one {file_stem}.tsv.gz per sample to
-  #             03_repeat_detection/read_counts/
-  #             Columns: read_id, repeat_count_full, repeat_count_match, repeat_count_tracts
-  #             Useful for downstream analysis in Python, Excel, or other tools.
-  #   - FALSE = do not export
-  export_read_counts = TRUE,
-
-  # -----------------------------------------------------------------------------
-  # Flank length QC & filtering (Module 3)
-  # -----------------------------------------------------------------------------
-  # rm_flank_length_outliers: Remove reads with unusual combined flank lengths
-  #   Filtering happens in Module 3 and applies to ALL downstream modules (4-7).
-  #   Default FALSE — review flank/ plots in Module 3 output before enabling.
-  #   - FALSE = keep all reads (recommended; use plots to assess first)
-  #   - TRUE  = remove reads where combined flank length is an IQR outlier
-  rm_flank_length_outliers = FALSE,
-  
-  # flank_iqr_multiplier: IQR multiplier for combined flank length outlier detection
-  #   Only used when rm_flank_length_outliers = TRUE.
-  #   1.5 × IQR reference lines are always shown in plots regardless of this setting.
-  #   - 1.5 = standard boxplot rule (may be too aggressive if within-sample IQR ≈ 0)
-  #   - 3.0 = relaxed (recommended for high-accuracy long-read amplicons)
-  #   See flank_iqr_sweep.png in Module 3 plots to calibrate.
-  flank_iqr_multiplier = 1.5,
-  
-  # -----------------------------------------------------------------------------
-  # Clustering
-  # -----------------------------------------------------------------------------
-  cluster = TRUE,
-  
-  # Clustering strategy (character vector):
-  #   c("repeat", "haplotype") - Cluster by repeat first, then haplotype within each repeat group (RECOMMENDED)
-  #   c("haplotype", "repeat") - Cluster by haplotype first, then repeat within each haplotype group
-  #   "repeat"                 - Cluster by repeat count only (fast)
-  #   "haplotype"              - Cluster by flanking sequences only
-  #   "none"                   - No clustering (all reads in single group)
-  #
-  # Vector order specifies clustering order:
-  #   - c("repeat", "haplotype") = repeat-first strategy
-  #   - c("haplotype", "repeat") = haplotype-first strategy
-  #
-  # Why repeat-first is recommended for long reads (ONT/PacBio):
-  #   - Repeat counting is more robust to sequencing errors
-  #   - Prevents error amplification in haplotype clustering
-  #   - Enforces biological constraint: one haplotype per repeat length (diploid)
-  #
-  # Examples:
-  #   cluster_by = c("repeat", "haplotype")  # Two-step: repeat then haplotype
-  #   cluster_by = "repeat"                  # Single: repeat only (fastest)
-  #   cluster_by = "haplotype"               # Single: haplotype only
-  cluster_by = "repeat",
-  
-  # Separate cluster limits for repeat and haplotype:
-  haplotype_cluster_max = 10,   # Max haplotypes to consider (auto-detect)
-  repeat_cluster_max = 20,      # Max repeats to consider (allow more for instability)
-  
-  # Performance tuning for large datasets (NEW in v2.1.1):
-  # These parameters control downsampling for clustering OPTIMIZATION only.
-  # The optimal number of clusters (k) is determined using a subsample,
-  # then ALL reads are clustered using that optimal k.
-  # This dramatically speeds up clustering for high-depth datasets.
-  repeat_cluster_downsample = 10000,     # Max reads for repeat clustering optimisation
-                                         # Repeat clustering uses k-means (fast, 1D)
-                                         # Set to Inf to disable (not recommended for >10k reads)
-  
-  haplotype_cluster_downsample = 5000,   # Max reads for haplotype clustering optimisation
-                                         # Haplotype clustering uses distance matrices (slower)
-                                         # Set to Inf to disable (not recommended for >5k reads)
-  
-  # Haplotype clustering options (used when cluster_by includes "haplotype")
-  haplotype_region = "both",        # "left", "right", or "both" flanking regions
-  haplotype_method = "levenshtein", # "hamming" or "levenshtein" distance
-  haplotype_trim_length = "auto",   # Trimming options:
-                                     #   NA = no trim (uses full flanks)
-                                     #   "auto" = trim to modal (commonest) length per flank
-                                     #   numeric (e.g., 200) = trim to N bp total (split between flanks)
-                                     # Trimming keeps bases adjacent to repeat (most informative)
-  
-  # -----------------------------------------------------------------------------
-  # Consensus generation and variant calling
-  # -----------------------------------------------------------------------------
-  cluster_consensus = TRUE,
-  consensus_threshold = 0.5,   # Minimum proportion for consensus base (0.5 = majority)
-  consensus_downsample = 50,  # Max reads per consensus (NA = use all)
-  
-  # Variant calling (compare consensus to reference)
-  call_variants = TRUE,        # Call variants in consensus sequences
-  
-  # -----------------------------------------------------------------------------
-  # Waterfall plots (Module 5)
-  # -----------------------------------------------------------------------------
-  waterfall = TRUE,  # Generate waterfall plots (visual read inspection)
-  
-  # waterfall_downsample: Maximum reads to plot per sample
-  #   - 5000 = plot up to 5000 reads (recommended for performance)
-  #   - NA = plot all reads (may be slow for large datasets)
-  #   Note: Downsampling is random but reproducible (seed = 123)
-  waterfall_downsample = 1000,
-  
-  # waterfall_y_axis_labels: Controls y-axis labeling density
-  #   - "auto" = dynamic based on read count (default, from original Duke)
-  #              <30 reads: every read, 30-50: every 3rd, 50-100: every 5th,
-  #              100-200: every 10th, 200-500: every 20th, 500-1000: every 50th,
-  #              1000-5000: every 100th, >5000: every 500th
-  #   - "all" = label every single read (only for small datasets)
-  #   - Integer (e.g. 10, 20, 50) = target number of labels
-  waterfall_y_axis_labels = "auto",
-  
-  # waterfall_per_cluster: Generate separate waterfall plot for each cluster
-  #   - TRUE = create per-cluster plots (useful for targeted QC, but creates many files)
-  #   - FALSE = only per-sample plots (default, much faster for large datasets)
-  waterfall_per_cluster = FALSE,
-  
-  # DNA base colors for waterfall plots
-  dna_colours = c("A" = "darkgreen", "C" = "blue", "T" = "red", 
-                  "G" = "black", "-" = "lightgrey", "N" = "grey"),
-  
-  # -----------------------------------------------------------------------------
-  # Range analysis & instability metrics (Module 6)
-  # -----------------------------------------------------------------------------
-  # path_settings: Path to settings Excel file
-  #   Required for Module 6
-  #   Should contain: analysis_ranges, floor, max_peaks, group, group_control_sample
+  # Reference FASTA with NNNNN marking the repeat region (required unless every
+  # tract in path_tracts names its own reference)
+  path_ref = "/home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta",
+  # Settings .xlsx/.csv (ranges, groups, controls, time). Needed for Module 6
   path_settings = "/home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx",
-  
-  # range_peak_span: Peak detection smoothing window (odd number)
-  #   - 3 = sharp peaks (default)
-  #   - 5-7 = smoother peaks, less sensitive to noise
-  range_peak_span = 3,
-  
-  # group_control: Enable group control analysis
-  #   - TRUE = calculate control setpoints per group
-  #   - FALSE = skip instability metrics
+  # Optional tracts table (.csv or .xlsx sheet 'tracts'; optional sheet
+  # 'composites'). NA = one tract from rpt_pattern and path_ref
+  path_tracts = NA_character_,
+  # Adapter CSV (adapter_name, adapter_sequence), used when trim = TRUE
+  path_trim_patterns = "/home/skgtmdf/Scratch/refs/adapters/adapters.csv",
+  # Optional read exclusions file (file_name, read_name, reason)
+  path_manual_exclusions = NA_character_,
+
+  # --- Import ------------------------------------------------------------------
+  # Regex patterns for files to import
+  import_patterns = c("\\.fastq$", "\\.fastq\\.gz$", "\\.fq$", "\\.fq\\.gz$", "\\.fasta$", "\\.fa$", "\\.bam$"),
+  # Search dir_data recursively
+  import_recursive = TRUE,
+  # Pattern identifying R1 files in paired-end data
+  r1_pattern = "_R1_",
+  # Pattern identifying R2 files in paired-end data
+  r2_pattern = "_R2_",
+  # Paired-end: import 'R1', 'R2' or 'all'
+  select_one_of_pair = "R1",
+  # Maximum reads per sample (NA = all)
+  downsample = NA_integer_,
+  # Drop PacBio HiFi reads with fewer passes than this (NA = no filter)
+  np_min = NA_integer_,
+  # Maximum points in the PacBio passes-vs-length plot
+  pacbio_scatter_downsample = 50000L,
+  # Remove duplicate read names, keeping the longest. Off by default: PacBio
+  # and ONT read names are unique, and the check removed 0 reads in 36 M
+  check_duplicate_readnames = FALSE,
+  # Trim adapters from read ends. Off by default: demultiplexed HiFi reads are
+  # already trimmed (20 of 36 M reads were trimmed in the msn run)
+  trim = FALSE,
+  # Maximum errors in an adapter match
+  trim_max_mismatch = 3L,
+  # Allow indels in adapter matching
+  trim_with_indels = TRUE,
+
+  # --- Alignment ---------------------------------------------------------------
+  # minimap2 arguments for aligning reads to each flank
+  minimap2_args = "-t 1 -x sr -w 1",
+  # Keep the per-sample flank BAMs in 02_alignment/bam/ for IGV
+  keep_bam = FALSE,
+  # Write per-sample flank alignment plots
+  visualise_alignment = TRUE,
+  # Maximum reads per alignment plot
+  visualise_alignment_downsample = 1000L,
+
+  # --- Repeats -----------------------------------------------------------------
+  # Repeat motif (used when there is no tracts table)
+  rpt_pattern = "CAG",
+  # Name for the single tract (default: the motif)
+  rpt_tract_name = NA_character_,
+  # Minimum tract length in repeat units
+  rpt_min_repeats = 2L,
+  # Mismatches allowed per repeat unit
+  rpt_max_mismatch = 0L,
+  # Perfect units required at the start of a tract
+  rpt_start_perfect_repeats = 2L,
+  # Perfect units required at the end of a tract
+  rpt_end_perfect_repeats = 2L,
+  # Maximum bases between units inside a tract
+  rpt_max_gap = 6L,
+  # Maximum gap between sub-tracts before they are merged
+  rpt_max_tract_gap = 18L,
+  # Which tract to keep when several are found: 'longest' or 'first'
+  rpt_return_option = "longest",
+  # Bases either side of the flank boundaries searched for the tract, so a
+  # tract can extend past where the aligner placed the flank
+  rpt_flank_pad = 30L,
+  # Primary count: 'full' (tract length / motif length), 'match' (exact units)
+  # or 'pure' (longest uninterrupted run)
+  repeat_count_method = "full",
+  # Reads with no tract: 'convert_to_zero', 'filter' or 'keep'
+  na_repeat_handling = "convert_to_zero",
+  # Combined measures, e.g. 'CAG_CCG_sum=CAG+CCG:sum' (pure units added) or
+  # 'CAG_CCG_span=CAG+CCG:span' (first tract start to last tract end)
+  composites = character(0),
+  # Write per-read lengths to 03_repeat_detection/read_repeat_counts/
+  export_read_counts = TRUE,
+  # Remove reads with outlying combined flank length
+  rm_flank_length_outliers = FALSE,
+  # IQR multiplier for the flank length filter
+  flank_iqr_multiplier = 1.5,
+
+  # --- UMI ---------------------------------------------------------------------
+  # Extract UMIs and collapse reads to molecules
+  umi = FALSE,
+  # Sequence immediately 5' of the UMI (default M13-F)
+  umi_flank_5 = "GTAAAACGACGGCCAGT",
+  # Sequence immediately 3' of the UMI (default ciosiF+1)
+  umi_flank_3 = "GGCGACCCTGGAAAAGCTGATGAA",
+  # Edits allowed when locating each UMI flank (indel tolerant)
+  umi_flank_max_mismatch = 3L,
+  # The 5' flank must start within this many bases of the read start
+  umi_search_window = 250L,
+  # Shortest UMI accepted
+  umi_len_min = 12L,
+  # Longest UMI accepted
+  umi_len_max = 16L,
+  # Edit distance for directional UMI clustering (0 = exact match; 1 or 2)
+  umi_cluster_max_dist = 1L,
+  # Minimum reads for a molecule to be kept
+  umi_min_reads = 3L,
+  # Per-molecule length: 'top_cluster', 'median', 'mode' or 'mean'
+  umi_collapse_stat = "top_cluster",
+  # top_cluster: reads required in the window
+  umi_top_cluster_k = 2L,
+  # top_cluster: constant part of the window half-width (repeats)
+  umi_top_cluster_w = 3,
+  # top_cluster: length-proportional part of the window half-width
+  umi_top_cluster_wfrac = 0.1,
+  # Minimum separation (repeats) between alleles when splitting UMI families
+  umi_allele_min_sep = 20,
+  # Split a UMI family with at least 2 reads on each allele into two molecules
+  umi_split_mixed = TRUE,
+
+  # --- Allele structure --------------------------------------------------------
+  # Cluster reads into alleles, build consensus sequences and call variants
+  cluster = FALSE,
+  # 'repeat', 'haplotype', or 'repeat,haplotype'
+  cluster_by = "repeat",
+  # Maximum repeat-length clusters per sample
+  repeat_cluster_max = 6L,
+  # Clusters holding fewer than this proportion of reads are merged into their
+  # nearest neighbour
+  repeat_cluster_min_prop = 0.05,
+  # Reads used to choose the number of repeat clusters
+  repeat_cluster_downsample = 10000L,
+  # Maximum haplotype clusters per sample
+  haplotype_cluster_max = 6L,
+  # Reads used to define haplotype clusters
+  haplotype_cluster_downsample = 3000L,
+  # Flank(s) used for haplotypes: 'left', 'right' or 'both'
+  haplotype_region = "both",
+  # 'auto', a number of bases, or 'NA' for no trimming
+  haplotype_trim_length = "auto",
+  # Minimum agreement for a consensus base
+  consensus_threshold = 0.5,
+  # Maximum reads per consensus alignment
+  consensus_downsample = 50L,
+  # Call variants in each cluster consensus against the reference
+  call_variants = TRUE,
+  # Write per-sample waterfall plots
+  waterfall = TRUE,
+  # Maximum reads per waterfall
+  waterfall_downsample = 1000L,
+  # Bases of flank drawn either side of the tract in waterfalls
+  waterfall_flank_bp = 60L,
+  # Also write one waterfall per cluster
+  waterfall_per_cluster = FALSE,
+
+  # --- Instability -------------------------------------------------------------
+  # Window for modal peak detection
+  range_peak_span = 3L,
+  # Calculate group control setpoints
   group_control = TRUE,
-  
-  # control_sample_selection: Method for selecting which samples to use as controls
-  #   - "flagged" = use samples with group_control_sample = 1 (default)
-  #   - "earliest" = use first timepoint (time == min)
-  #   - "all" = use all samples in group
+  # 'flagged', 'earliest' or 'all'
   control_sample_selection = "flagged",
-  
-  # control_setpoint_metric: Which summary statistic to use as the control setpoint
-  #   - "modal_length" = most frequent repeat length (default, robust)
-  #   - "mean_length" = arithmetic mean (sensitive to outliers)
-  #   - "median_length" = median repeat length (robust middle value)
+  # 'modal_length', 'mean_length' or 'median_length'
   control_setpoint_metric = "median_length",
-  
-  # control_aggregation_method: How to aggregate control samples' values into a single setpoint
-  #   - "mean" = arithmetic mean of control values (default)
-  #   - "median" = median of control values (robust to outliers)
-  #   - "trimmed_mean" = 10% trimmed mean (excludes extreme 10%)
+  # 'mean', 'median' or 'trimmed_mean' across control samples
   control_aggregation_method = "median",
-  
-  # cohort_plot_by: Which dimensions to use for the "by group/time" plots in Module 6
-  #   (experiment map + density ridge plots). Expresses INTENT; the actual
-  #   dimensions used are the intersection with what the settings file provides.
-  #   - c("group", "time") = plot by both where available (default)
-  #   - c("group")         = plot by group only (ignore time even if present)
-  #   - c("time")          = plot by time only (ignore group even if present)
-  #   - character(0)        = single combined plot of all samples
-  #   Missing values within an active dimension are handled gracefully:
-  #     blank group -> "ungrouped"; blank time -> labelled "(t=)" and ordered last.
+  # Use manual_control_repeat_length from the settings file as the control
+  # setpoint (replacing the group control) for those samples and ranges
+  use_manual_controls = FALSE,
+  # k for proportion of reads at least k units above / below the setpoint
+  expansion_thresholds = c(5L, 10L),
+  # Dimensions for cohort plots: group, time
   cohort_plot_by = c("group", "time"),
-  
-  # -----------------------------------------------------------------------------
-  # Module 7: Repeat Distribution Visualisation
-  # -----------------------------------------------------------------------------
-  # repeat_histogram: Generate frequency histogram plots (Module 7)
-  #   - Full-range histograms per sample (histograms_by_sample/full/)
-  #   - Per-range histograms per sample (histograms_by_sample/{range}/)
-  repeat_histogram = TRUE,
+  # Metrics drawn as timecourses by group
+  headline_metrics = c("modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "prop_above_5"),
+  # Setpoint type for headline plots: 'control_relative' or 'sample_relative'
+  headline_setpoint_type = "control_relative",
+  # Ranges drawn inline (default: the first two ranges of the primary measure)
+  plot_ranges = character(0),
+  # Pairs of measures to plot against each other per read, e.g. 'CAG:CCG'
+  # (default: every pair of tracts)
+  measure_pairs = character(0),
+  # Maximum reads per sample in per-read pair plots
+  pair_max_points = 4000L,
 
-  # repeat_histogram_binwidth: Bin width for histogram (in repeat units)
-  repeat_histogram_binwidth = 1,
+  # --- Repeat lengths ----------------------------------------------------------
+  # Write one summary figure per sample
+  sample_cards = TRUE,
+  # Histogram bin width in repeat units
+  repeat_histogram_binwidth = 1L,
 
-  # repeat_scatter: Generate scatter/violin plots (Module 7)
-  #   - Cohort repeat length summary — box+jitter, one point per sample per range
-  #   - Per-sample horizontal scatter plots (scatter_by_sample/full/ and scatter_by_sample/{range}/)
-  repeat_scatter = TRUE,
-
-  # repeat_density: Generate ggridges density plots (Module 7)
-  #   - Per-sample full-range density (density_by_sample/full/)
-  #   - Per-sample per-range density ridges (density_by_sample/ranges/)
-  repeat_density = TRUE,
-
-  # repeat_distribution_metrics: Which summary metrics to overlay on scatter and density plots
-  #   Options: "modal_length", "mean_length", "median_length"
-  #   Can specify multiple, e.g., c("modal_length", "mean_length")
-  repeat_distribution_metrics = c("modal_length", "mean_length", "median_length"),
-
-  # -----------------------------------------------------------------------------
-  # Plot output control
-  # -----------------------------------------------------------------------------
-  # plot_dpi: Resolution for all diagnostic ggsave output
-  #   - 150 = screen-quality (default, ~2x faster than 300, suitable for QC review)
-  #   - 300 = print-quality (use for publication figures)
-  plot_dpi = 150,
-
-  # plot_per_sample: Generate per-sample plot files in Modules 2, 3, and 4
-  #   - TRUE = create individual per-sample plots (one file per sample per plot type)
-  #             Module 2: coverage plots, strand plots, alignment visualisation, segment length plots
-  #             Module 3: repeat vs flank scatter, repeat histograms, violin plots, density plots
-  #             Module 4: cluster violin plots, cluster scatter plots
-  #   - FALSE = skip all per-sample plots; cohort-level summary plots still generated
-  #   Note: Consider FALSE for large datasets (>50 samples) — per-sample plots can
-  #   generate hundreds of files and noticeably slow down rendering
+  # --- Runtime -----------------------------------------------------------------
+  # Resolution of saved plots
+  plot_dpi = 150L,
+  # Write per-sample plots in Modules 2 and 3
   plot_per_sample = TRUE,
-  
-  # -----------------------------------------------------------------------------
-  # Pipeline execution control
-  # -----------------------------------------------------------------------------
-  # Which modules to run (vector of module numbers 1-7)
-  #   - c(1:7) = run all modules (default)
-  #   - c(1,2,3) = only Import, Alignment, Repeat Detection
-  #   - c(5,6,7) = only visualization modules
-  #   - c(1,2,3,4,6,7) = skip waterfall (Module 5)
-  # 
-  # Module numbers:
-  #   1. Import and QC
-  #   2. Alignment
-  #   3. Repeat Detection
-  #   4. Allele Calling
-  #   5. Waterfall Plots
-  #   6. Range Analysis
-  #   7. Repeat Visualization
-  # 
-  # Use cases:
-  #   - Testing: c(1,2,3) for quick validation
-  #   - Replotting: c(5,6,7) to regenerate figures only
-  #   - Large datasets: c(1,2,3,4,6,7) to skip slow waterfall plots
-  #   - Reanalysis: c(3,4,5,6,7) if you already have alignments
-  run_modules = c(1:7),
-  
-  # -----------------------------------------------------------------------------
-  # Runtime settings
-  # -----------------------------------------------------------------------------
-  threads = 80,
+  # CPU cores
+  threads = 80L,
+  # Reuse a module's results when the parameters that affect it are unchanged
   resume = TRUE,
-  
-  # -----------------------------------------------------------------------------
-  # Memory and disk management
-  # -----------------------------------------------------------------------------
-  # These parameters control cleanup during and after the pipeline run
-  
-  # remove_intermediate: Free up RAM during pipeline execution
-  #   - Deletes large R objects (sequences, alignments) from memory after use
-  #   - Applied in Modules 1-4 where memory usage is highest
-  #   - Useful for: large datasets (many samples/deep coverage) or low-RAM systems
-  #   - Safe to enable: data is saved to disk before deletion
+  # Free memory between steps
   remove_intermediate = TRUE,
-  
-  # remove_temp: Free up disk space after pipeline completion  
-  #   - Deletes temp/ directory containing intermediate RData files
-  #   - Applied at end of pipeline after all modules successfully complete
-  #   - Useful for: repeated runs, limited disk space, production workflows
-  #   - Keep FALSE for: debugging, inspecting intermediate results
-  remove_temp = FALSE
-  
-  # log_dir is hard-coded to "logs" (see logging setup below)
-  # verbose is not used; all informative messages are always printed
+  # Delete temp/ (per-sample caches) at the end
+  remove_temp = FALSE,
+  # Modules to run
+  run_modules = 1:7
 )
 
-# ==============================================================================
-# LOGGING SETUP
-# ==============================================================================
-
-# Log directory is hard-coded relative to the duke root
-log_dir <- file.path(getwd(), "logs")
-if (!dir.exists(log_dir)) {
-  dir.create(log_dir, recursive = TRUE)
-}
-
-# Generate timestamp and create subdirectory for this run
-log_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-run_log_dir <- file.path(log_dir, log_timestamp)
-if (!dir.exists(run_log_dir)) {
-  dir.create(run_log_dir, recursive = TRUE)
-}
-
-# Log files in subdirectory WITH timestamp in filename
-log_file <- file.path(run_log_dir, paste0("duke_run-", log_timestamp, ".log"))
-params_file <- file.path(run_log_dir, paste0("params-", log_timestamp, ".R"))
-
-# Save parameters to file for reproducibility
-cat("# Duke Pipeline Run Parameters\n", file = params_file)
-cat("# Generated:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n\n", 
-    file = params_file, append = TRUE)
-cat("params <- ", file = params_file, append = TRUE)
-capture.output(dput(params), file = params_file, append = TRUE)
-
-# Start capturing output to log file
-log_con <- file(log_file, open = "wt")
-sink(log_con, type = "output", split = TRUE)  # split=TRUE keeps console output
-sink(log_con, type = "message")
-
-# Record start time
-start_time <- Sys.time()
-
-# ==============================================================================
-# RUN PIPELINE
-# ==============================================================================
-
-cat("\n")
-cat("=================================================================\n")
-cat("                    DUKE PIPELINE                                \n")
-cat("=================================================================\n")
-cat("\n")
-cat("Run started:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
-cat("Log file:", log_file, "\n")
-cat("Parameters saved:", params_file, "\n")
-cat("\n")
-cat("Configuration:\n")
-cat("  Data directory:", params$dir_data, "\n")
-cat("  Output directory:", params$dir_out, "\n")
-cat("  Reference:", params$path_ref, "\n")
-cat("  Threads:", params$threads, "\n")
-cat("  Resume:", params$resume, "\n")
-cat("  Cleanup temp:", params$remove_temp, "\n")
-cat("  Remove intermediate:", params$remove_intermediate, "\n")
-cat("  Modules to run:", paste(params$run_modules, collapse=", "), "\n")
-cat("\n")
-
-# Create output directory
-if (!dir.exists(params$dir_out)) {
-  dir.create(params$dir_out, recursive = TRUE)
-}
-
-# -----------------------------------------------------------------------------
-# Module 1: Import and QC
-# -----------------------------------------------------------------------------
-if (1 %in% params$run_modules) {
-  cat("\n")
-  cat("-----------------------------------------------------------------\n")
-  cat("Module 1: Import and QC\n")
-  cat("-----------------------------------------------------------------\n")
-  
-  module1_output <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
-  
-  if (params$resume && file.exists(module1_output)) {
-    cat("Skipping Module 1 (results found)...\n")
-  } else {
-    rmarkdown::render(
-      input = "modules/01_import_and_qc.Rmd",
-      output_dir = params$dir_out,
-      params = params,
-      envir = new.env(),
-      knit_root_dir = getwd()  # Keep knitting directory at duke root
-    )
-    cat("\nModule 1 complete!\n")
-  }
-} else {
-  cat("\nSkipping Module 1 (not in run_modules)...\n")
-}
-
-# -----------------------------------------------------------------------------
-# Module 2: Alignment and Processing
-# -----------------------------------------------------------------------------
-if (2 %in% params$run_modules) {
-  cat("\n")
-  cat("-----------------------------------------------------------------\n")
-  cat("Module 2: Alignment and Processing\n")
-  cat("-----------------------------------------------------------------\n")
-  
-  module2_output <- file.path(params$dir_out, "module_data", "02_alignment.RData")
-  
-  if (params$resume && file.exists(module2_output)) {
-    cat("Skipping Module 2 (results found)...\n")
-  } else {
-    rmarkdown::render(
-      input = "modules/02_alignment.Rmd",
-      output_dir = params$dir_out,
-      params = params,
-      envir = new.env(),
-      knit_root_dir = getwd()
-    )
-    cat("\nModule 2 complete!\n")
-  }
-} else {
-  cat("\nSkipping Module 2 (not in run_modules)...\n")
-}
-
-# -----------------------------------------------------------------------------
-# Module 3: Repeat Detection
-# -----------------------------------------------------------------------------
-if (3 %in% params$run_modules) {
-  cat("\n")
-  cat("-----------------------------------------------------------------\n")
-  cat("Module 3: Repeat Detection\n")
-  cat("-----------------------------------------------------------------\n")
-  
-  module3_output <- file.path(params$dir_out, "module_data", "03_repeat_detection.RData")
-  
-  if (params$resume && file.exists(module3_output)) {
-    cat("Skipping Module 3 (results found)...\n")
-  } else {
-    rmarkdown::render(
-      input = "modules/03_repeat_detection.Rmd",
-      output_dir = params$dir_out,
-      params = params,
-      envir = new.env(),
-      knit_root_dir = getwd()
-    )
-    cat("\nModule 3 complete!\n")
-  }
-} else {
-  cat("\nSkipping Module 3 (not in run_modules)...\n")
-}
-
-# -----------------------------------------------------------------------------
-# Module 4: Allele Calling
-# -----------------------------------------------------------------------------
-if (4 %in% params$run_modules) {
-  cat("\n")
-  cat("-----------------------------------------------------------------\n")
-  cat("Module 4: Allele Calling\n")
-  cat("-----------------------------------------------------------------\n")
-  
-  module4_output <- file.path(params$dir_out, "module_data", "04_allele_calling.RData")
-  
-  if (params$resume && file.exists(module4_output)) {
-    cat("Skipping Module 4 (results found)...\n")
-  } else {
-    rmarkdown::render(
-      input = "modules/04_allele_calling.Rmd",
-      output_dir = params$dir_out,
-      params = params,
-      envir = new.env(),
-      knit_root_dir = getwd()
-    )
-    cat("\nModule 4 complete!\n")
-  }
-} else {
-  cat("\nSkipping Module 4 (not in run_modules)...\n")
-}
-
-# -----------------------------------------------------------------------------
-# Module 5: Waterfall Plots (Optional)
-# -----------------------------------------------------------------------------
-if (5 %in% params$run_modules) {
-  if (params$waterfall) {
-    cat("\n")
-    cat("-----------------------------------------------------------------\n")
-    cat("Module 5: Waterfall Plots\n")
-    cat("-----------------------------------------------------------------\n")
-
-    rmarkdown::render(
-      input = "modules/05_waterfall.Rmd",
-      output_dir = params$dir_out,
-      params = params,
-      envir = new.env(),
-      knit_root_dir = getwd()
-    )
-    cat("\nModule 5 complete!\n")
-  } else {
-    cat("\n")
-    cat("Skipping Module 5 (waterfall = FALSE)...\n")
-  }
-} else {
-  cat("\nSkipping Module 5 (not in run_modules)...\n")
-}
-
-# -----------------------------------------------------------------------------
-# Module 6: Range Analysis & Instability Metrics
-# -----------------------------------------------------------------------------
-if (6 %in% params$run_modules) {
-  cat("\n")
-  cat("-----------------------------------------------------------------\n")
-  cat("Module 6: Range Analysis & Instability Metrics\n")
-  cat("-----------------------------------------------------------------\n")
-  
-  module6_output <- file.path(params$dir_out, "module_data", "06_range_analysis.RData")
-  
-  if (params$resume && file.exists(module6_output)) {
-    cat("Skipping Module 6 (results found)...\n")
-  } else {
-    rmarkdown::render(
-      input = "modules/06_range_analysis.Rmd",
-      output_dir = params$dir_out,
-      params = params,
-      envir = new.env(),
-      knit_root_dir = getwd()
-    )
-    cat("\nModule 6 complete!\n")
-  }
-} else {
-  cat("\nSkipping Module 6 (not in run_modules)...\n")
-}
-
-# -----------------------------------------------------------------------------
-# Module 7: Repeat Distribution Visualisation
-# -----------------------------------------------------------------------------
-if (7 %in% params$run_modules) {
-  cat("\n")
-  cat("-----------------------------------------------------------------\n")
-  cat("Module 7: Repeat Distribution Visualisation\n")
-  cat("-----------------------------------------------------------------\n")
-
-  rmarkdown::render(
-    input = "modules/07_repeat_visualisation.Rmd",
-    output_dir = params$dir_out,
-    params = params,
-    envir = new.env(),
-    knit_root_dir = getwd()
-  )
-  cat("\nModule 7 complete!\n")
-} else {
-  cat("\nSkipping Module 7 (not in run_modules)...\n")
-}
-
-# ==============================================================================
-# SUMMARY
-# ==============================================================================
-
-cat("\n")
-cat("=================================================================\n")
-cat("                      PIPELINE COMPLETE                          \n")
-cat("=================================================================\n")
-cat("\n")
-cat("Results saved to:", params$dir_out, "\n")
-cat("\n")
-cat("HTML reports:\n")
-if (1 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "01_import_and_qc.html"), "\n")
-if (2 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "02_alignment.html"), "\n")
-if (3 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "03_repeat_detection.html"), "\n")
-if (4 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "04_allele_calling.html"), "\n")
-if (5 %in% params$run_modules && params$waterfall) {
-  cat("  - ", file.path(params$dir_out, "05_waterfall.html"), "\n")
-}
-if (6 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "06_range_analysis.html"), "\n")
-if (7 %in% params$run_modules) cat("  - ", file.path(params$dir_out, "07_repeat_visualisation.html"), "\n")
-cat("\n")
-cat("RData files:\n")
-if (exists("module1_output")) cat("  - ", module1_output, "\n")
-if (exists("module2_output")) cat("  - ", module2_output, "\n")
-if (exists("module3_output")) cat("  - ", module3_output, "\n")
-if (exists("module4_output")) cat("  - ", module4_output, "\n")
-if (params$waterfall && exists("module5_output")) cat("  - ", module5_output, "\n")
-if (exists("module6_output")) cat("  - ", module6_output, "\n")
-if (exists("module7_output")) cat("  - ", module7_output, "\n")
-cat("\n")
-cat("Excel exports:\n")
-if (6 %in% params$run_modules) {
-  cat("  - ", file.path(params$dir_out, "06_range_analysis", "range_analysis.xlsx"), "\n")
-}
-cat("\n")
-
-# ==============================================================================
-# CLEANUP
-# ==============================================================================
-
-if (params$remove_temp) {
-  cat("\n")
-  cat("=================================================================\n")
-  cat("                      CLEANUP                                     \n")
-  cat("=================================================================\n")
-  cat("\n")
-  
-  temp_dir <- file.path(params$dir_out, "temp")
-  
-  if (dir.exists(temp_dir)) {
-    cat("Removing temporary files...\n")
-    
-    # Get size before deletion
-    temp_files <- list.files(temp_dir, recursive = TRUE, full.names = TRUE)
-    temp_size <- sum(file.size(temp_files), na.rm = TRUE) / 1024^2  # MB
-    
-    # Remove temp directory
-    unlink(temp_dir, recursive = TRUE)
-    
-    cat(sprintf("  Removed %.1f MB from temp directory\n", temp_size))
-    cat("  Temp directory deleted\n")
-  } else {
-    cat("No temp directory found\n")
-  }
-  
-  cat("\n")
-}
-
-# ==============================================================================
-# FINISH LOGGING
-# ==============================================================================
-
-# Calculate and log duration (before closing log file)
-end_time <- Sys.time()
-duration_secs <- as.numeric(difftime(end_time, start_time, units = "secs"))
-duration_hours <- floor(duration_secs / 3600)
-duration_mins <- floor((duration_secs %% 3600) / 60)
-duration_secs_remainder <- round(duration_secs %% 60)
-
-cat("\n")
-cat("=================================================================\n")
-cat("                      ALL DONE!                                  \n")
-cat("=================================================================\n")
-cat("\n")
-cat("Run finished:", format(end_time, "%Y-%m-%d %H:%M:%S"), "\n")
-cat(sprintf("Total duration: %02d:%02d:%02d (HH:MM:SS)\n", duration_hours, duration_mins, duration_secs_remainder))
-cat("\n")
-
-# Stop capturing output
-sink(type = "message")
-sink(type = "output")
-close(log_con)
-
-# Final summary to console only
-cat("\n")
-cat("Pipeline completed successfully!\n")
-cat("Log file saved:", log_file, "\n")
-cat("Parameters saved:", params_file, "\n")
-cat("\n")
+run_duke(params, duke_root)

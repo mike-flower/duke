@@ -1,213 +1,244 @@
 # ==============================================================================
-# Duke Pipeline - Utility Functions
+# Duke - general utilities
 # ==============================================================================
-# General utilities: Excel export, threading wrappers
+# Excel export, threading, timing, safe cache loading, path sanitising,
+# parameter hashing, house-style tables and plot saving.
 # ==============================================================================
 
-# Excel export function
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || (length(a) == 1 && is.na(a))) b else a
+
+# ------------------------------------------------------------------------------
+# Excel export
+# ------------------------------------------------------------------------------
 write_excel_function <- function(named_list, path, overwrite_sheet = TRUE) {
-  if (file.exists(path)) { wb <- loadWorkbook(path) } else { wb <- createWorkbook() }
-  
+  named_list <- Filter(function(x) !is.null(x) && is.data.frame(x), named_list)
+  if (length(named_list) == 0) return(invisible(NULL))
+  if (file.exists(path)) { wb <- openxlsx::loadWorkbook(path) } else { wb <- openxlsx::createWorkbook() }
   truncate_name <- function(name, max_length = 31) {
-    if (nchar(name) > max_length) {
-      return(paste0(substr(name, 1, max_length - 2), ".."))
-    } else {
-      return(name)
-    }
+    if (nchar(name) > max_length) paste0(substr(name, 1, max_length - 2), "..") else name
   }
-  
   for (table_name in names(named_list)) {
-    truncated_name <- truncate_name(table_name)
-    if (truncated_name %in% names(wb)) {
+    export_name <- truncate_name(table_name)
+    if (export_name %in% names(wb)) {
       if (overwrite_sheet) {
-        removeWorksheet(wb, truncated_name)
-        export_name <- truncated_name
+        openxlsx::removeWorksheet(wb, export_name)
       } else {
         suffix <- 1
-        new_name <- paste0(truncated_name, "_", suffix)
-        while (new_name %in% names(wb)) {
-          suffix <- suffix + 1
-          new_name <- paste0(truncated_name, "_", suffix)
-        }
-        export_name <- new_name
+        while (paste0(export_name, "_", suffix) %in% names(wb)) suffix <- suffix + 1
+        export_name <- paste0(export_name, "_", suffix)
       }
-    } else {
-      export_name <- truncated_name
     }
-    addWorksheet(wb, export_name)
-    writeData(wb, export_name, named_list[[table_name]])
+    openxlsx::addWorksheet(wb, export_name)
+    openxlsx::writeData(wb, export_name, as.data.frame(named_list[[table_name]]))
   }
-  saveWorkbook(wb, file = path, overwrite = TRUE)
+  openxlsx::saveWorkbook(wb, file = path, overwrite = TRUE)
+  invisible(path)
 }
 
-# Threading wrapper
-apply_fn <- function(...) {
-  if (!is.na(params$threads) && params$threads > 1) {
-    pbmclapply(..., mc.cores = params$threads)
+# ------------------------------------------------------------------------------
+# Threading wrapper. Uses params$threads from the calling environment.
+# ------------------------------------------------------------------------------
+apply_fn <- function(X, FUN, ..., threads = NULL) {
+  threads <- threads %||% tryCatch(get("params", envir = parent.frame())$threads,
+                                   error = function(e) 1)
+  threads <- threads %||% 1
+  if (threads > 1 && length(X) > 1) {
+    res <- pbmcapply::pbmclapply(X, FUN, ..., mc.cores = min(threads, length(X)))
   } else {
-    pblapply(...)
+    res <- pbapply::pblapply(X, FUN, ...)
   }
+  res <- extract_apply_fn_result(res)
+  # Surface worker errors rather than letting them become silent NULLs
+  errs <- vapply(res, function(r) inherits(r, "try-error"), logical(1))
+  if (any(errs)) stop("Worker failed for ", sum(errs), " item(s); first error:\n  ",
+                      as.character(res[[which(errs)[1]]]))
+  if (!is.null(names(X))) names(res) <- names(X) else if (is.character(X)) names(res) <- X
+  res
 }
 
-# ------------------------------------------------------------------------------
-# Timing utilities
-# ------------------------------------------------------------------------------
-
-# Format a byte count as a human-readable string with appropriate units
-format_size <- function(bytes) {
-  bytes <- as.numeric(bytes)
-  if (bytes < 1024) {
-    sprintf("%.0f B", bytes)
-  } else if (bytes < 1024^2) {
-    sprintf("%.1f KB", bytes / 1024)
-  } else if (bytes < 1024^3) {
-    sprintf("%.1f MB", bytes / 1024^2)
-  } else {
-    sprintf("%.2f GB", bytes / 1024^3)
-  }
-}
-
-# Format elapsed seconds as mm:ss or hh:mm:ss
-format_elapsed <- function(secs) {
-  secs <- round(as.numeric(secs))
-  if (secs < 3600) {
-    sprintf("%02d:%02d", secs %/% 60, secs %% 60)
-  } else {
-    sprintf("%02d:%02d:%02d", secs %/% 3600, (secs %% 3600) %/% 60, secs %% 60)
-  }
-}
-
-# Build a timing summary table from a named numeric vector of elapsed seconds
-build_timing_table <- function(timings) {
-  elapsed_secs <- as.numeric(timings)
-  total <- sum(elapsed_secs)
-  df <- data.frame(
-    section    = c(names(timings), "Total"),
-    secs       = c(round(elapsed_secs, 1), round(total, 1)),
-    elapsed    = c(sapply(elapsed_secs, format_elapsed), format_elapsed(total)),
-    cumulative = c(sapply(cumsum(elapsed_secs), format_elapsed), format_elapsed(total)),
-    stringsAsFactors = FALSE
-  )
-  df
-}
-
-# ------------------------------------------------------------------------------
-# Safe cache loading utilities
-# ------------------------------------------------------------------------------
-
-# safe_load_cache: Load a temp/ cache file with automatic fallback on corruption.
-#   Returns TRUE if the file loaded successfully, FALSE if it was missing or
-#   corrupt (in which case the corrupt file is deleted so the caller recomputes).
-#   Call with envir = parent.env(environment()) so loaded objects are visible
-#   in the calling scope.
-#
-#   Usage pattern:
-#     if (params$resume && safe_load_cache(cache_path, environment())) {
-#       message("Loaded from cache")
-#     } else {
-#       # recompute ...
-#       save(result, file = cache_path)
-#     }
-safe_load_cache <- function(path, envir = parent.frame()) {
-  if (!file.exists(path)) return(FALSE)
-  if (file.size(path) == 0) {
-    warning("Cache file is empty (zero bytes), will recompute: ", basename(path))
-    file.remove(path)
-    return(FALSE)
-  }
-  tryCatch({
-    load(path, envir = envir)
-    TRUE
-  }, error = function(e) {
-    warning("Cache file is corrupt, will recompute: ", basename(path))
-    file.remove(path)
-    FALSE
-  })
-}
-
-# safe_load_module: Load a module_data/ RData file with a clear error message
-#   if the file is missing, empty, or corrupt. These files cannot be recovered
-#   within the current module — the user must delete the file and rerun the
-#   source module.
-#
-#   Usage:
-#     safe_load_module(module3_path, module_num = 3, envir = environment())
-safe_load_module <- function(path, module_num, envir = parent.frame()) {
-  if (!file.exists(path)) {
-    stop("Module ", module_num, " output not found. Has Module ", module_num,
-         " been run?\n  Expected: ", path)
-  }
-  if (file.size(path) == 0) {
-    stop("Module ", module_num, " output is empty (zero bytes) — the previous run",
-         " was likely interrupted during save.\n",
-         "  Delete and rerun Module ", module_num, ":\n  ", path)
-  }
-  tryCatch(
-    load(path, envir = envir),
-    error = function(e) {
-      stop("Module ", module_num, " output is corrupt — the previous run was",
-           " likely interrupted during save.\n",
-           "  Delete and rerun Module ", module_num, ":\n  ", path, "\n",
-           "  Original error: ", e$message)
-    }
-  )
-}
-
-# Extract result
 extract_apply_fn_result <- function(result) {
-  if ("value" %in% names(result)) {
-    if (!is.null(result$warning)) {
-      warning(result$warning$message)
-    }
+  if (is.list(result) && "value" %in% names(result) && "warning" %in% names(result)) {
+    if (!is.null(result$warning)) warning(result$warning$message)
     result <- result$value
   }
-  return(result)
+  result
 }
 
 # ------------------------------------------------------------------------------
-# Filesystem-safe path components
+# Timing
 # ------------------------------------------------------------------------------
-# Some label columns (group, analysis range names) are free text and may contain
-# characters that are illegal or ambiguous in file/directory names — most
-# importantly '/', which the OS interprets as a path separator. Sanitise these
-# ONLY at the point a label becomes a path; keep the original string for every
-# display context (plot titles, legends, axes, tables) so figures are unaffected.
-# file_stem is derived from on-disk filenames and so is already path-safe.
+format_size <- function(bytes) {
+  bytes <- as.numeric(bytes)
+  if (is.na(bytes)) return(NA_character_)
+  if (bytes < 1024) sprintf("%.0f B", bytes)
+  else if (bytes < 1024^2) sprintf("%.1f KB", bytes / 1024)
+  else if (bytes < 1024^3) sprintf("%.1f MB", bytes / 1024^2)
+  else sprintf("%.2f GB", bytes / 1024^3)
+}
 
-# safe_path: turn an arbitrary label into a string safe to use as ONE path
-#   component. Replaces the separators '/' and '\' and other reserved/awkward
-#   characters with `replacement`, collapses whitespace, and trims. Vectorised.
+format_elapsed <- function(secs) {
+  secs <- round(as.numeric(secs))
+  if (secs < 3600) sprintf("%02d:%02d", secs %/% 60, secs %% 60)
+  else sprintf("%02d:%02d:%02d", secs %/% 3600, (secs %% 3600) %/% 60, secs %% 60)
+}
+
+build_timing_table <- function(timings) {
+  if (length(timings) == 0) timings <- c(None = 0)
+  elapsed_secs <- as.numeric(timings)
+  total <- sum(elapsed_secs)
+  data.frame(
+    section    = c(names(timings), "Total"),
+    secs       = c(round(elapsed_secs, 1), round(total, 1)),
+    elapsed    = c(vapply(elapsed_secs, format_elapsed, ""), format_elapsed(total)),
+    cumulative = c(vapply(cumsum(elapsed_secs), format_elapsed, ""), format_elapsed(total)),
+    stringsAsFactors = FALSE
+  )
+}
+
+build_manifest <- function(output_list, descriptions) {
+  data.frame(
+    object = names(output_list),
+    description = unname(descriptions[names(output_list)] %||% NA_character_),
+    class = vapply(output_list, function(x) if (is.null(x)) "NULL" else class(x)[1], ""),
+    size = vapply(output_list, function(x) format_size(if (is.null(x)) 0 else as.numeric(object.size(x))), ""),
+    stringsAsFactors = FALSE
+  )
+}
+
+# ------------------------------------------------------------------------------
+# Safe cache loading
+# ------------------------------------------------------------------------------
+safe_load_cache <- function(path, envir = parent.frame()) {
+  if (!file.exists(path)) return(FALSE)
+  if (file.size(path) == 0) { file.remove(path); return(FALSE) }
+  tryCatch({ load(path, envir = envir); TRUE },
+           error = function(e) { warning("Cache file is corrupt, will recompute: ", basename(path))
+                                 file.remove(path); FALSE })
+}
+
+safe_load_module <- function(path, module_num, envir = parent.frame()) {
+  if (!file.exists(path)) {
+    stop("Module ", module_num, " output not found. Has Module ", module_num, " been run?\n  Expected: ", path)
+  }
+  if (file.size(path) == 0) {
+    stop("Module ", module_num, " output is empty (zero bytes) - the previous run was likely ",
+         "interrupted during save.\n  Delete and rerun Module ", module_num, ":\n  ", path)
+  }
+  tryCatch(load(path, envir = envir),
+           error = function(e) stop("Module ", module_num, " output is corrupt. Delete and rerun Module ",
+                                    module_num, ":\n  ", path, "\n  Original error: ", e$message))
+}
+
+# ------------------------------------------------------------------------------
+# Parameter hashing for resume. A module's results are reused only when the
+# parameters that affect it are unchanged; per-sample caches live in a temp
+# sub-directory named by the hash, so changed settings never pick up old caches.
+# ------------------------------------------------------------------------------
+params_hash <- function(params, keys) {
+  sub <- params[intersect(keys, names(params))]
+  sub <- sub[order(names(sub))]
+  substr(digest::digest(sub, algo = "md5"), 1, 10)
+}
+
+module_temp_dir <- function(dir_out, module_tag, hash) {
+  d <- file.path(dir_out, "temp", paste0(module_tag, "_", hash))
+  if (!dir.exists(d)) dir.create(d, recursive = TRUE)
+  d
+}
+
+# ------------------------------------------------------------------------------
+# Flag parsing. Settings flags may be TRUE/FALSE, 1/0, yes/no or blank.
+# ------------------------------------------------------------------------------
+truthy <- function(x) {
+  v <- tolower(trimws(as.character(x)))
+  !is.na(v) & v %in% c("true", "t", "1", "yes", "y", "x")
+}
+
+# ------------------------------------------------------------------------------
+# Filesystem-safe labels (display labels are never changed)
+# ------------------------------------------------------------------------------
 safe_path <- function(x, replacement = "-") {
   x <- as.character(x)
-  x <- gsub("[/\\\\:*?\"<>|[:cntrl:]]", replacement, x, perl = TRUE)   # reserved + separators
-  x <- gsub("[[:space:]]+", replacement, x)                           # collapse whitespace
-  x <- gsub(paste0("^", replacement, "+|", replacement, "+$"), "", x)  # trim leading/trailing
+  x <- gsub("[/\\\\:*?\"<>|[:cntrl:]]", replacement, x, perl = TRUE)
+  x <- gsub("[[:space:]]+", replacement, x)
+  x <- gsub(paste0("^", replacement, "+|", replacement, "+$"), "", x)
   x[is.na(x) | x == ""] <- "unnamed"
   x
 }
 
-# warn_if_sanitised: emit an informative log note when safe_path() alters any
-#   label, and stop with a clear message if two DISTINCT labels collapse to the
-#   same token (which would otherwise silently overwrite each other's outputs).
-#   Returns the sanitised tokens invisibly.
 warn_if_sanitised <- function(original, what = "label") {
   original <- unique(as.character(original))
   safe <- safe_path(original)
   changed <- original != safe
   if (any(changed)) {
-    message("Note: ", sum(changed), " ", what, "(s) contain characters unsafe ",
-            "for filenames; sanitised for output paths (display labels unchanged):")
-    for (i in which(changed)) message("    '", original[i], "'  ->  '", safe[i], "'")
+    message("Note: ", sum(changed), " ", what, "(s) contain characters unsafe for filenames; ",
+            "sanitised for output paths (display labels unchanged)")
   }
   dup <- unique(safe[duplicated(safe)])
   if (length(dup) > 0) {
-    collisions <- vapply(dup, function(d)
-      paste0("'", paste(original[safe == d], collapse = "', '"), "' -> '", d, "'"),
-      character(1))
-    stop("Sanitising ", what, " names for output paths produced collisions ",
-         "(distinct names map to the same file):\n  ",
-         paste(collisions, collapse = "\n  "),
-         "\n  Rename so they differ by more than just '/', '\\', ':' etc.")
+    stop("Sanitising ", what, " names for output paths produced collisions: ",
+         paste(vapply(dup, function(d) paste(original[safe == d], collapse = " / "), ""), collapse = "; "))
   }
   invisible(safe)
 }
+
+# ------------------------------------------------------------------------------
+# House-style tables
+# ------------------------------------------------------------------------------
+dt_full <- function(df, caption = NULL, digits = NULL, page_length = 25) {
+  df <- as.data.frame(df)
+  dt <- DT::datatable(
+    df, caption = caption, extensions = "Buttons",
+    options = list(pageLength = page_length, scrollX = TRUE, scrollY = "500px",
+                   dom = "Bfrtip", buttons = c("copy", "csv", "excel")),
+    rownames = FALSE, filter = "top", class = "cell-border stripe compact",
+    style = "bootstrap")
+  dt <- DT::formatStyle(dt, columns = colnames(df), fontSize = "85%")
+  if (!is.null(digits)) {
+    num <- names(df)[vapply(df, function(x) is.numeric(x) && !is.integer(x), logical(1))]
+    if (length(num)) dt <- DT::formatRound(dt, columns = num, digits = digits)
+  }
+  dt
+}
+
+dt_compact <- function(df, caption = NULL, digits = NULL) {
+  df <- as.data.frame(df)
+  dt <- DT::datatable(df, caption = caption,
+                      options = list(dom = "t", pageLength = max(10, nrow(df)), scrollX = TRUE),
+                      rownames = FALSE, class = "cell-border stripe compact")
+  dt <- DT::formatStyle(dt, columns = colnames(df), fontSize = "85%")
+  if (!is.null(digits)) {
+    num <- names(df)[vapply(df, function(x) is.numeric(x) && !is.integer(x), logical(1))]
+    if (length(num)) dt <- DT::formatRound(dt, columns = num, digits = digits)
+  }
+  dt
+}
+
+# ------------------------------------------------------------------------------
+# Plot saving. Every plot is assigned, printed (when inline) and saved.
+# ------------------------------------------------------------------------------
+save_plot <- function(p, path, width = 10, height = 6, dpi = NULL) {
+  dpi <- dpi %||% tryCatch(get("params", envir = parent.frame())$plot_dpi, error = function(e) 150)
+  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
+  ggplot2::ggsave(path, p, width = min(width, 49), height = min(height, 49),
+                  dpi = dpi, bg = "white", limitsize = FALSE)
+  invisible(path)
+}
+
+# Label for a percentage axis that carries the % sign on the ticks
+pct_axis <- function(accuracy = 1) scales::label_percent(accuracy = accuracy)
+
+# Consistent summary layers: box + every point + mean diamond with the value written beside it
+box_points_mean <- function(point_colour = "grey30", digits = 1, label = TRUE) {
+  lay <- list(
+    ggplot2::geom_boxplot(outlier.shape = NA, fill = "grey92", colour = "grey40", width = 0.5),
+    ggplot2::geom_jitter(width = 0.15, height = 0, size = 1.8, alpha = 0.7, colour = point_colour),
+    ggplot2::stat_summary(fun = mean, geom = "point", shape = 18, size = 4, colour = "red")
+  )
+  if (label) lay <- c(lay, list(ggplot2::stat_summary(
+    fun = mean, geom = "text", colour = "red", size = 3.2, hjust = -0.35,
+    ggplot2::aes(label = formatC(ggplot2::after_stat(y), format = "f", digits = digits)))))
+  lay
+}
+
+log_step <- function(...) message(sprintf("[%s] %s", format(Sys.time(), "%H:%M:%S"), paste0(...)))

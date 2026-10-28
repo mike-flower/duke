@@ -1,0 +1,327 @@
+---
+title: "Duke"
+subtitle: "Module 1: Import and QC"
+author: "Michael Flower"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: false
+    code_folding: hide
+    df_print: paged
+    mathjax: null
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6)
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 1: Import and QC";</script>')
+```
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(Biostrings); library(ShortRead); library(Rsamtools)
+  library(dplyr); library(tidyr); library(data.table); library(ggplot2); library(scales); library(DT)
+})
+source("lib/load_all.R")
+module_start <- proc.time()["elapsed"]; timings <- c()
+qc_dir <- file.path(params$dir_out, "01_import_qc"); plots_dir <- file.path(qc_dir, "plots")
+dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+temp_dir <- module_temp_dir(params$dir_out, "m1", params$module_hash)
+xlsx_path <- file.path(qc_dir, "qc.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
+```
+
+# Overview
+
+**Module 1: Import and QC**
+
+This module handles:
+
+1. Finding and importing sequencing files (BAM, FASTQ, FASTA)
+2. Detecting PacBio HiFi BAMs and summarising their pass count (np) and read quality (rq)
+3. Optional filters, each applied only when switched on: minimum PacBio pass count (`np_min`), duplicate read names (`check_duplicate_readnames`), downsampling (`downsample`) and adapter trimming (`trim`)
+4. Read length and base quality per sample
+
+**Outputs:**
+
+- `01_import_qc/qc.xlsx` – file details, per-sample read counts at each step, read length and quality, PacBio summaries
+- `01_import_qc/plots/` – the figures in this report
+- `module_data/01_import_qc.RData` – the reads passed to Module 2
+
+**Settings for this run:** np filter `r ifelse(is.na(params$np_min), "off", params$np_min)`; duplicate-name check `r ifelse(params$check_duplicate_readnames, "on", "off")`; downsampling `r ifelse(is.na(params$downsample), "off", format(params$downsample, big.mark = ","))`; adapter trimming `r ifelse(params$trim, "on", "off")`.
+
+---
+
+# Sequencing files
+
+```{r file_discovery}
+file_paths <- list.files(params$dir_data, full.names = TRUE, recursive = params$import_recursive,
+                         pattern = paste(params$import_patterns, collapse = "|"))
+if (!length(file_paths)) stop("No sequencing files found in ", params$dir_data)
+file_names <- basename(file_paths)
+gz <- grepl("\\.gz$", file_names)
+file_formats <- ifelse(gz, paste0(tools::file_ext(sub("\\.gz$", "", file_names)), ".gz"), tools::file_ext(file_names))
+file_stems <- tools::file_path_sans_ext(sub("\\.gz$", "", file_names))
+file_details <- data.frame(file_name = file_names, file_stem = file_stems, file_format = file_formats,
+                           file_path = file_paths, stringsAsFactors = FALSE) %>%
+  dplyr::mutate(paired_direction = dplyr::case_when(grepl(params$r1_pattern, file_name) ~ "R1",
+                                      grepl(params$r2_pattern, file_name) ~ "R2", TRUE ~ NA_character_),
+         include = is.na(paired_direction) | params$select_one_of_pair == "all" | paired_direction == params$select_one_of_pair)
+if (any(duplicated(file_details$file_stem[file_details$include])))
+  stop("Two input files share a file stem: ", paste(unique(file_details$file_stem[duplicated(file_details$file_stem)]), collapse = ", "))
+file_stem_vector <- setNames(file_details$file_stem[file_details$include], file_details$file_stem[file_details$include])
+dt_compact(as.data.frame(table(format = file_details$file_format[file_details$include])), caption = "Files imported, by format")
+```
+
+```{r file_table}
+dt_full(file_details, caption = "All files found (include = FALSE are the unused direction of paired-end reads)")
+```
+
+```{r import}
+.t <- proc.time()["elapsed"]
+seq <- apply_fn(file_stem_vector, function(fs) {
+  i <- match(fs, file_details$file_stem)
+  import_sequencing(file_details$file_path[i], file_details$file_format[i])
+})
+stage_counts <- data.frame(file_stem = names(seq), imported = vapply(seq, length, integer(1)))
+timings["Import"] <- proc.time()["elapsed"] - .t
+```
+
+---
+
+# PacBio HiFi metrics
+
+PacBio HiFi BAMs are detected per sample from the `np` tag (falling back to `@PG` lines naming ccs, skera or lima), so mixed cohorts are handled. **np** is the number of polymerase passes behind a HiFi read and **rq** its predicted accuracy (HiFi reads have rq ≥ 0.99). The section is skipped when no PacBio BAMs are present.
+
+```{r pacbio_detect}
+is_pacbio <- vapply(file_stem_vector, function(fs) {
+  i <- match(fs, file_details$file_stem); detect_pacbio(file_details$file_path[i], file_details$file_format[i])
+}, logical(1))
+any_pacbio <- any(is_pacbio)
+read_metadata <- NULL; pacbio_summary <- NULL
+if (any_pacbio) {
+  .t <- proc.time()["elapsed"]
+  read_metadata <- apply_fn(file_stem_vector[is_pacbio], function(fs) extract_pacbio_metadata(file_details$file_path[match(fs, file_details$file_stem)]))
+  if (!is.na(params$np_min)) {
+    for (fs in names(read_metadata)) {
+      keep <- read_metadata[[fs]]$read_name[!is.na(read_metadata[[fs]]$np) & read_metadata[[fs]]$np >= params$np_min]
+      seq[[fs]] <- seq[[fs]][names(seq[[fs]]) %in% keep]
+      read_metadata[[fs]] <- read_metadata[[fs]][read_metadata[[fs]]$read_name %in% keep, ]
+    }
+  }
+  pacbio_summary <- dplyr::bind_rows(lapply(names(read_metadata), function(fs) {
+    md <- read_metadata[[fs]]
+    data.frame(file_stem = fs, n_reads = nrow(md), median_np = median(md$np, na.rm = TRUE), mean_np = mean(md$np, na.rm = TRUE),
+               median_rq = median(md$rq, na.rm = TRUE), mean_rq = mean(md$rq, na.rm = TRUE))
+  }))
+  timings["PacBio metrics"] <- proc.time()["elapsed"] - .t
+}
+stage_counts$after_np_filter <- vapply(seq[stage_counts$file_stem], length, integer(1))
+cat(sprintf("%d of %d samples are PacBio HiFi BAMs.%s", sum(is_pacbio), length(is_pacbio),
+            if (!is.na(params$np_min)) sprintf(" Reads with np < %d removed.", params$np_min) else ""))
+```
+
+## Pass count and read quality per sample
+
+Each point is one sample's median pass count (left) or median read quality (right) across its reads; the box shows the spread across samples and the red diamond and label give the cohort mean. Samples well below the others had fewer passes, and so less accurate consensus reads.
+
+```{r pacbio_plots, eval=any_pacbio, fig.height=5}
+pb_long <- pacbio_summary %>% dplyr::select(file_stem, `Median pass count (np)` = median_np, `Median read quality (rq)` = median_rq) %>%
+  pivot_longer(-file_stem, names_to = "metric", values_to = "value")
+p_pacbio <- ggplot(pb_long, aes(x = "", y = value)) + box_points_mean(digits = 3) +
+  facet_wrap(~ metric, scales = "free_y") +
+  labs(x = NULL, y = "Per-sample median", title = "PacBio HiFi pass count and read quality",
+       subtitle = sprintf("%d PacBio samples; one point per sample", nrow(pacbio_summary))) +
+  theme_bw() + theme(axis.ticks.x = element_blank())
+print(p_pacbio)
+save_plot(p_pacbio, file.path(plots_dir, "pacbio_np_rq.png"), 10, 5)
+```
+
+## Pass count against read length
+
+Each point is one read (a random subset of at most `r format(params$pacbio_scatter_downsample, big.mark = ",")` across the cohort). Longer inserts take longer to read, so fewer passes fit in the movie: a negative slope is expected. Expanded alleles therefore carry fewer passes than short ones.
+
+```{r pacbio_np_length, eval=any_pacbio, fig.height=5}
+np_len <- dplyr::bind_rows(lapply(names(read_metadata), function(fs) {
+  w <- width(seq[[fs]]); data.frame(np = read_metadata[[fs]]$np[match(names(seq[[fs]]), read_metadata[[fs]]$read_name)], read_length = w)
+})) %>% dplyr::filter(!is.na(np))
+if (!is.na(params$pacbio_scatter_downsample) && nrow(np_len) > params$pacbio_scatter_downsample) {
+  set.seed(123); np_len <- np_len[sample(nrow(np_len), params$pacbio_scatter_downsample), ]
+}
+p_np_len <- ggplot(np_len, aes(read_length, np)) + geom_point(alpha = 0.15, size = 0.5) +
+  geom_smooth(method = "lm", formula = y ~ x, colour = "#377eb8") +
+  scale_x_continuous(labels = comma) +
+  labs(x = "Read length (bp)", y = "Pass count (np)", title = "PacBio pass count against read length",
+       subtitle = sprintf("%s reads shown; blue line = linear fit", comma(nrow(np_len)))) + theme_bw()
+print(p_np_len)
+save_plot(p_np_len, file.path(plots_dir, "pacbio_np_vs_length.png"), 10, 5)
+```
+
+---
+
+# Optional filters
+
+```{r dedup}
+.t <- proc.time()["elapsed"]
+dup_summary <- NULL
+if (params$check_duplicate_readnames) {
+  res <- apply_fn(seq, select_longest_duplicate_readname)
+  dup_summary <- dplyr::bind_rows(lapply(names(res), function(fs) data.frame(file_stem = fs, duplicated_names = sum(res[[fs]]$read_name_count$count > 1))))
+  seq <- lapply(res, `[[`, "dna_stringset"); rm(res)
+  cat(sprintf("Duplicate read names: %s reads removed across the cohort.\n",
+              comma(sum(stage_counts$after_np_filter) - sum(vapply(seq, length, integer(1))))))
+} else cat("Duplicate read-name check off (check_duplicate_readnames = FALSE).\n")
+stage_counts$after_dedup <- vapply(seq[stage_counts$file_stem], length, integer(1))
+if (!is.na(params$downsample)) {
+  seq <- lapply(seq, downsample, sample_size = params$downsample)
+  cat(sprintf("Downsampled to at most %s reads per sample.\n", comma(params$downsample)))
+} else cat("Downsampling off.\n")
+stage_counts$after_downsample <- vapply(seq[stage_counts$file_stem], length, integer(1))
+timings["Duplicate names and downsampling"] <- proc.time()["elapsed"] - .t
+```
+
+```{r trim}
+.t <- proc.time()["elapsed"]
+trim_summary <- NULL
+if (params$trim) {
+  if (is.na(params$path_trim_patterns)) stop("trim = TRUE needs path_trim_patterns")
+  ad <- read.csv(params$path_trim_patterns, fileEncoding = "UTF-8-BOM", stringsAsFactors = FALSE)
+  pats <- setNames(ad$adapter_sequence, ad$adapter_name)
+  pats <- c(pats, setNames(as.character(reverseComplement(DNAStringSet(pats))), paste0(names(pats), "_rc")))
+  trim_one <- function(x) {
+    before <- width(x)
+    for (pt in pats) x <- trimLRPatterns(Lpattern = pt, Rpattern = pt, subject = x,
+                                         max.Lmismatch = params$trim_max_mismatch, max.Rmismatch = params$trim_max_mismatch,
+                                         with.Lindels = params$trim_with_indels, with.Rindels = params$trim_with_indels)
+    list(seq = x, trimmed = sum(width(x) < before), bases = sum(before - width(x)))
+  }
+  tr <- apply_fn(seq, trim_one)
+  trim_summary <- data.frame(file_stem = names(tr), reads_trimmed = vapply(tr, `[[`, 0L, "trimmed"),
+                             bases_removed = vapply(tr, function(z) as.numeric(z$bases), 0))
+  seq <- lapply(tr, `[[`, "seq"); rm(tr)
+  trim_summary$pct_trimmed <- trim_summary$reads_trimmed / stage_counts$after_downsample[match(trim_summary$file_stem, stage_counts$file_stem)]
+  cat(sprintf("Adapter trimming: %s reads trimmed in total.\n", comma(sum(trim_summary$reads_trimmed))))
+} else cat("Adapter trimming off (trim = FALSE).\n")
+timings["Adapter trimming"] <- proc.time()["elapsed"] - .t
+```
+
+```{r trim_plot, eval=params$trim, fig.height=5}
+p_trim <- ggplot(trim_summary, aes(x = "", y = pct_trimmed)) + box_points_mean(digits = 3) +
+  scale_y_continuous(labels = pct_axis(0.1)) +
+  labs(x = NULL, y = "Reads trimmed", title = "Proportion of reads with an adapter trimmed, per sample") + theme_bw()
+print(p_trim); save_plot(p_trim, file.path(plots_dir, "adapter_trimming.png"), 6, 5)
+```
+
+---
+
+# Reads per sample
+
+Each point is one sample, ordered from fewest to most reads, on a log scale. The dashed line marks the cohort median. Samples at the far left are the ones most likely to give noisy repeat-length distributions.
+
+```{r read_counts, fig.height=5}
+stage_counts$final <- vapply(seq[stage_counts$file_stem], length, integer(1))
+rc <- stage_counts %>% dplyr::arrange(final) %>% dplyr::mutate(rank = row_number())
+p_counts <- ggplot(rc, aes(rank, pmax(final, 1))) + geom_point(colour = "#377eb8") +
+  geom_hline(yintercept = median(rc$final), linetype = "dashed") +
+  annotate("text", x = 1, y = median(rc$final), label = paste("median", comma(median(rc$final))), vjust = -0.5, hjust = 0, size = 3.5) +
+  scale_y_log10(labels = comma) +
+  labs(x = "Samples, ordered by read count", y = "Reads (log scale)", title = "Reads per sample after Module 1",
+       subtitle = sprintf("%d samples; %s reads in total", nrow(rc), comma(sum(rc$final)))) + theme_bw()
+print(p_counts); save_plot(p_counts, file.path(plots_dir, "reads_per_sample.png"), 10, 5)
+```
+
+```{r stage_table}
+dt_full(stage_counts, caption = "Reads per sample after each step (a step that is switched off leaves the count unchanged)")
+```
+
+---
+
+# Read length and quality
+
+```{r read_qc}
+.t <- proc.time()["elapsed"]
+qc_summary <- dplyr::bind_rows(lapply(names(seq), function(fs) {
+  x <- seq[[fs]]
+  w <- width(x)
+  q <- if (is(x, "QualityScaledXStringSet") && length(x)) alphabetScore(quality(x)) / pmax(w, 1) else rep(NA_real_, length(x))
+  data.frame(file_stem = fs, read_count = length(x), median_length = if (length(w)) median(w) else NA, mean_length = if (length(w)) mean(w) else NA,
+             p05_length = if (length(w)) quantile(w, 0.05) else NA, p95_length = if (length(w)) quantile(w, 0.95) else NA,
+             mean_phred = if (length(q)) mean(q, na.rm = TRUE) else NA)
+}))
+if (!is.null(pacbio_summary)) qc_summary <- dplyr::left_join(qc_summary, dplyr::select(pacbio_summary, -n_reads), by = "file_stem")
+set.seed(123)
+len_sample <- dplyr::bind_rows(lapply(names(seq), function(fs) { w <- width(seq[[fs]]); data.frame(file_stem = fs, length = if (length(w) > 2000) sample(w, 2000) else w) }))
+timings["Read QC"] <- proc.time()["elapsed"] - .t
+```
+
+## Read length distribution
+
+Read lengths from up to 2,000 reads per sample, pooled. For an amplicon each allele gives its own peak, so heterozygous samples with an expanded allele show two peaks; reads well outside them are primer dimers, truncated products or chimeras, which Module 2 removes if they do not span both flanks.
+
+```{r length_hist, fig.height=5}
+p_len <- ggplot(len_sample, aes(length)) + geom_histogram(bins = 150, fill = "#377eb8") +
+  scale_x_continuous(labels = comma) + scale_y_continuous(labels = comma) +
+  labs(x = "Read length (bp)", y = "Reads", title = "Read length, pooled across samples",
+       subtitle = "Up to 2,000 reads per sample") + theme_bw()
+print(p_len); save_plot(p_len, file.path(plots_dir, "read_length_distribution.png"), 10, 5)
+```
+
+## Read length and base quality per sample
+
+Each point is one sample: its median read length against its mean base quality (Phred, per base), sized by read count. Phred scores are not stored for FASTA input, so that panel is empty for FASTA.
+
+```{r qc_scatter, fig.height=5}
+p_qc <- ggplot(qc_summary, aes(median_length, mean_phred, size = read_count)) +
+  geom_point(shape = 21, fill = "skyblue", alpha = 0.7) + scale_size_continuous(labels = comma, name = "Reads") +
+  scale_x_continuous(labels = comma) + labs(x = "Median read length (bp)", y = "Mean base quality (Phred)",
+                                            title = "Read length against base quality, per sample") + theme_bw()
+print(p_qc); save_plot(p_qc, file.path(plots_dir, "quality_vs_length.png"), 10, 5)
+```
+
+```{r qc_table}
+dt_full(qc_summary, caption = "Read length and quality per sample", digits = 3)
+```
+
+---
+
+# Save output
+
+```{r save}
+module1_output <- list(sequences = seq, file_details = file_details, stage_counts = stage_counts, qc_summary = qc_summary,
+                       is_pacbio = is_pacbio, read_metadata = read_metadata, pacbio_summary = pacbio_summary,
+                       trim_summary = trim_summary, duplicate_summary = dup_summary, hash = params$module_hash)
+output_path <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
+dir.create(dirname(output_path), showWarnings = FALSE)
+save(module1_output, file = output_path)
+write_excel_function(list(file_details = file_details, stage_counts = stage_counts, qc_summary = qc_summary,
+                          pacbio_summary = pacbio_summary, trim_summary = trim_summary), xlsx_path)
+```
+
+**`r length(seq)`** samples and **`r comma(sum(stage_counts$final))`** reads passed to Module 2.
+
+---
+
+# Diagnostics
+
+```{r diagnostics}
+timing_df <- build_timing_table(timings)
+manifest <- build_manifest(module1_output, c(
+  sequences = "Reads per sample (named list of XStringSets) for Module 2", file_details = "Input files, formats and paths",
+  stage_counts = "Reads per sample after each step", qc_summary = "Read length and quality per sample",
+  is_pacbio = "PacBio HiFi detection per sample", read_metadata = "Per-read PacBio tags (np, rq, ec, zm, bq)",
+  pacbio_summary = "Per-sample PacBio np and rq", trim_summary = "Adapter trimming per sample (NULL when off)",
+  duplicate_summary = "Duplicate read names per sample (NULL when off)", hash = "Parameter hash used for resume"))
+write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)
+dt_compact(timing_df, caption = "Section timing")
+dt_compact(manifest, caption = sprintf("module1_output – %s on disk", format_size(file.size(output_path))))
+```
+
+# Session info
+
+```{r session_info}
+sessionInfo()
+```

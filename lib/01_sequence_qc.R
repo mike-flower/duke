@@ -16,16 +16,16 @@ select_longest_duplicate_readname <- function(dna_stringset) {
   
   # Count duplicate read names
   read_name_count <- sequence_table %>%
-    group_by(read_name) %>%
+    dplyr::group_by(read_name) %>%
     dplyr::summarise(count = n(), .groups = "drop") %>%
     dplyr::arrange(-count)
   
   # Select the longest read for each read_name
   longest_read <- sequence_table %>%
-    group_by(read_name) %>%
-    dplyr::arrange(desc(read_length), .by_group = TRUE) %>%
+    dplyr::group_by(read_name) %>%
+    dplyr::arrange(dplyr::desc(read_length), .by_group = TRUE) %>%
     slice_head(n = 1) %>%
-    ungroup()
+    dplyr::ungroup()
   
   # Subset the dna_stringset by the indices of the longest reads
   longest_dna_stringset <- dna_stringset[longest_read$read_index]
@@ -51,7 +51,7 @@ compare_read_count <- function(dna_stringset1, dna_stringset2, name1 = NULL, nam
   
   # Join
   read_count <- read_count1 %>%
-    left_join(read_count2, 
+    dplyr::left_join(read_count2, 
               by = join_by(file_stem),
               suffix = c("1", "2"))
   

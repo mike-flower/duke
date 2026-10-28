@@ -11,7 +11,7 @@
 #SBATCH --mail-user=michael.flower@ucl.ac.uk
 
 # ==============================================================================
-# Duke Pipeline - New Kathleen Job Script (Slurm)
+# Duke 3.0.0 - New Kathleen Job Script (Slurm)
 # Config: 80 tasks across 2 nodes, 2GB/task = 160GB total, 48h
 # Note: submit with sbatch (not qsub); no chmod needed
 # See README.md for resource guidance and SGE vs Slurm command reference
@@ -43,12 +43,17 @@ cd ~/Scratch/bin/duke
   --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
   --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
   --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
-  --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
   --threads $SLURM_NTASKS \
-  --resume TRUE \
-  --remove_intermediate TRUE \
-  --remove_temp FALSE
+  --resume TRUE
+
+# Optional additions: add any of these on new lines after --resume TRUE, putting a
+# backslash at the end of every line except the last.
+#   Two tracts in one run:  --path_tracts /path/tracts.csv --composites "CAG_CCG_sum=CAG+CCG:sum"
+#   UMIs:                   --umi TRUE   (flanks default to M13-F / ciosiF+1; see --help)
+#   Allele structure:       --cluster TRUE
+#   Adapter trimming:       --trim TRUE --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv
+#   Check settings first:   --dry_run
 
 DUKE_EXIT_CODE=$?
 echo ""

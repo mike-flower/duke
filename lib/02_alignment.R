@@ -1,297 +1,188 @@
 # ==============================================================================
-# Duke Pipeline - Alignment Functions
+# Duke - alignment to reference flanks
 # ==============================================================================
-# Functions for reference processing and minimap2 alignment
+# Each reference contains one block of >=5 Ns marking the repeat region. It is
+# split into a left and a right flank, and reads are aligned to each flank
+# separately with minimap2, so a read aligns whatever length its repeat is.
+#
+# Everything for one sample happens in one worker (align -> best alignment per
+# flank -> both flanks on the same strand -> left before right -> strand
+# correction -> manual exclusions), which keeps the per-read tables small and
+# parallelises across samples.
+#
+# Coordinates: for reads on the reverse strand minimap2 reports query
+# coordinates on the reverse complement. Those are exactly the coordinates of
+# the strand-corrected read, so the read is reverse-complemented and the
+# coordinates are kept as reported.
 # ==============================================================================
 
-# Parse reference sequence - split at NNNNN into left/right flanks
 parse_reference_sequence <- function(ref_path) {
-  # Import reference sequence
-  ref_sequence <- readDNAStringSet(ref_path, format = "fasta")
-  ref_name <- names(ref_sequence)[[1]]
-  
-  # Find 'NNNNN' split point
-  split_point <- stringr::str_locate(as.character(ref_sequence), "[Nn]{5,}")[1,]
-  
-  if (is.na(split_point[1])) {
-    stop("Reference sequence must contain at least 5 consecutive Ns (NNNNN) to mark the repeat region")
-  }
-  
-  # Split reference sequence
-  ref_sequence_left <- substr(ref_sequence, 1, split_point[1] - 1)
-  ref_sequence_right <- substr(ref_sequence, split_point[2] + 1, nchar(ref_sequence))
-  
-  # Create named DNAStringSet
-  ref_sequences <- DNAStringSet(setNames(c(ref_sequence_left, ref_sequence_right),
-                                         c(paste0(ref_name, "_left"), paste0(ref_name, "_right"))))
-  
-  # Summarise reference sequences
-  ref_summary <- tibble::tibble(
-    rname = names(ref_sequences),
-    ref_id = sub("_(left|right)$", "", names(ref_sequences)),
-    ref_flank = sub("^.*_(left|right)$", "\\1", names(ref_sequences)),
-    ref_length = width(ref_sequences),
-    ref_sequence = as.character(ref_sequences))
-  
-  return(list(
+  ref_sequence <- Biostrings::readDNAStringSet(ref_path, format = "fasta")
+  if (length(ref_sequence) != 1) stop("Reference must contain exactly one sequence: ", ref_path)
+  ref_name <- sub("\\s.*$", "", names(ref_sequence)[[1]])
+  full <- as.character(ref_sequence[[1]])
+  blocks <- gregexpr("[Nn]{5,}", full)[[1]]
+  if (blocks[1] == -1) stop("Reference must contain at least 5 consecutive Ns marking the repeat region: ", ref_path)
+  if (length(blocks) > 1) stop("Reference must contain exactly one N block: ", ref_path,
+                               "\n  For tracts that are far apart, give each its own reference in the tracts table.")
+  n_start <- blocks[1]; n_end <- n_start + attr(blocks, "match.length")[1] - 1
+  left  <- substr(full, 1, n_start - 1)
+  right <- substr(full, n_end + 1, nchar(full))
+  ref_sequences <- Biostrings::DNAStringSet(setNames(c(left, right), c(paste0(ref_name, "_left"), paste0(ref_name, "_right"))))
+  list(
+    ref_id = ref_name, path = ref_path, full = full, n_start = n_start, n_end = n_end,
     sequences = ref_sequences,
-    summary = ref_summary
-  ))
+    summary = data.frame(ref_id = ref_name, flank = c("left", "right"), rname = names(ref_sequences),
+                         length_bp = Biostrings::width(ref_sequences),
+                         first_bases = substr(c(left, right), 1, 20),
+                         last_bases = c(substr(left, nchar(left) - 19, nchar(left)), substr(right, nchar(right) - 19, nchar(right))),
+                         stringsAsFactors = FALSE)
+  )
 }
 
+# Leading soft/hard clip length from a CIGAR string (vectorised)
+.leading_clip <- function(cigar) {
+  m <- regmatches(cigar, regexpr("^([0-9]+[SH])+", cigar))
+  out <- integer(length(cigar))
+  has <- grepl("^([0-9]+[SH])+", cigar)
+  out[has] <- vapply(m, function(x) sum(as.integer(regmatches(x, gregexpr("[0-9]+", x))[[1]])), integer(1))
+  out
+}
 
-# Run minimap2 alignment for one sample
-minimap2_align_sample <- function(sample_name,
-                                  sequences,
-                                  ref_sequences,
-                                  out_dir,
-                                  minimap2_args = "-x map-ont",
-                                  resume = FALSE,
-                                  keep_bam = FALSE,
-                                  bam_dir = NULL) {
-  
-  # Extract DNA stringset for this sample
-  dna_stringset <- sequences[[sample_name]]
-  
-  # Exit if empty
-  if (is.null(dna_stringset) || length(dna_stringset) == 0) {
-    return(NULL)
+# Align one sample's reads to one flank; returns one row per alignment record
+.align_to_flank <- function(query_path, ref_seq, ref_name, stem, minimap2_args, keep_bam, bam_dir) {
+  ref_path <- paste0(stem, "-", ref_name, "-ref.fasta")
+  Biostrings::writeXStringSet(ref_seq, ref_path)
+  sam_path <- paste0(stem, "-", ref_name, ".sam")
+  args <- strsplit(minimap2_args %||% "-x sr -w 1", "\\s+")[[1]]
+  args[args == "-ax"] <- "-x"
+  args <- args[!args %in% c("-a", "--MD", "--cs")]
+  status <-system2("minimap2", c("-a", args, ref_path, query_path), stdout = sam_path, stderr = FALSE)
+  if (!file.exists(sam_path) || file.size(sam_path) == 0) {
+    unlink(c(ref_path, sam_path)); stop("minimap2 produced no output for ", basename(stem), " / ", ref_name)
   }
-  
-  # Check for cached result
-  alignment_info_path <- file.path(out_dir, paste0("align_", sample_name, ".RData"))
-  if (resume && file.exists(alignment_info_path)) {
-    load(alignment_info_path)
-    return(alignment_info)
+  bam_path <- paste0(stem, "-", ref_name, ".bam")
+  system2("samtools", c("sort", "-o", bam_path, sam_path), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("index", bam_path), stdout = FALSE, stderr = FALSE)
+  bam <- Rsamtools::scanBam(bam_path, param = Rsamtools::ScanBamParam(
+    what = c("qname", "flag", "rname", "strand", "pos", "mapq", "cigar"), tag = "NM"))[[1]]
+  if (keep_bam && !is.null(bam_dir)) {
+    dir.create(bam_dir, showWarnings = FALSE, recursive = TRUE)
+    file.copy(c(bam_path, paste0(bam_path, ".bai")), bam_dir, overwrite = TRUE)
   }
-  
-  # Vector of ref names
-  ref_names <- names(ref_sequences)
-  
-  # Align to each reference flank
-  alignment_list <- lapply(ref_names, function(ref_name) {
-    
-    # Define temporary file stem
-    temp_stem <- file.path(out_dir, paste0(sample_name, "-", ref_name))
-    
-    # Check if any sequences exceed FASTQ write limit (200,000 characters)
-    # This is a limitation of Biostrings::writeQualityScaledXStringSet
-    max_seq_length <- max(width(dna_stringset))
-    use_fastq <- is(dna_stringset, "QualityScaledXStringSet") && max_seq_length <= 200000
-    
-    # Warn if switching to FASTA due to long reads
-    if (is(dna_stringset, "QualityScaledXStringSet") && max_seq_length > 200000) {
-      warning("Sample ", sample_name, " has very long reads (max: ", max_seq_length, 
-              " bp). Switching to FASTA format (quality scores will be lost).")
-    }
-    
-    # Export query sequences
-    if (use_fastq) {
-      query_path <- paste0(temp_stem, ".fastq")
-      writeQualityScaledXStringSet(dna_stringset, filepath = query_path)
-    } else {
-      query_path <- paste0(temp_stem, ".fasta")
-      # Convert to DNAStringSet if it's QualityScaledXStringSet (drops quality scores)
-      if (is(dna_stringset, "QualityScaledXStringSet")) {
-        dna_stringset_plain <- DNAStringSet(as.character(dna_stringset))
-        names(dna_stringset_plain) <- names(dna_stringset)
-        writeXStringSet(dna_stringset_plain, filepath = query_path)
-      } else {
-        writeXStringSet(dna_stringset, filepath = query_path)
-      }
-    }
-    
-    # Export reference
-    ref_path <- paste0(temp_stem, "-ref.fasta")
-    writeXStringSet(ref_sequences[ref_name], ref_path)
-    
-    # Parse minimap2 args
-    args_user <- if (is.na(minimap2_args) || minimap2_args == "") {
-      c("-x", "map-ont")
-    } else {
-      strsplit(minimap2_args, "\\s+")[[1]]
-    }
-    
-    # Handle -ax -> -x substitution
-    if ("-ax" %in% args_user) {
-      ax_index <- which(args_user == "-ax")
-      args_user[ax_index] <- "-x"
-    }
-    
-    # Required arguments
-    args_required <- c("-a", "--MD", "--cs")
-    args_user <- args_user[!args_user %in% args_required]
-    
-    # Full minimap2 command
-    minimap2_command <- c(args_required, args_user, ref_path, query_path)
-    
-    # SAM and BAM paths
-    sam_path <- paste0(temp_stem, ".sam")
-    bam_path <- paste0(temp_stem, ".bam")
-    
-    # Run minimap2
-    minimap2_result <- system2("minimap2", args = minimap2_command, 
-                               stdout = sam_path, stderr = NULL)
-    
-    # Check if SAM file was created
-    if (!file.exists(sam_path) || file.size(sam_path) == 0) {
-      warning("minimap2 failed or produced empty output for ", sample_name, "-", ref_name)
-      # Clean up
-      temp_files <- c(query_path, ref_path, sam_path)
-      file.remove(temp_files[file.exists(temp_files)])
-      return(NULL)
-    }
-    
-    # Sort SAM to BAM (using old syntax that works on macOS)
-    system(paste("samtools sort", sam_path, ">", bam_path))
-    
-    # Check if BAM was created
-    if (!file.exists(bam_path) || file.size(bam_path) == 0) {
-      warning("samtools sort failed for ", sample_name, "-", ref_name)
-      # Clean up
-      temp_files <- c(query_path, ref_path, sam_path, bam_path)
-      file.remove(temp_files[file.exists(temp_files)])
-      return(NULL)
-    }
-    
-    # Index BAM
-    system(paste("samtools index", bam_path))
-    
-    # Import BAM
-    tryCatch({
-      param <- ScanBamParam(what = scanBamWhat(), tag = c("NM", "MD"))
-      bam_data <- scanBam(bam_path, param = param)
-      alignments <- bam_data[[1]]
-      
-      # Expand tags to match length
-      if (!is.null(alignments$tag)) {
-        for (tag_name in names(alignments$tag)) {
-          if (length(alignments$tag[[tag_name]]) < length(alignments$qname)) {
-            alignments$tag[[tag_name]] <- c(
-              alignments$tag[[tag_name]], 
-              rep(NA, length(alignments$qname) - length(alignments$tag[[tag_name]]))
-            )
-          }
-        }
-      }
-      
-      # Ensure NM tag exists
-      if (is.null(alignments$tag$NM)) {
-        alignments$tag$NM <- rep(NA, length(alignments$qname))
-      }
-      
-      # Convert to data frame
-      alignment_df <- as.data.frame(alignments) %>%
-        dplyr::rename(ref_start = pos, 
-                      mismatches = tag.NM,
-                      aligned_subsequence = seq)
-      
-      # Clean up temp files. When keep_bam = TRUE, retain the sorted+indexed BAM
-      # (move it out of the temp dir to a stable location so --remove_temp can't
-      # wipe it later); always remove the query FASTA/FASTQ, reference and SAM.
-      if (keep_bam && file.exists(bam_path)) {
-        dest_dir <- if (!is.null(bam_dir)) bam_dir else out_dir
-        if (!dir.exists(dest_dir)) dir.create(dest_dir, recursive = TRUE)
-        for (f in c(bam_path, paste0(bam_path, ".bai"))) {
-          if (file.exists(f)) {
-            dest <- file.path(dest_dir, basename(f))
-            # file.rename can fail across filesystems; fall back to copy + remove
-            if (!suppressWarnings(file.rename(f, dest))) {
-              file.copy(f, dest, overwrite = TRUE)
-              file.remove(f)
-            }
-          }
-        }
-        temp_files <- c(query_path, ref_path, sam_path)
-      } else {
-        temp_files <- c(query_path, ref_path, sam_path, bam_path, paste0(bam_path, ".bai"))
-      }
-      file.remove(temp_files[file.exists(temp_files)])
-      
-      return(alignment_df)
-      
-    }, error = function(e) {
-      warning("Failed to read BAM file for ", sample_name, "-", ref_name, ": ", e$message)
-      # Clean up
-      temp_files <- c(query_path, ref_path, sam_path, bam_path, paste0(bam_path, ".bai"))
-      file.remove(temp_files[file.exists(temp_files)])
-      return(NULL)
-    })
+  unlink(c(ref_path, sam_path, bam_path, paste0(bam_path, ".bai")))
+  keep <- !is.na(bam$rname) & bitwAnd(bam$flag, 4L) == 0
+  if (!any(keep)) return(data.table::data.table())
+  cig <- bam$cigar[keep]
+  qstart <- .leading_clip(cig) + 1L
+  data.table::data.table(
+    qname = bam$qname[keep],
+    strand = as.character(bam$strand[keep]),
+    rstart = bam$pos[keep],
+    rend = bam$pos[keep] + GenomicAlignments::cigarWidthAlongReferenceSpace(cig) - 1L,
+    qstart = qstart,
+    qend = qstart + GenomicAlignments::cigarWidthAlongQuerySpace(cig, after.soft.clipping = TRUE) - 1L,
+    mapq = bam$mapq[keep],
+    nm = bam$tag$NM[keep] %||% NA_integer_,
+    secondary = bitwAnd(bam$flag[keep], 256L) > 0
+  )
+}
+
+# Full alignment step for one sample and one reference
+process_sample_alignment <- function(sample, reads, ref, out_dir, minimap2_args,
+                                     keep_bam = FALSE, bam_dir = NULL, exclusions = NULL) {
+  cache <- file.path(out_dir, paste0("align_", ref$ref_id, "_", sample, ".RData"))
+  if (file.exists(cache) && safe_load_cache(cache, environment())) return(result)
+
+  n_input <- length(reads)
+  empty <- list(table = NULL, funnel = data.frame(file_stem = sample, ref_id = ref$ref_id, input = n_input,
+                aligned_left = 0L, aligned_right = 0L, both_flanks = 0L, same_strand = 0L,
+                correct_order = 0L, manually_excluded = 0L, final = 0L))
+  if (n_input == 0) return(empty)
+
+  stem <- file.path(out_dir, paste0(sample, "-", ref$ref_id))
+  long_reads <- max(Biostrings::width(reads)) > 200000
+  if (is(reads, "QualityScaledXStringSet") && !long_reads) {
+    query_path <- paste0(stem, ".fastq")
+    Biostrings::writeQualityScaledXStringSet(reads, query_path)
+  } else {
+    query_path <- paste0(stem, ".fasta")
+    plain <- Biostrings::DNAStringSet(reads); names(plain) <- names(reads)
+    Biostrings::writeXStringSet(plain, query_path)
+  }
+
+  aln <- lapply(c(left = 1, right = 2), function(i) {
+    .align_to_flank(query_path, ref$sequences[i], names(ref$sequences)[i], stem, minimap2_args,
+                    keep_bam, if (keep_bam) bam_dir else NULL)
   })
-  
-  # Combine all alignments (remove NULLs from failed references)
-  alignment_list <- alignment_list[!sapply(alignment_list, is.null)]
-  
-  # If all alignments failed, return empty tibble
-  if (length(alignment_list) == 0) {
-    alignment_info <- tibble::tibble(
-      qname = character(), rname = character(), strand = character(),
-      ref_start = integer(), mapq = integer(), mismatches = integer()
-    )
-    save(alignment_info, file = alignment_info_path)
-    return(alignment_info)
-  }
-  
-  # Combine all alignments
-  alignment_info <- data.table::rbindlist(alignment_list, fill = TRUE)
-  
-  # Remove unaligned reads
-  alignment_info <- alignment_info %>%
-    dplyr::filter(!is.na(rname))
-  
-  # If no alignments, return empty tibble
-  if (nrow(alignment_info) == 0) {
-    alignment_info <- tibble::tibble(
-      qname = character(), rname = character(), strand = character(),
-      ref_start = integer(), mapq = integer(), mismatches = integer()
-    )
-    save(alignment_info, file = alignment_info_path)
-    return(alignment_info)
-  }
-  
-  # Add query sequences
-  query_seqs <- data.frame(
-    qname = names(dna_stringset),
-    query_sequence = as.character(dna_stringset),
-    stringsAsFactors = FALSE
-  )
-  alignment_info <- alignment_info %>%
-    left_join(query_seqs, by = "qname")
+  unlink(query_path)
 
-  # Calculate alignment metrics from CIGAR (vectorized)
-  alignment_info$alignment_length_on_ref <- cigarWidthAlongReferenceSpace(alignment_info$cigar)
-  alignment_info$ref_end <- alignment_info$ref_start + alignment_info$alignment_length_on_ref - 1
-  
-  cigar_ops <- cigarOpTable(alignment_info$cigar)
-  alignment_info$insertions <- cigar_ops[, "I"]
-  alignment_info$deletions <- cigar_ops[, "D"]
-  
-  alignment_info$alignment_length_on_query <- cigarWidthAlongQuerySpace(
-    alignment_info$cigar, after.soft.clipping = TRUE
+  # Best alignment per read and flank: highest MAPQ, then longest on the reference
+  best <- lapply(aln, function(a) {
+    if (nrow(a) == 0) return(a)
+    a[, rlen := rend - rstart + 1L]
+    data.table::setorder(a, qname, -mapq, -rlen, secondary)
+    a[!duplicated(qname)]
+  })
+  n_left <- nrow(best$left); n_right <- nrow(best$right)
+  if (n_left == 0 || n_right == 0) { empty$funnel$aligned_left <- n_left; empty$funnel$aligned_right <- n_right; return(empty) }
+
+  both <- merge(best$left, best$right, by = "qname", suffixes = c("_l", "_r"))
+  n_both <- nrow(both)
+  both <- both[strand_l == strand_r]
+  n_strand <- nrow(both)
+  both <- both[qstart_l < qstart_r]
+  n_order <- nrow(both)
+
+  n_excl <- 0L
+  if (!is.null(exclusions) && sample %in% names(exclusions)) {
+    drop <- both$qname %in% exclusions[[sample]]
+    n_excl <- sum(drop); both <- both[!drop]
+  }
+
+  idx <- match(both$qname, names(reads))
+  seqs <- as.character(reads[idx])
+  rev <- both$strand_l == "-"
+  if (any(rev)) seqs[rev] <- as.character(Biostrings::reverseComplement(Biostrings::DNAStringSet(seqs[rev])))
+  left_len <- Biostrings::width(ref$sequences)[1]
+
+  tab <- data.table::data.table(
+    file_stem = sample, qname = both$qname, ref_id = ref$ref_id,
+    strand = ifelse(rev, "+c", "+"),
+    query_sequence = seqs, query_length = nchar(seqs),
+    left_qstart = both$qstart_l, left_qend = both$qend_l,
+    right_qstart = both$qstart_r, right_qend = both$qend_r,
+    left_rstart = both$rstart_l, left_rend = both$rend_l,
+    right_rstart = both$rstart_r, right_rend = both$rend_r,
+    left_mapq = both$mapq_l, right_mapq = both$mapq_r,
+    left_nm = both$nm_l, right_nm = both$nm_r,
+    # How far each flank alignment stops short of the repeat-adjacent end of the flank.
+    # Non-zero values mean the aligner placed the flank boundary away from the N block.
+    left_end_shortfall = left_len - both$rend_l,
+    right_start_shortfall = both$rstart_r - 1L
   )
-  
-  alignment_info$softclip_start <- as.integer(ifelse(
-    grepl("^\\d+S", alignment_info$cigar),
-    as.numeric(sub("^(\\d+)S.*", "\\1", alignment_info$cigar)),
-    0L
-  ))
-  
-  alignment_info$query_start <- alignment_info$softclip_start + 1
-  alignment_info$query_end <- alignment_info$query_start + alignment_info$alignment_length_on_query - 1
-  
-  
-  # Clean up intermediate columns and reorder
-  alignment_info <- alignment_info %>%
-    dplyr::select(-softclip_start) %>%
-    dplyr::select(qname, rname, strand, 
-                  ref_start, ref_end, alignment_length_on_ref,
-                  query_start, query_end, alignment_length_on_query,
-                  mapq, mismatches, insertions, deletions,
-                  query_sequence, aligned_subsequence, cigar) %>%
-    dplyr::arrange(qname, desc(mapq))
-  
-  # Save alignment info
-  save(alignment_info, file = alignment_info_path)
-  
-  return(alignment_info)
+  result <- list(table = tab, funnel = data.frame(
+    file_stem = sample, ref_id = ref$ref_id, input = n_input, aligned_left = n_left, aligned_right = n_right,
+    both_flanks = n_both, same_strand = n_strand, correct_order = n_order,
+    manually_excluded = n_excl, final = nrow(tab)))
+  save(result, file = cache)
+  result
+}
+
+# ------------------------------------------------------------------------------
+# Manual read exclusions: named list file_stem -> read names
+# ------------------------------------------------------------------------------
+load_manual_read_exclusions <- function(path) {
+  if (is.null(path) || is.na(path) || !nzchar(path)) return(NULL)
+  if (!file.exists(path)) stop("Manual read exclusion file not found: ", path)
+  ext <- tolower(tools::file_ext(path))
+  x <- if (ext == "csv") utils::read.csv(path, stringsAsFactors = FALSE)
+       else if (ext %in% c("tsv", "txt")) utils::read.delim(path, stringsAsFactors = FALSE)
+       else {
+         sheets <- readxl::excel_sheets(path)
+         as.data.frame(readxl::read_excel(path, sheet = if ("Exclusions" %in% sheets) "Exclusions" else 1))
+       }
+  if (!all(c("file_name", "read_name") %in% names(x))) stop("Exclusion file needs columns file_name and read_name")
+  x$file_name <- sub("\\.(bam|fastq|fq|fasta|fa)(\\.gz)?$", "", x$file_name)
+  split(as.character(x$read_name), x$file_name)
 }

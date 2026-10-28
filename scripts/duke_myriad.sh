@@ -12,7 +12,7 @@
 #$ -m bea
 
 # ==============================================================================
-# Duke Pipeline - Myriad Job Script
+# Duke 3.0.0 - Myriad Job Script
 # Recommended config: 12 cores, 64GB/core, 48h, 500GB tmpfs
 # See README.md for resource guidance and alternative configurations
 # ==============================================================================
@@ -39,9 +39,14 @@ echo ""
   --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
   --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
   --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
-  --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
   --threads $NSLOTS \
-  --resume TRUE \
-  --remove_intermediate TRUE \
-  --remove_temp FALSE
+  --resume TRUE
+
+# Optional additions: add any of these on new lines after --resume TRUE, putting a
+# backslash at the end of every line except the last.
+#   Two tracts in one run:  --path_tracts /path/tracts.csv --composites "CAG_CCG_sum=CAG+CCG:sum"
+#   UMIs:                   --umi TRUE   (flanks default to M13-F / ciosiF+1; see --help)
+#   Allele structure:       --cluster TRUE
+#   Adapter trimming:       --trim TRUE --path_trim_patterns /home/skgtmdf/Scratch/refs/adapters/adapters.csv
+#   Check settings first:   --dry_run

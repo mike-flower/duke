@@ -1,1221 +1,353 @@
-# Duke pipeline
+# Duke
 
-A modular pipeline for amplicon sequencing analysis with comprehensive repeat length characterisation and instability metrics.
+A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v2.3.1** — [What's new](#version-history)
+**v3.0.0** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
-## Table of contents
+## Contents
 
-- [What is Duke?](#what-is-duke)
+- [What Duke does](#what-duke-does)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Input files](#input-files)
-- [Running Duke](#running-duke)
-  - [Command-line interface](#1-command-line-interface-recommended)
-  - [Script-based](#2-script-based-duke_runr)
-  - [Interactive RStudio](#3-interactive-rstudio)
+- [Several repeat tracts in one run](#several-repeat-tracts-in-one-run)
+- [UMIs](#umis)
+- [How repeats are counted](#how-repeats-are-counted)
+- [Instability metrics](#instability-metrics)
 - [Output files](#output-files)
-- [Module overview](#module-overview)
 - [Parameters](#parameters)
-- [Module diagnostics](#module-diagnostics)
+- [Resume](#resume)
 - [HPC deployment](#hpc-deployment)
-- [Run planning](#run-planning)
 - [Common workflows](#common-workflows)
 - [Troubleshooting](#troubleshooting)
-- [Version history](#version-history)
-- [Citation](#citation)
-- [Contact](#contact)
+- [Changes from v2.3.1](#changes-from-v231)
+- [Citation and contact](#citation-and-contact)
 
 ---
 
-## What is Duke?
+## What Duke does
 
-Duke analyses amplicon sequencing data to measure repeat lengths and somatic instability. It is designed for HTT CAG repeat analysis but works with any tandem repeat locus. Given raw sequencing files (BAM or FASTQ), it produces:
+| Module | Report | What it does | Runs when |
+|---|---|---|---|
+| 1. Import and QC | `01_import_qc.html` | Import BAM / FASTQ / FASTA; read counts and lengths; PacBio passes and quality; optional np filter, de-duplication, downsampling and adapter trimming | always |
+| 2. Alignment | `02_alignment.html` | minimap2 to the left and right flanks of each reference; read accounting from input to analysed reads; flank boundary, MAPQ and strand QC | always |
+| 3. Repeat detection | `03_repeat_detection.html` | Finds every tract in every read; counts by three methods; modal length by method; sequence between tracts; composite measures; per-read export | always |
+| 4. UMI | `04_umi.html` | Extracts UMIs, clusters them, splits mixed families and collapses reads to molecules | `umi = TRUE` |
+| 5. Allele structure | `05_allele_structure.html` | Clustering into alleles, consensus sequences, flank variants (VCF), waterfall plots | `cluster = TRUE` or `waterfall = TRUE` |
+| 6. Instability | `06_instability.html` | Distributions and instability metrics per sample, range and measure, for reads and molecules; group controls; timecourses; tract-against-tract plots | a settings file is given |
+| 7. Repeat lengths | `07_repeat_lengths.html` | Every repeat-length figure in one place: cohort heatmaps, ridges by group and one card per sample | always |
 
-- **Per-read repeat counts** — all three counting methods, exported as `.tsv.gz` for downstream use
-- **Allele calls** — clustering of reads into alleles based on repeat length and/or haplotype
-- **Instability metrics** — expansion and contraction indices relative to control samples
-- **Visualisations** — waterfall plots, repeat histograms, scatter plots, density ridges
-- **HTML reports** — one per module, with interactive tables and figures
-
-Duke runs as seven sequential modules:
-
-| Module | What it does |
-|--------|-------------|
-| 1. Import and QC | Read import, quality metrics, adapter trimming |
-| 2. Alignment | minimap2 alignment to reference flanks, strand correction |
-| 3. Repeat detection | Repeat tract finding and counting; flank QC |
-| 4. Allele calling | Read clustering, consensus sequences, variant calling |
-| 5. Waterfall plots | Per-read base composition visualisation |
-| 6. Range analysis | Peak detection and instability metrics (requires settings file) |
-| 7. Repeat visualisation | Histograms, scatter plots, density plots |
-
-Resume is enabled by default — completed modules are automatically skipped on re-run.
+Reads are grey and molecules teal in every figure. Every report has a timing table and an output manifest, and every module writes its tables to one Excel file.
 
 ---
 
 ## Installation
 
 ```r
-# Core packages
-install.packages(c("tidyverse", "data.table", "rmarkdown", "knitr"))
-
-# Visualisation
-install.packages(c("ggplot2", "ggrepel", "ggridges", "RColorBrewer", "cowplot", "ggnewscale"))
-
-# Tables and reports
-install.packages(c("openxlsx", "DT", "kableExtra", "htmltools"))
-
-# Analysis
-install.packages(c("mclust", "cluster", "ineq", "moments", "pracma"))
-
-# Parallel processing
-install.packages(c("pbapply", "pbmcapply"))
-
-# Bioconductor
-if (!require("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-
-BiocManager::install(c("Biostrings", "ShortRead", "GenomicAlignments",
-                       "Rsamtools", "DECIPHER"))
+install.packages(c("data.table", "dplyr", "tidyr", "tibble", "ggplot2", "ggridges", "patchwork", "scales",
+                   "DT", "rmarkdown", "knitr", "openxlsx", "readxl", "mclust", "cluster", "pracma",
+                   "digest", "pbapply", "pbmcapply"))
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install(c("Biostrings", "ShortRead", "Rsamtools", "GenomicAlignments", "DECIPHER", "pwalign"))
 ```
 
-**HPC:** Point R to your existing package library:
-```bash
-export R_LIBS_USER=~/R/library
-```
+`pwalign` exists from Bioconductor 3.19; on older versions Duke uses the aligner in `Biostrings`. minimap2, samtools and pandoc must be on the `PATH`.
 
-**File structure:**
+**HPC:** `export R_LIBS_USER=~/R/library` and load the R and samtools modules (the job scripts do this).
+
+**Layout:**
 ```
 duke/
-├── duke                          # CLI wrapper executable
-├── README.md
-├── lib/                          # Function libraries (00_utils.R through 07_visualisation.R)
-├── modules/                      # Module Rmd files (01-07)
+├── duke                      # command-line wrapper
+├── lib/                      # functions (params.R holds every parameter, its default and help)
+├── modules/                  # one Rmd per module
 ├── scripts/
-│   ├── duke_run.R                # Script-based runner
-│   ├── duke_cli.R                # CLI script
-│   ├── duke_myriad.sh            # Myriad (SGE) job script
-│   ├── duke_kathleen.sh          # Old Kathleen (SGE) job script
-│   └── duke_kathleen_slurm.sh    # New Kathleen (Slurm) job script
-└── www/                          # Demo files
-    ├── HTTset20.fasta
-    ├── adapters.csv
-    ├── settings_example.xlsx
-    └── read_exclusions_example.xlsx
+│   ├── duke_run.R            # all parameters with defaults, cluster paths
+│   ├── duke_run_local.R      # the same, laptop paths
+│   ├── duke_cli.R            # used by ./duke
+│   ├── duke_myriad.sh, duke_kathleen.sh, duke_kathleen_slurm.sh
+└── www/                      # example reference, tracts table and settings files
 ```
 
 ---
 
 ## Quick start
 
-**Minimal run** (no adapter trimming, no range analysis):
 ```bash
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/output \
-  --path_ref /path/to/reference.fasta \
-  --trim FALSE \
-  --run_modules 1,2,3,4,5,7
+./duke --dir_data ~/data/run1 --dir_out ~/data/run1/result_duke \
+       --path_ref www/HTTset20.fasta --path_settings ~/data/run1/settings_duke.xlsx --threads 8
 ```
 
-**Full run** with trimming and range analysis:
-```bash
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/output \
-  --path_ref /path/to/reference.fasta \
-  --path_trim_patterns /path/to/adapters.csv \
-  --path_settings /path/to/settings.xlsx \
-  --threads 12
-```
+`./duke --help` lists every option by module with its default. Add `--dry_run` to any command to print the resolved parameters and tracts without running anything.
 
-**Demo run** using the included test data:
-```bash
-cd ~/Scratch/bin/duke
-
-./duke \
-  --dir_data demo/data \
-  --dir_out demo/result_duke \
-  --path_ref www/HTTset20.fasta \
-  --path_trim_patterns www/adapters.csv \
-  --threads 3
-```
-
-**See all options:**
-```bash
-./duke --help
-```
+From R or RStudio, edit the paths in `scripts/duke_run_local.R` and source it. Every parameter is listed there with its default and a one-line explanation.
 
 ---
 
 ## Input files
 
-### Required
+### Sequencing data (`dir_data`)
 
-#### 1. Sequencing data
+BAM, FASTQ (`.fastq`, `.fq`, gzipped or not) or FASTA, searched recursively. The sample name (`file_stem`) is the file name without its extension.
 
-**Parameter:** `--dir_data`  
-**Formats:** BAM, FASTQ, FASTQ.gz, FASTA  
-**Note:** Subdirectories are searched recursively by default
+### Reference (`path_ref`)
 
-#### 2. Reference sequence
+A FASTA with one block of `N` (five or more) where the repeat is. Duke aligns each read to the sequence either side of the block, so the block can be any length. `www/HTTset20.fasta` covers the HTT CAG tract; `www/HTTset20_cag_ccg.fasta` covers the CAG and the CCG tract together.
 
-**Parameter:** `--path_ref`  
-**Format:** FASTA with `NNNNN` (or `nnnnn`) marking the repeat region
+### Settings file (`path_settings`, needed for Module 6)
 
-```fasta
->HTTset20
-...CGGTGCTGAGCGGCGCCGCGAGTCGGCCCGAGGCCTCCGGGGACTGCCGTGCCGGGCGGGAGACCGCC
-ATGGCGACCCTGGAAAAGCTGATGAAGGCCTTCGAGTCCCTCAAGTCCTTCNNNNNCAACAGCCGCCACC
-GCCGCCGCCGCCGCCGCCGCCTCCTCAGCTTCCTCAGCCGCC...
-```
+One row per sample, `.xlsx` (first sheet) or `.csv`:
 
-The 5+ consecutive N/n characters mark the repeat tract. Duke detects repeats de novo from the sequencing data using the flanking sequence for alignment.
+| Column | Required | Example | Meaning |
+|---|---|---|---|
+| `file_name` | yes | `sample_01.bam` | The input file (with or without extension) |
+| `analysis_ranges` | yes | `[0-35][36-NA]` | Ranges on the primary measure, one bracket each; `NA` = unbounded |
+| `floor` | no | `[3][3]` | Remove lengths with fewer reads than this (a value below 1 is a fraction of the modal bin); 1 keeps all |
+| `max_peaks` | no | `[2][1]` | Modal peaks reported per range |
+| `group` | no | `QS5` | Group for controls, timecourses and plots |
+| `time` | no | `0`, `49` | Time point |
+| `group_control_sample` | no | `TRUE` | The sample is a control for its group |
+| `exclude` | no | `TRUE` | Leave the sample out of Module 6 |
+| `manual_control_repeat_length` | no | `[14][120]` | Control setpoint per range; used only with `use_manual_controls = TRUE` |
+| `analysis_ranges_<measure>` (and `floor_<measure>`, `max_peaks_<measure>`, `manual_control_repeat_length_<measure>`) | no | `[NA-8][9-NA]` | Ranges for another tract or composite on its own scale (see below) |
 
-**Demo reference:** `www/HTTset20.fasta` — HTT exon 1 for CAG repeat analysis
+Group and range names may contain any characters; those that are unsafe in file names are replaced with `-` in output paths only. Examples: `www/settings_example.xlsx`, `www/settings_example_two_tracts.xlsx`.
 
----
+### Other optional files
 
-### Optional
-
-#### 3. Adapter patterns (required if `--trim TRUE`)
-
-**Parameter:** `--path_trim_patterns`  
-**Format:** CSV with columns `adapter_name` and `adapter_sequence`
-
-```csv
-adapter_name,adapter_sequence
-illumina_universal_read1,AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC
-nextera_transposase,CTGTCTCTTATACACATCT
-pacbio_smrtbell,ACGAGCGTAGCGTG
-```
-
-**Demo adapters:** `www/adapters.csv`
-
-To disable trimming entirely:
-```bash
-./duke --trim FALSE ...
-```
+- `path_tracts` – the tracts table (next section).
+- `path_trim_patterns` – adapter CSV (`adapter_name`, `adapter_sequence`) for `trim = TRUE`; `www/adapters.csv`.
+- `path_manual_exclusions` – reads to drop (`file_name`, `read_name`, `reason`; Excel sheet `Exclusions`); `www/read_exclusions_example.xlsx`.
 
 ---
 
-#### 4. Settings spreadsheet (required for Module 6)
+## Several repeat tracts in one run
 
-**Parameter:** `--path_settings`  
-**Format:** Excel (.xlsx) or CSV
+The default is one tract: `rpt_pattern` (CAG) in `path_ref`. To measure more, give a tracts table (`path_tracts`, `.csv` or `.xlsx` with a sheet `tracts`), one row per tract in 5' to 3' order. Any number of tracts works.
 
-Module 6 requires a settings file defining analysis ranges, grouping, and control samples. Without it, either skip Module 6 or provide the settings and run Module 6 alone:
+| Column | Required | Meaning |
+|---|---|---|
+| `tract` | yes | Name used in every column, plot and file (letters, digits, `_`, `-`) |
+| `motif` | yes | Repeat unit, e.g. `CAG` |
+| `path_ref` | no | Reference whose N block holds this tract; blank = `path_ref` |
+| `count_method`, `min_repeats`, `max_mismatch`, `start_perfect_repeats`, `end_perfect_repeats`, `max_gap`, `max_tract_gap`, `return_option`, `flank_pad`, `na_handling` | no | Per-tract overrides of the global `rpt_*` settings; blank = the global value |
 
-```bash
-# Skip Module 6
-./duke --run_modules 1,2,3,4,5,7 ...
+**One reference or several.** Tracts that share a reference are found inside its one N block, each searched downstream of the one before; this suits adjacent tracts such as HTT CAG and CCG (`www/HTTset20_cag_ccg.fasta`), and Duke also reports the sequence between them per read (e.g. `CAACAGCCGCCA`), which identifies the interruption variant. Tracts far apart, or in different amplicons, get their own reference each; reads are then aligned to every reference and the tracts are joined by read name. Both can be mixed.
 
-# Run Module 6 only after creating settings
-./duke --run_modules 6 --path_settings my_settings.xlsx --resume TRUE ...
-```
+**Composite measures.** A combined length per read, set with `composites` (`--composites "CAG_CCG_sum=CAG+CCG:sum,CAG_CCG_span=CAG+CCG:span"`) or a `composites` sheet in the tracts workbook (`name`, `tracts`, `mode`):
 
-**Demo settings:** `www/settings_example.xlsx`
+- `sum` – the tracts' counts added (pure repeat content only);
+- `span` – from the start of the first tract to the end of the last, divided by the motif length, so any sequence between the tracts is included (in bp when the motifs differ in length). For HTT, span = CAG + CCG + 4 for the standard allele.
 
-##### Settings file format
+**What you get for every tract and composite (each a "measure"):**
 
-Each row represents one sample.
+- Module 3: detection rate, counts by every method, modal by method, and the per-read export (`CAG_full`, `CAG_match`, `CAG_pure`, `CCG_full`, ..., `CAG_CCG_sum`, `CAG_CCG_span`).
+- Module 6: distributions and the full set of instability metrics, per measure. A measure without its own `analysis_ranges_<measure>` column uses the primary tract's ranges: the reads are chosen by their CAG length (e.g. the expanded allele) and the metrics are calculated on that measure. With its own column the ranges are on its own scale.
+- Module 6, tract against tract: for each pair (`measure_pairs`, default every pair of tracts), the mean change in tract B against the change in tract A from the sample median, per group, plus a per-read scatter and a Spearman correlation per sample. This shows whether CAG instability carries CCG with it.
+- Module 7: a heatmap per measure, and a row per measure on each sample card.
 
-**Required columns:**
-
-| Column | Description | Example |
-|--------|-------------|---------|
-| `file_name` | Sample filename (must match exactly) | `sample_001.bam` |
-| `analysis_ranges` | Range definitions for peak detection | `[0-35][36-NA]` |
-| `floor` | Minimum read frequency threshold per range | `[3][3]` |
-| `max_peaks` | Maximum peaks to detect per range | `[2][1]` |
-
-**Optional columns:**
-
-| Column | Description | Example |
-|--------|-------------|---------|
-| `manual_control_repeat_length` | Known repeat lengths for validation | `[14][100]` |
-| `group` | Sample grouping for comparisons | `patient_A`, `control` |
-| `group_control_sample` | Flag as group control | `TRUE` / `FALSE` |
-| `time` | Timepoint for longitudinal analysis | `0`, `6`, `12` |
-| `exclude` | Exclude from analysis | `TRUE` / `FALSE` |
-
-`group` and `time` are optional and drive the Module 6 cohort plots (experiment map and density ridges) via `cohort_plot_by`. Three situations are all handled, and the first two behave identically:
-
-- **Column header absent** — the column is not in the settings file at all. It is created as all-`NA` immediately after loading, so nothing errors.
-- **Column header present but all cells blank** — treated the same as an absent column (no usable group/time).
-- **Column partially filled** — samples with a value use it; samples with a blank cell fall back (no `group` → shown as `"ungrouped"`; no `time` → labelled `(t=)` and ordered after the timed samples).
-
-In every case the plots automatically fall back to whichever dimensions are actually available (intersected with `cohort_plot_by`), and a note is logged when a requested dimension has no data. The same all-`NA`-when-absent handling applies to the other optional columns (`group_control_sample`, `exclude`), so a settings file containing only the required columns runs cleanly.
-
-`group` and analysis range names may contain any characters. Characters that are unsafe in filenames (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`, and whitespace) are automatically replaced with `-` when building Module 6/7 output paths; this is logged as a note, and the original text is kept unchanged in all plot titles, legends, axes and tables. Two names that differ only by such characters (e.g. `P15/05` vs `P15-05`) would map to the same file, so the run stops early with a collision error – give them names that differ in some other way.
-
-##### Bracketed parameter format
-
-Each bracketed value corresponds to one analysis range. The number of values must be consistent across all bracketed columns in a row.
-
-```
-# Two ranges: normal (0-35) and expanded (36+)
-analysis_ranges: [0-35][36-NA]
-floor:           [3][3]
-max_peaks:       [2][1]
-
-# Three ranges
-analysis_ranges: [0-13][14-35][36-NA]
-floor:           [5][3][3]
-max_peaks:       [1][2][1]
-```
-
-**Rules:** No spaces between brackets. Use `NA` for unbounded upper limits. Equal numbers of `[` and `]` per cell. Range bounds must be zero or positive integers — negative values are not supported and will cause a parsing error.
-
-##### Creating your settings file
-
-1. Copy the template: `cp www/settings_example.xlsx my_settings.xlsx`
-2. Set `file_name` to match your input files exactly (including extension)
-3. Define `analysis_ranges` based on your biology (e.g. `[0-35][36-NA]` for normal/expanded HTT)
-4. Set `floor` (minimum reads per peak; typically 3–5) and `max_peaks` (typically 1–2 per range)
-5. Add `group`, `group_control_sample`, and `time` columns if doing comparative or longitudinal analysis
+The first tract is the primary measure: it is used for the read selection above, the legacy `repeat_count_*` columns, clustering and waterfalls. Example tables: `www/tracts_example.csv`, `www/tracts_example.xlsx`.
 
 ---
 
-#### 5. Manual read exclusions (optional)
+## UMIs
 
-**Parameter:** `--path_manual_exclusions`  
-**Format:** Excel (.xlsx) or CSV. Excel sheet must be named **"Exclusions"** (case-sensitive).
+`umi = TRUE` turns on Module 4. The read layout assumed is `flank_5 – UMI – flank_3 – amplicon`, as in the custom PacBio UMI design (v4.07):
 
-**Required columns:**
+| Parameter | Default | Design element |
+|---|---|---|
+| `umi_flank_5` | `GTAAAACGACGGCCAGT` | M13-F |
+| `umi_flank_3` | `GGCGACCCTGGAAAAGCTGATGAA` | ciosiF+1 |
+| `umi_len_min`, `umi_len_max` | 12, 16 | N14 UMI, allowing for indels |
 
-| Column | Description | Example |
-|--------|-------------|---------|
-| `file_name` | Sample file stem (filename without extension) | `sample_001` |
-| `read_name` | Exact read identifier | `m64011_190830_220126/4194640/ccs` |
-| `reason` | Documentation | `Low quality alignment` |
+Set these to match your own oligos. Reads are oriented to the reference first, so the flanks are searched on the forward strand.
 
-**Important:** The `file_name` value must match the pipeline's `file_stem` exactly — the filename with its extension(s) stripped. For paired-end FASTQ data this includes any `_R1`/`_R2` suffix (e.g. `DMPX_MS408_S1_L001_R1`, not `DMPX_MS408_S1_L001`). Exclusions are applied per-sample: a read name listed under sample A will never affect sample B, even if both samples share that read name.
+**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is then split by allele: the allele boundary is found per sample from the valley in the repeat-length distribution, and a family with at least two reads on each allele is split into two molecules (`umi_split_mixed`). Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: the densest window of reads (`umi_top_cluster_k` reads within ±(`w` + `wfrac` × length)), which ignores PCR stutter and chimeric outliers better than the median.
 
-Get exact read names from BAM files:
-```bash
-samtools view sample_001.bam | cut -f1 | head
-```
+**Report.** Extraction outcome per sample (found, no 5' flank, no 3' flank, wrong length), UMI length, reads per molecule, UMI neighbours against the number expected by chance (a check that clustering merges errors, not distinct UMIs), within-molecule length error by allele, and reads against molecules.
 
-Read names must match exactly — copy directly from `samtools` output.
-
-**Demo exclusions:** `www/read_exclusions_example.xlsx`
+**Downstream.** Modules 6 and 7 report every distribution and metric for reads and for molecules (`unit` column). Each measure is collapsed separately, so a molecule's `CAG_CCG_sum` is the collapsed sum, not the sum of the collapsed CAG and CCG. `04_umi/molecules/{sample}.tsv.gz` lists every molecule.
 
 ---
 
-## Running Duke
+## How repeats are counted
 
-### 1. Command-line interface (recommended)
+Duke counts **pure repeat units**. For a 47Q HTT allele (`(CAG)n CAA CAG CCG CCA (CCG)7`): standard 45 CAG, DOI (loss of CAA CAG duplicated) 43 CAG, LOI (loss of interruption, CAA → CAG) 47 CAG.
 
-No file editing required. Pass all parameters on the command line.
+A tract is a run of motif matches, with gaps of up to `rpt_max_gap` bases inside a run and `rpt_max_tract_gap` between runs merged. It must start and end with `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` perfect units, which trims e.g. a trailing `CAACAG` off the CAG tract. The search covers the sequence between the two flank alignments plus `rpt_flank_pad` bases (30) either side, because the aligner sometimes places the last unit inside a flank (the cause of the 1-unit under-count of LOI alleles in v2).
 
-```bash
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/output \
-  --path_ref /path/to/reference.fasta \
-  --path_trim_patterns /path/to/adapters.csv \
-  --path_settings /path/to/settings.xlsx \
-  --threads 12
-```
+Three counts per tract:
 
-```bash
-./duke --help    # Show all 54+ options with defaults
-```
+| Method | Definition |
+|---|---|
+| `full` (default) | tract length in bp ÷ motif length |
+| `match` | exact motif matches in the tract |
+| `pure` | the longest uninterrupted run |
 
-### 2. Script-based (duke_run.R)
+Module 3 reports the modal length of every sample by every method (`modal_by_method`), and how often the methods agree.
 
-Edit `scripts/duke_run.R` directly, then run:
+---
 
-```bash
-# Local
-Rscript scripts/duke_run.R
+## Instability metrics
 
-# HPC — edit paths in the script, then submit
-nano scripts/duke_myriad.sh
-qsub scripts/duke_myriad.sh
-```
+For each sample × measure × range × unit, with setpoint s and d = length – s per read:
 
-All parameters and their defaults are documented with examples in `duke_run.R`.
+| Metric | Definition |
+|---|---|
+| `instability_index` (II) | mean(d) = EI + CI (Lee et al. 2010) |
+| `expansion_index` (EI) | sum of positive d ÷ n |
+| `contraction_index` (CI) | sum of negative d ÷ n |
+| `mean_expansion_size` | mean d of the reads above s (was "expansion index" in v2) |
+| `mean_contraction_size` | mean d of the reads below s (was "contraction index" in v2) |
+| `prop_at`, `prop_above`, `prop_below` | proportion within ±0.5 of s, above, below |
+| `prop_above_k`, `prop_below_k` | proportion at least k units above / below s (`expansion_thresholds`, default 5 and 10) |
+| `expansion_ratio`, `contraction_ratio` | reads above / at s, below / at s (unstable when few reads sit at s) |
+| `modal_diff`, `median_diff`, `mean_diff`, `z_score` | difference from the group control |
 
-### 3. Interactive RStudio
+Two setpoints are reported (`setpoint_type`):
 
-Open `scripts/duke_run.R` in RStudio, edit parameters, and source or run line-by-line. Useful for development and debugging individual modules.
+- `sample_relative` – the sample's own `control_setpoint_metric` (median by default; `modal_length` gives Lee's II);
+- `control_relative` – that metric aggregated (`control_aggregation_method`) across the group's control samples, so the metrics measure change since the control (e.g. t = 0). With `use_manual_controls = TRUE` a `manual_control_repeat_length` replaces it; `setpoint_source` records which was used.
+
+Distribution statistics (modal, median, mean, SD, IQR, 5th and 95th percentiles, skewness, kurtosis) are in `distribution_summary`.
 
 ---
 
 ## Output files
 
-Results are written to `--dir_out`. Each module produces an HTML report and an Excel file.
-
 ```
 result_duke/
-├── 01_import_and_qc.html
-├── 02_alignment.html
-├── 03_repeat_detection.html
-├── 04_allele_calling.html
-├── 05_waterfall.html
-├── 06_range_analysis.html
-├── 07_repeat_visualisation.html
-│
-├── module_data/                      # Cached RData files (for resume)
-│   ├── 01_import_qc.RData
-│   ├── 02_alignment.RData
-│   ├── 03_repeat_detection.RData
-│   ├── 04_allele_calling.RData
-│   └── 06_range_analysis.RData
-│
-├── 01_import_qc/
-│   ├── qc.xlsx                       # count_summary | trim_summary | timing | manifest
-│   └── plots/
-├── 02_alignment/
-│   ├── alignment.xlsx                # alignment_summary | flank_filtering | strand_summary
-│   │                                 # alignment_quality | sequence_segments | timing | manifest
-│   ├── bam/                          # Sorted+indexed alignment BAMs, one per sample×reference (only when --keep_bam TRUE)
-│   │   └── {sample}-{ref}.bam(.bai)
-│   └── plots/
-│       └── coverage_by_sample/
-├── 03_repeat_detection/
-│   ├── repeat_detection.xlsx         # count_summary | tract_detection | count_method_comparison
-│   │                                 # heatmap_sample_index | flank_summary | timing | manifest
-│   ├── read_repeat_counts/           # Per-read repeat counts (one .tsv.gz per sample)
-│   │   └── {sample}.tsv.gz          # read_id | repeat_count_full | repeat_count_match | repeat_count_tracts
-│   └── plots/
-│       └── flank/
-├── 04_allele_calling/
-│   ├── allele_calling.xlsx           # cluster_summary | timing | manifest
-│   ├── consensus/
-│   │   ├── consensus.xlsx            # file_stem | cluster_number | repeat_cluster | haplotype_cluster | reads_in_cluster | reads_for_consensus | *_length_bp | consensus_* sequences
-│   │   ├── consensus_sequences.fasta
-│   │   └── vcf_by_sample/
-│   ├── variants/
-│   │   └── variant.xlsx              # summary (deletion_bases | insertion_bases | mismatch_bases per cluster) | all_variants (per-position calls); both carry repeat_cluster | haplotype_cluster
-│   └── plots/
-├── 05_waterfall/
-│   ├── waterfall.xlsx                # timing
-│   └── plots/
-│       └── waterfall_by_cluster/
-├── 06_range_analysis/
-│   ├── range_analysis.xlsx           # range_summary | modal_peaks | distribution_summary
-│   │                                 # instability_metrics | group_controls | timing | manifest
-│   └── plots/
-└── 07_repeat_visualisation/
-    ├── repeat_visualisation.xlsx     # timing
-    └── plots/
-        ├── histograms_by_sample/
-        ├── scatter_by_sample/
-        └── density_by_sample/
+├── 01_import_qc.html             01_import_qc/qc.xlsx, plots/
+├── 02_alignment.html             02_alignment/alignment.xlsx (read_accounting), plots/, bam/ (keep_bam)
+├── 03_repeat_detection.html      03_repeat_detection/repeat_detection.xlsx, read_repeat_counts/{sample}.tsv.gz, plots/
+├── 04_umi.html                   04_umi/umi.xlsx, molecules/{sample}.tsv.gz, plots/
+├── 05_allele_structure.html      05_allele_structure/allele_structure.xlsx, consensus/, variants/*.vcf, plots/waterfall/
+├── 06_instability.html           06_instability/instability.xlsx, plots/ (timecourse/, pairs/)
+├── 07_repeat_lengths.html        07_repeat_lengths/repeat_lengths.xlsx, plots/ (heatmaps, ridges/, sample_cards/)
+├── module_data/                  one .RData per module (used by resume)
+└── temp/                         per-sample caches (remove_temp = TRUE deletes it)
 ```
 
-**HTML reports** are the primary output. Each contains interactive tables and a `# Module diagnostics` section at the end with timing and an output manifest (see [Module diagnostics](#module-diagnostics)).
+Key tables:
 
-**Excel files** contain the same data as the HTML tables. Each includes `timing` and `manifest` sheets.
+- `06_instability/instability.xlsx`: `instability_metrics` (one row per sample × unit × measure × range × setpoint type; the column names used by v2 scripts are kept), `distribution_summary`, `modal_peaks`, `group_controls`, `count_methods`, `pair_stats`, `range_table`.
+- `03_repeat_detection/read_repeat_counts/{sample}.tsv.gz`: one row per read with every tract's counts and structure, the composites, and the v2 columns `repeat_count_full`, `repeat_count_match`, `repeat_count_tracts`.
+- `02_alignment/alignment.xlsx`, sheet `read_accounting`: reads per sample at every step from input to analysed.
 
-**Per-read count files** (`read_repeat_counts/{sample}.tsv.gz`) are written by Module 3 when `export_read_counts = TRUE` (default). One file per sample, one row per read, with all three repeat count methods. Load in Python with `pd.read_csv('sample.tsv.gz', sep='\t')` or in R with `readr::read_tsv('sample.tsv.gz')`.
-
----
-
-## Module overview
-
-### Module 1: Import and QC
-
-Imports sequencing files, runs quality metrics, and optionally trims adapters.
-
-- Accepts BAM, FASTQ, FASTQ.gz, FASTA
-- **PacBio HiFi auto-detection** — checks each BAM for the `np:i:` tag on the first record, falling back to `@PG PN=ccs/skera/lima` header lines (case-insensitive). Per-sample and keyed by file_stem, so mixed cohorts (some PacBio + some non-PacBio in the same run) are handled correctly
-- When PacBio is detected, per-read aux tags (`np`, `rq`, `ec`, `zm`, `bq`) are extracted into `module1_output$read_metadata` and a per-sample summary is added to `module1_output$pacbio_summary`
-- New PacBio QC section reports pass count (`np`) distribution, read quality (`rq`) distribution, and np-vs-length scatter — skipped automatically when no PacBio samples are present
-- `--np_min N` drops PacBio HiFi reads with `np < N` (applies only to detected PacBio samples; FASTQ, FASTA, and non-PacBio BAMs are unaffected)
-- Duplicate read name detection (keeps longest; safe to disable for PacBio CCS with `--check_duplicate_readnames FALSE`)
-- Optional downsampling (`--downsample`)
-- Adapter trimming from both ends using `Biostrings::trimLRPatterns`
-- **Output:** `qc.xlsx` with read counts, trim statistics, and per-sample PacBio np/rq summaries; QC plots including `pacbio_np_distribution.png`, `pacbio_rq_distribution.png`, and `pacbio_np_vs_length.png`
-
-### Module 2: Alignment
-
-Aligns reads to left and right reference flanks independently using minimap2.
-
-- Short-read mode (`-x sr -w 1`) works for both ONT and PacBio amplicons
-- Strand correction — reverse-complements antisense reads; marks corrected reads as `+c`
-- Left→right coordinate order validation removes spurious alignments
-- Optional manual read exclusion (`--path_manual_exclusions`)
-- Optional coverage visualisation plots
-- **Output:** `alignment.xlsx` with alignment quality metrics; coverage plots
-
-### Module 3: Repeat detection
-
-Finds and counts repeat tracts in the sequence between the two flanks.
-
-- Tolerates within-tract gaps and interruptions (configurable)
-- Three counting methods calculated for all reads:
-  - `repeat_count_full` — tract length ÷ pattern length (recommended; robust for ONT)
-  - `repeat_count_match` — exact pattern matches only (stringent; best for PacBio HiFi)
-  - `repeat_count_tracts` — tract structure as string e.g. `"3,2,2"` (QC only; not numeric)
-- Flank length QC — total combined flank length should be stable per sample; optional outlier filtering (`--rm_flank_length_outliers`). The cohort scatter plot shows reference lines at the **mean** of the per-sample IQR fences across all samples — these lines are visual guides only. The actual filter, when enabled, uses per-sample fences computed independently for each sample.
-- **Output:** `repeat_detection.xlsx`; per-read `.tsv.gz` count files; flank QC plots
-
-### Module 4: Allele calling
-
-Clusters reads into alleles using repeat length and/or haplotype sequence.
-
-- ⚠️ Most memory-intensive module — requires 4 GB+ per core
-- Default: cluster by repeat length only (`--cluster_by repeat`)
-- Optional haplotype sub-clustering using Levenshtein distance on flank sequences
-- Consensus sequences generated per cluster using `DECIPHER`
-- Variant calling versus reference (VCF export)
-- **Output:** `allele_calling.xlsx`; `consensus/` directory with FASTA and VCF files; cluster plots
-
-### Module 5: Waterfall plots
-
-Read-level visualisation showing base composition across left flank, repeat region, and right flank.
-
-- Reads stacked vertically, ordered by repeat length — allele structure and somatic instability immediately visible
-- Configurable downsampling (`--waterfall_downsample`; default 1,000 reads)
-- Optional per-cluster plots (`--waterfall_per_cluster`)
-- Plots saved to `05_waterfall/plots/` — not printed inline in HTML
-- **Output:** One PNG per sample
-
-### Module 6: Range analysis
-
-Quantitative analysis of repeat distributions within user-defined length ranges. Requires a settings file.
-
-- Range-based peak detection identifies modal repeat lengths per allele per range
-- ~30 distribution statistics per sample per range (mean, median, SD, skewness, CV, tail ratios...)
-- Instability metrics: expansion index, contraction index, z-scores relative to controls
-- Group and timepoint comparisons
-- Cohort plots — an experiment map (samples across group × time) and density ridge plots by group and time. The dimensions used are controlled by `cohort_plot_by` and intersected with the columns actually present in the settings file. `group` and `time` are both optional: whether a column is absent, present but all blank (treated identically), or only partially filled, the plots degrade gracefully (blank group → `"ungrouped"`; blank time → labelled `(t=)` and ordered last) rather than dropping samples or erroring
-- **Output:** `range_analysis.xlsx` with comprehensive tables; instability and distribution plots
-
-### Module 7: Repeat visualisation
-
-Publication-quality repeat length distribution figures.
-
-- Full-range and per-range histograms (one file per sample) — controlled by `repeat_histogram`
-- Cohort summary box+jitter and per-sample horizontal scatter/violin plots — controlled by `repeat_scatter`
-- Per-sample ggridges density plots, full range and per analysis range — controlled by `repeat_density`
-- Metric overlays (modal, mean, median) on scatter and density plots — controlled by `repeat_distribution_metrics`
-- All plots saved to disk, not shown inline in HTML
-- **Output:** PNG files organised by plot type in `07_repeat_visualisation/plots/`
+Logs go to `logs/<date_time>/` in the Duke folder: the run log, the resolved parameters as R code and the resolved tracts table.
 
 ---
 
 ## Parameters
 
-### Essential parameters
+Every parameter, its default and a one-line explanation is in `scripts/duke_run.R` and `./duke --help`; both are generated from `lib/params.R`. The ones most often changed:
 
-```bash
-# Required
---dir_data           Input directory (BAM, FASTQ, etc.)
---dir_out            Output directory
---path_ref           Reference FASTA with NNNNN repeat separator
+| Parameter | Default | |
+|---|---|---|
+| `threads` | 4 | CPU cores |
+| `run_modules` | 1:7 | e.g. `--run_modules 6,7` |
+| `rpt_pattern` | CAG | motif for a single tract |
+| `path_tracts`, `composites` | – | several tracts and combined measures |
+| `repeat_count_method` | full | full, match or pure |
+| `umi` | FALSE | Module 4 |
+| `cluster` | FALSE | allele clustering, consensus and variants (Module 5) |
+| `waterfall` | TRUE | waterfall plots (Module 5) |
+| `trim` | FALSE | adapter trimming; demultiplexed HiFi reads are already trimmed |
+| `check_duplicate_readnames` | FALSE | PacBio and ONT read names are unique |
+| `np_min` | NA | minimum PacBio passes |
+| `na_repeat_handling` | keep | reads with no tract: keep (no length), convert_to_zero (length 0, as in v2) or filter |
+| `use_manual_controls` | FALSE | settings-file control lengths replace the group control |
+| `headline_metrics` | modal, median, mean, II, EI, prop_above_5 | timecourse rows in Module 6 |
+| `plot_ranges` | first two ranges | ranges drawn in Module 6 and on sample cards |
+| `sample_cards` | TRUE | one figure per sample in Module 7 |
 
-# Required if trimming enabled (trim = TRUE by default)
---path_trim_patterns Adapter CSV file
-
-# Required for Module 6
---path_settings      Settings Excel file
-
-# Common runtime options
---threads            CPU cores (default: 12)
---resume             Skip completed modules (default: TRUE)
---run_modules        Which modules to run, e.g. 1,2,3,4,5,7 (default: 1,2,3,4,5,6,7)
-```
-
-### Complete parameter reference
-
-#### File paths
-- `--dir_data` — Input directory **(required)**
-- `--dir_out` — Output directory **(required)**
-- `--path_ref` — Reference FASTA **(required)**
-- `--path_trim_patterns` — Adapter CSV (required if `--trim TRUE`)
-- `--path_settings` — Settings Excel (required for Module 6)
-- `--path_manual_exclusions` — Read exclusions file (optional)
-
-#### Import options
-- `--import_patterns` — Comma-separated regex patterns for filenames to import (default: `\.fastq$,\.fastq.gz$,\.fasta$,\.fa$,\.bam$`)
-- `--downsample` — Limit reads per sample (NA = all)
-- `--r1_pattern` — Regex pattern identifying R1 files in paired-end data (default: `"_R1_"`). **Note:** the default requires an underscore on both sides (e.g. `sample_R1_001.fastq.gz`). If your files end with `_R1.fastq.gz` rather than `_R1_001.fastq.gz`, pass `--r1_pattern "_R1"` (no trailing underscore).
-- `--r2_pattern` — Regex pattern identifying R2 files in paired-end data (default: `"_R2_"`). See note for `--r1_pattern`.
-- `--select_one_of_pair` — For paired-end: `"R1"`, `"R2"`, or `"all"`. When `"R1"` or `"R2"`, only that direction is imported. When `"all"`, both are imported as separate samples (default: `"R1"`)
-- `--check_duplicate_readnames` — Remove duplicate read names, keeping longest (default: TRUE; safe to disable for PacBio CCS)
-- `--np_min` — Drop PacBio HiFi reads with `np < N` (default: NULL = no filter). Applies only to samples auto-detected as PacBio HiFi BAMs in Module 1; FASTQ, FASTA, and non-PacBio BAMs are unaffected, and mixed cohorts are handled correctly on a per-sample basis
-- `--pacbio_scatter_downsample` — Max points rendered in the PacBio np-vs-read-length scatter (default: 50,000). NA = plot all reads (may be slow for very large cohorts). The lm fit and R² are computed on the rendered subset — at n = 50k the estimates are essentially identical to the full-cohort values for any plausible effect size. Applies only to detected PacBio samples
-
-#### Adapter trimming
-- `--trim` — Enable/disable (default: TRUE)
-- `--trim_max_mismatch` — Max errors allowed in adapter match (default: 3)
-- `--trim_with_indels` — Allow indels in adapter matching (default: TRUE)
-
-#### Alignment
-- `--minimap2_args` — minimap2 settings (default: `"-t 2 -x sr -w 1"`)
-- `--visualise_alignment` — Generate coverage plots (default: TRUE)
-- `--visualise_alignment_downsample` — Max reads to plot (default: 1,000)
-- `--keep_bam` — Retain the sorted+indexed alignment BAMs (one per sample × reference) in `<dir_out>/02_alignment/bam/` for inspection in IGV, instead of deleting them after they are read into R (default: FALSE). Independent of `--remove_temp` / `--remove_intermediate`. Useful for confirming structural variants (e.g. a promoter deletion) at the read level, but can be large across a cohort. Takes effect only when alignment actually runs (not on a resumed cache hit)
-
-#### Repeat detection
-- `--rpt_pattern` — Repeat motif (default: `"CAG"`)
-- `--rpt_min_repeats` — Minimum tract length in repeat units (default: 2)
-- `--rpt_max_mismatch` — Error tolerance per repeat unit (default: 0)
-- `--rpt_start_perfect_repeats` — Perfect repeats required at tract start (default: 2)
-- `--rpt_end_perfect_repeats` — Perfect repeats required at tract end (default: 2)
-- `--rpt_max_gap` — Max inserted bases within a tract (default: 6)
-- `--rpt_max_tract_gap` — Max gap between tracts to merge them (default: 18)
-- `--rpt_return_option` — `"longest"` or `"all"` (default: `"longest"`)
-- `--repeat_count_method` — Primary counting method (default: `"repeat_count_full"`)
-- `--na_repeat_handling` — How to handle reads with no detectable repeat tract: `"convert_to_zero"` (assign repeat_count = 0; appropriate for long-read data where Module 2's dual-flank filter ensures every read spans the locus), `"filter"` (remove these reads entirely), or `NA` (leave as NA and propagate; useful for inspection before deciding) (default: `"convert_to_zero"`)
-- `--export_read_counts` — Export per-read counts to `.tsv.gz` (default: TRUE)
-
-#### Flank length QC (Module 3)
-- `--rm_flank_length_outliers` — Filter outlier combined flank lengths (default: FALSE — review flank plots first)
-- `--flank_iqr_multiplier` — IQR multiplier for outlier detection (default: 1.5; only active when `rm_flank_length_outliers = TRUE`)
-
-#### Clustering
-- `--cluster` — Enable clustering (default: TRUE)
-- `--cluster_by` — clustering strategy: `repeat`, `haplotype`, both as a comma-separated list `repeat,haplotype`, or `none` (default: `repeat`). Note "both" is expressed as `--cluster_by repeat,haplotype`, not the word "both"
-- `--haplotype_cluster_max` — Max haplotype clusters (default: 10)
-- `--repeat_cluster_max` — Max repeat clusters (default: 20)
-- `--repeat_cluster_downsample` — Max reads for cluster optimisation (default: 10,000)
-- `--haplotype_cluster_downsample` — Max reads for haplotype optimisation (default: 5,000)
-- `--haplotype_region` — Which flanks to use for haplotype clustering: `"left"` (5′/upstream of the repeat), `"right"` (3′/downstream), or `"both"` (default: `"both"`)
-- `--haplotype_method` — Distance metric: `"levenshtein"` or `"hamming"` (default: `"levenshtein"`)
-- `--haplotype_trim_length` — Trim flank sequences before haplotype clustering: `"auto"` trims to the modal flank length per sample; a number specifies a fixed total bp length (split across the two flanks, ~half each); `"NA"` disables trimming (default: `"auto"`). Trimming always **keeps the bases adjacent to the repeat and discards the outer ends** — for the left/5′ flank it removes the 5′ (distal) end, for the right/3′ flank it removes the 3′ (distal) end — because bases nearest the repeat are the most reliably sequenced. For ordinary haplotype calling, trimming is recommended: variable-length flanks inflate Levenshtein distances and degrade cluster quality. **Caveat:** if your variant of interest sits *far from the repeat* (e.g. a promoter deletion in the upstream flank), trimming can discard it — use `"NA"` (or a length long enough to span the variant) so the relevant region is retained, and keep `--haplotype_method levenshtein` so length-changing indels are handled
-
-#### Consensus and variant calling
-- `--cluster_consensus` — Generate consensus sequences (default: TRUE)
-- `--consensus_threshold` — Minimum proportion for base call (default: 0.5)
-- `--consensus_downsample` — Max reads per consensus (default: 50)
-- `--call_variants` — Call variants vs reference (default: TRUE)
-
-#### Waterfall plots (Module 5)
-- `--waterfall` — Generate waterfall plots (default: TRUE)
-- `--waterfall_downsample` — Max reads per sample (default: 1,000)
-- `--waterfall_per_cluster` — Generate per-cluster plots (default: FALSE)
-- `--waterfall_y_axis_labels` — Label density: `"auto"` or integer (default: `"auto"`)
-
-#### Range analysis (Module 6)
-- `--range_peak_span` — Peak smoothing window (default: 3)
-- `--group_control` — Enable control comparisons (default: TRUE)
-- `--control_sample_selection` — `"flagged"`, `"earliest"`, or `"all"` (default: `"flagged"`)
-- `--control_setpoint_metric` — `"modal_length"`, `"mean_length"`, or `"median_length"` (default: `"median_length"`)
-- `--control_aggregation_method` — `"mean"`, `"median"`, or `"trimmed_mean"` (default: `"median"`)
-- `--cohort_plot_by` — Dimensions for the Module 6 cohort plots (experiment map + density ridges), comma-separated: `group,time`, `group`, `time`, or `""` for a single combined plot. Intersected with the columns actually present in the settings file (default: `group,time`)
-
-#### Repeat visualisation (Module 7)
-- `--repeat_histogram` — Generate frequency histograms (full-range and per analysis range) (default: TRUE)
-- `--repeat_histogram_binwidth` — Bin width in repeat units (default: 1)
-- `--repeat_scatter` — Generate cohort summary box+jitter and per-sample scatter/violin plots (default: TRUE)
-- `--repeat_density` — Generate per-sample ggridges density plots, full range and per analysis range (default: TRUE)
-- `--repeat_distribution_metrics` — Metric overlays on scatter and density plots: `"modal_length"`, `"mean_length"`, `"median_length"` (default: all three)
-
-#### Plot output
-- `--plot_dpi` — Resolution for diagnostic plots (default: 150; use 300 for publication)
-- `--plot_per_sample` — Generate per-sample plot files in Modules 2, 3, and 4 (Module 2: coverage/strand/alignment/segment; Module 3: scatter/histogram/violin/density; Module 4: violin/scatter). Consider FALSE for large datasets (>50 samples) (default: TRUE)
-
-#### Runtime
-- `--threads` — CPU cores (default: 12)
-- `--resume` — Skip completed modules (default: TRUE)
-- `--remove_intermediate` — Free RAM between modules (default: TRUE). Controls in-memory R objects only — it does not delete any files
-- `--remove_temp` — Delete the `temp/` directory (RData caches) on completion (default: FALSE). Note: the per-sample alignment BAMs are deleted *during* Module 2 regardless of this flag, immediately after being read into R — to retain them, use `--keep_bam` (which writes them outside `temp/`, so they survive this cleanup)
-- `--run_modules` — Which modules to run (default: `1,2,3,4,5,6,7`)
+Parameters from v2 that no longer exist are ignored with a message; the v2 count names (`repeat_count_full` etc.) are still accepted.
 
 ---
 
-## Module diagnostics
+## Resume
 
-Every module ends with a `# Module diagnostics` section in the HTML report, just before Session info.
-
-### Timing table
-
-All seven modules record wall-clock time for each major computation step:
-
-| Column | Description |
-|---|---|
-| Section | Name of the computation step |
-| Seconds | Raw elapsed seconds |
-| Elapsed (mm:ss) | Step duration formatted as mm:ss or hh:mm:ss |
-| Cumulative (mm:ss) | Running total from module start |
-
-The **Total** row (bold) gives the complete module wall time. Useful for identifying bottlenecks and confirming resume is working correctly.
-
-### Output manifest
-
-Modules 1, 2, 3, 4, and 6 also display an output manifest listing every R object saved to the `.RData` file:
-
-| Column | Description |
-|---|---|
-| Object | R object name (accessible via `moduleN_output$...`) |
-| Description | Contents and intended downstream use |
-| Class | R class (data.frame, tbl_df, list, etc.) |
-| In-memory size | Human-readable size (B / KB / MB / GB) |
-
-The table caption shows the `.RData` file size on disk and full path.
-
-### Excel export
-
-Both tables are appended to each module's Excel file as `timing` and `manifest` sheets. Modules 5 and 7 (plot-only modules) include only a `timing` sheet.
+With `resume = TRUE` (default) a module is reused when its stored parameter hash matches. Each hash covers the parameters that affect that module and the hashes of the modules it depends on, plus the reference and settings files and the list of input files (names, sizes, dates), so changing `rpt_flank_pad` re-runs Modules 3 to 7 but changing a plot setting in Module 7 re-runs Module 7 only. Changes to Duke's own code are not detected: after updating Duke, delete `module_data/` (or use `--resume FALSE`) to re-run everything. If you run only some modules after changing a parameter that affects an earlier one (e.g. `--run_modules 6` after changing a tract setting), Duke stops and names the module to include, rather than building on out-of-date results.
 
 ---
 
 ## HPC deployment
 
-### Cluster selection
+| Cluster | Best for | Scheduler | Script |
+|---|---|---|---|
+| Myriad | up to ~500 samples | SGE (`-pe smp`) | `scripts/duke_myriad.sh` |
+| Old Kathleen | 1000+ samples | SGE (`-pe mpi`) | `scripts/duke_kathleen.sh` |
+| New Kathleen | 1000+ samples | Slurm | `scripts/duke_kathleen_slurm.sh` |
 
-| Cluster | Best for | Cores | Scheduler | Script |
-|---------|----------|-------|-----------|--------|
-| **Myriad** | ≤500 samples | 1–36 | SGE (`-pe smp`) | `duke_myriad.sh` |
-| **Old Kathleen** | 1000+ samples | 80–160 | SGE (`-pe mpi`) | `duke_kathleen.sh` |
-| **New Kathleen** | 1000+ samples | 80–160 | Slurm | `duke_kathleen_slurm.sh` |
+Edit the paths in the script, then `qsub scripts/duke_myriad.sh` (or `sbatch` for Slurm). `--threads` is set from `$NSLOTS` / `$SLURM_NTASKS`. Each script lists the optional additions (tracts, UMIs, clustering, trimming) as comments.
 
-### Job submission
+Monitoring: `qstat -u $USER`, `qdel <id>`, `qacct -j <id>` (SGE); `squeue -u $USER`, `scancel <id>`, `sacct -j <id>` (Slurm); `tail -f logs/duke_*.out`.
 
-Edit the data/output paths in the job script, then submit. The `--threads` parameter is set automatically from `$NSLOTS` (SGE) or `$SLURM_NTASKS` (Slurm) — you only need to change the core count in the scheduler header line.
-
-#### Myriad (SGE)
-```bash
-nano scripts/duke_myriad.sh    # Edit data/output paths
-qsub scripts/duke_myriad.sh
-```
-
-#### Old Kathleen (SGE)
-```bash
-nano scripts/duke_kathleen.sh
-qsub scripts/duke_kathleen.sh
-```
-
-#### New Kathleen (Slurm)
-```bash
-nano scripts/duke_kathleen_slurm.sh
-sbatch scripts/duke_kathleen_slurm.sh
-```
-
-### Monitoring jobs
-
-**SGE (Myriad / Old Kathleen):**
-```bash
-qstat -u $USER                  # Check job status
-watch -n 5 'qstat -u $USER'    # Watch queue
-qstat -j <JOB_ID>              # Detailed info
-qdel <JOB_ID>                  # Cancel
-qacct -j <JOB_ID>              # After completion
-tail -f logs/duke_*.out         # Watch log in real-time
-grep -i error logs/duke_*.err  # Check for errors
-```
-
-**Slurm (New Kathleen):**
-```bash
-squeue -u $USER
-watch -n 5 'squeue -u $USER'
-scontrol show job <JOB_ID>
-scancel <JOB_ID>
-sacct -j <JOB_ID>
-tail -f logs/duke_*.out
-```
-
-### SGE vs Slurm reference
-
-| Action | SGE | Slurm |
-|--------|-----|-------|
-| Submit | `qsub script.sh` | `sbatch script.sh` |
-| Check jobs | `qstat -u $USER` | `squeue -u $USER` |
-| Job details | `qstat -j <JOB_ID>` | `scontrol show job <JOB_ID>` |
-| Cancel | `qdel <JOB_ID>` | `scancel <JOB_ID>` |
-| After completion | `qacct -j <JOB_ID>` | `sacct -j <JOB_ID>` |
-| Job ID variable | `$JOB_ID` | `$SLURM_JOB_ID` |
-
-### Resource recommendations
-
-#### Myriad
-
-**Recommended configuration:**
-```bash
-#$ -pe smp 12
-#$ -l mem=64G        # 64 GB per core = 768 GB total
-#$ -l tmpfs=500G
-#$ -l h_rt=48:00:00
-```
-
-With Duke:
-```bash
-./duke --threads $NSLOTS ...
-```
-
-**Run modes**
-
-Both modes run all seven modules (M1–M7). The difference is in what each module does:
-
-| Parameter | Full | Slim | Effect |
-|-----------|:----:|:----:|--------|
-| `trim` | TRUE | FALSE | Adapter trimming in M1 |
-| `check_duplicate_readnames` | TRUE | FALSE | Duplicate read QC in M1 |
-| `visualise_alignment` | TRUE | FALSE | Coverage/strand plots in M2 |
-| `cluster` | TRUE | FALSE | Allele clustering in M4 |
-| `cluster_consensus` | TRUE | FALSE | Consensus sequence generation in M4 |
-| `call_variants` | TRUE | FALSE | VCF variant calling in M4 |
-| `waterfall` | TRUE | FALSE | M5 waterfall plots |
-| `export_read_counts` | TRUE | FALSE | Per-sample read count export |
-
-In slim mode, M4 performs repeat length assignment only — allele clustering, consensus generation, and variant calling are all disabled. M5 runs but produces no output (`waterfall = FALSE` skips plot generation). Repeat histograms, scatter plots, density plots, and range analysis outputs (M6–M7) are identical between modes.
-
-Use full mode for first-pass analysis of new data, or whenever allele calls, consensus sequences, VCF output, or waterfall QC are needed. Use slim mode for rapid re-processing, parameter exploration, or when only repeat length distributions and instability metrics are required.
-
-**Benchmark results** (Myriad, 12 cores / 64 GB, v2.2.0):
-
-All timings are from complete fresh runs (all modules executed from scratch, no cached results re-used). v1.0 = January 2026; v2.2.0 = April 2026. Full and slim modes are defined in the table above. "—" = configuration not run for that dataset. csf timings are approximate, derived from a concurrent multi-job log.
-
-All datasets are PacBio Revio HiFi amplicons (~3 kb amplicon length), except yas_miseq which is Illumina MiSeq short-read (~150 bp amplicon).
-
-| Dataset | Samples | Total reads | Reads / sample | v1.0 full | v2.2.0 full | v2.2.0 slim | Change (full) |
-|---------|--------:|------------:|---------------:|----------:|------------:|------------:|:-------------:|
-| jasmine | 102 | ~2.9 M | ~28 k | 8.1 h | — | — | — |
-| yas | 77 ¹ | 3.6 M | ~46 k | 9.6 h | 5.3 h ³ | **5.0 h** | −45% |
-| jd | 131 | 4.4 M | ~34 k | — | 6.3 h | — | new dataset |
-| pg | 285 ¹ | 3.6 M | ~13 k | 9.4 h | 8.3 h | **5.9 h** | −12% |
-| csf | ~100 | ~4 M | ~40 k | — | ~17.5 h ² | ~3.9 h ² | new dataset |
-| fs | 310 | 10.6 M | ~34 k | 28–34 h | 27.6 h | — | ~same |
-| yas_miseq ⁴ | 25 | 2.8 M | ~112 k | — | 3.5–4.4 h ⁵ | — | new dataset |
-| rpt_series | 783 | 19.5 M | ~25 k | — | — | **28.0 h** ⁶ | new dataset |
-
-¹ Sample count differs slightly from v1.0 due to QC exclusions applied between runs.  
-² Timing approximate; two jobs ran concurrently and shared a log file.  
-³ Confirmed by independent replication (April 2026): 5.30 h.  
-⁴ Illumina MiSeq short-read data (~150 bp amplicon). All other datasets are PacBio Revio HiFi (~3 kb amplicon).  
-⁵ Two independent full runs of the same data gave 3:29 h and 4:23 h; difference likely reflects cluster load variation.  
-⁶ Slim mode only. This dataset exceeds the calibrated range of the runtime estimation formula (R > 10.6 M, N > 310); the formula should not be used for datasets of this size.
-
-**Key findings:**
-
-- **Total reads is the strongest runtime predictor.** Datasets under 5 M reads consistently finish in 3.5–9 h; the fs dataset at 10.6 M reads takes ~28 h regardless of pipeline version. Sample count is a secondary factor.
-- **v2.2.0 is materially faster for most datasets.** The yas dataset improved by 45%; pg by 12%. The fs dataset (highest read depth among PacBio runs) showed no meaningful change, consistent with it being I/O- and read-throughput-bound rather than compute-bound.
-- **Slim mode offers significant savings for larger sample counts.** The pg dataset (285 samples) went from 8.3 h to 5.9 h (−29%) with `--trim FALSE --waterfall FALSE`. Savings are smaller for low sample counts (yas: 5.3 → 5.0 h, −5%).
-- **Short-read amplicon data runs faster than long-read at equivalent read counts.** The yas_miseq dataset (25 samples, 2.8 M reads, ~150 bp amplicon) completed in 3.5–4.4 h full mode — consistent with the formula prediction of ~4.7 h, and faster than long-read datasets of similar total read count, likely due to reduced per-read alignment and repeat detection time.
-- **12 cores / 64 GB remains optimal.** More RAM per core does not improve performance for most datasets; more cores with less memory can cause failures on large datasets.
-- **The runtime formula does not extrapolate to very large datasets.** The rpt_series dataset (783 samples, 19.5 M reads) took 28.0 h in slim mode. Formula predictions at this scale (R > 10.6 M, N > 310) are unreliable; request 48 h wall time for datasets of this size.
-
-**Configurations to avoid:**
-```bash
-# Slower for most datasets
-#$ -pe smp 6
-#$ -l mem=128G
-
-# Can fail on large datasets
-#$ -pe smp 24
-#$ -l mem=32G
-```
-
-**Runtime estimation:**
-
-Use total reads (R, in millions) and sample count (N) to estimate v2.2.0 full-run time on Myriad at 12c / 64G:
-
-```
-Runtime_full (h)  ≈  8.94 − 2.68R + 0.377R² + 0.014N
-Runtime_slim (h)  ≈  Runtime_full × max(0.5,  1 − 0.001N)
-```
-
-Uncertainty is approximately ±25% within the calibrated range (N ≤ 310, R ≤ 10.6 M). **Do not use this formula for datasets outside this range** — predictions become unreliable above ~10 M reads or ~400 samples.
-
-**Quick reference:**
-
-| Total reads | ~100 samples | ~200 samples | ~300 samples |
-|-------------|:------------:|:------------:|:------------:|
-| 3–4 M | 5–6 h | 6–8 h | 7–9 h |
-| 5–7 M | 7–10 h | 9–12 h | 11–14 h |
-| 8–11 M | 15–22 h | 17–25 h | 20–28 h |
-| >11 M | 28–40 h ⁷ | 30–42 h ⁷ | 33–45 h ⁷ |
-
-⁷ Empirically anchored: rpt_series (783 samples, 19.5 M reads) took 28.0 h in slim mode. Formula estimates at this scale are unreliable; request 48 h wall time.
-
-For `h_rt`, add a 20% safety margin: if you estimate 10 h, request 12 h.
-
-#### Kathleen
-
-**Old Kathleen (SGE):**
-```bash
-#$ -pe mpi 80
-#$ -l mem=4G
-#$ -l h_rt=48:00:00
-# --threads $NSLOTS  (set automatically from scheduler)
-```
-
-**New Kathleen (Slurm):**
-```bash
-#SBATCH --nodes=2
-#SBATCH --ntasks=80
-#SBATCH --mem-per-cpu=4G
-#SBATCH --time=48:00:00
-# --threads $NSLOTS  (set automatically from scheduler)
-```
-
-**Memory workaround** (if 4 GB/core unavailable):
-```bash
-#$ -pe mpi 160
-#$ -l mem=2G         # 320 GB total
-# --threads 80  (not 160 — override required for memory workaround)
-```
-
-#### Resource summary
-
-Myriad runtimes are from v2.2.0 benchmarks (full mode, 12c / 64G). Slim mode (see run modes table above) reduces runtimes by ~5–30% depending on sample count. Kathleen runtimes are indicative estimates only — no benchmark data has been collected on Kathleen.
-
-| Dataset size | Samples | Cluster | Cores | Memory/core | tmpfs | Runtime (full) | Runtime (slim) |
-|--------------|--------:|---------|------:|------------:|------:|:--------------:|:--------------:|
-| Small | <100 | Myriad | 12 | 64 GB | 500 GB | 5–9 h | 4–8 h |
-| Medium | 100–300 | Myriad | 12 | 64 GB | 500 GB | 6–10 h | 5–8 h |
-| Large | 300–500 | Myriad | 12 | 64 GB | 500 GB | 15–35 h | 10–25 h |
-| Very large | 500–1000 | Kathleen | 80 | 4 GB | — | est. 16–24 h | — |
-| Massive | 1000+ | Kathleen | 80–160 | 4 GB | — | est. 24–48 h | — |
-
-> Runtime depends strongly on **total reads**, not sample count alone. Two datasets of 300 samples can differ by 3× in runtime if one has 3× the read depth. Use the estimation formula in the Myriad section above.
-
----
-
-## Run planning
-
-Empirical data from multiple PacBio Revio flow cells for HTT amplicon sequencing:
-
-| Samples per flow cell | Total reads | Reads per sample |
-|-----------------------|-------------|------------------|
-| 250 | ~7.2 million | ~28,700 |
-| 287 | ~8.7 million | ~30,200 |
-| 288 | ~7.5 million | ~26,200 |
-| 381 | ~8.5 million | ~22,400 |
-
-Each Revio flow cell yields approximately 7–9 million aligned reads. For most analyses, **>5,000 reads per sample** provides robust allele calling and instability metrics.
-
-| Project size | Flow cells | Expected reads/sample |
-|--------------|------------|----------------------|
-| ≤300 samples | 1 | ~25,000–30,000 |
-| 300–400 samples | 1 | ~20,000–25,000 |
-| >400 samples | Consider 2 | ~25,000+ |
+**Run time.** Module 3 is vectorised (seconds per sample) and Module 7 writes one card per sample instead of one plot per sample × range × plot type, so Modules 3 to 7 take minutes rather than hours. Module 2 (minimap2) and, when enabled, trimming and clustering dominate. On 2 cores, 14 PacBio samples of 2,500 reads run Modules 1 to 7 with clustering in about 3 minutes.
 
 ---
 
 ## Common workflows
 
-### Workflow 1: Discovery run (first time with new data)
+**First look at new data** – run without a settings file; Modules 1–5 and 7 run, and the Module 3 and 7 plots show where to put the ranges.
 
-Run without a settings file to explore the data. Use the repeat histograms in Module 3 and Module 7 to identify the allele distribution and define appropriate analysis ranges for Module 6.
+**Add or change the settings** – `./duke ... --path_settings new.xlsx --run_modules 6,7` (Modules 1–3 are reused).
 
-```bash
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/results \
-  --path_ref www/HTTset20.fasta \
-  --path_trim_patterns www/adapters.csv \
-  --run_modules 1,2,3,4,5,7 \
-  --threads 12
-```
+**CAG and CCG in one run** – `--path_ref www/HTTset20_cag_ccg.fasta --path_tracts www/tracts_example.csv --composites "CAG_CCG_sum=CAG+CCG:sum,CAG_CCG_span=CAG+CCG:span"`; add `analysis_ranges_CCG` to the settings for CCG ranges on the CCG scale.
 
-### Workflow 2: Full analysis with instability metrics
+**UMI run** – `--umi TRUE`, with `--umi_flank_5 / --umi_flank_3 / --umi_len_min / --umi_len_max` if your design differs from the default.
 
-```bash
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/results \
-  --path_ref www/HTTset20.fasta \
-  --path_trim_patterns www/adapters.csv \
-  --path_settings /path/to/settings.xlsx \
-  --threads 12
-```
+**Allele structure** – `--cluster TRUE` for clusters, consensus sequences and VCFs. Add `--cluster_by repeat,haplotype` to split each length cluster by flank haplotype: Duke finds the 15-mers that mark real SNPs and indels (present in 10–90% of reads, and in blocks that always occur together), scores each read on them and clusters the scores. It finds haplotypes carried by more than about 10–20% of reads, and reads that combine the two alleles' flank variants (PCR chimeras) come out as their own cluster.
 
-### Workflow 3: Quality control with read exclusions
-
-```bash
-# 1. Initial run
-./duke --dir_data /path/to/data --dir_out /path/to/results --path_ref www/HTTset20.fasta
-
-# 2. Review Module 2 alignment plots and Module 5 waterfall plots
-#    Identify problematic reads visually
-
-# 3. Extract read names
-samtools view sample_001.bam | cut -f1 | head
-
-# 4. Create exclusions file (see Input files section)
-
-# 5. Re-run from Module 2 with exclusions
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/results \
-  --path_ref www/HTTset20.fasta \
-  --path_manual_exclusions /path/to/exclusions.xlsx \
-  --run_modules 2,3,4,5,6,7
-```
-
-### Workflow 4: Longitudinal analysis
-
-Settings file with `group`, `time`, and `group_control_sample` columns:
-
-```csv
-file_name,group,time,group_control_sample,analysis_ranges,floor,max_peaks
-patient_A_t0.bam,patient_A,0,TRUE,[0-35][36-NA],[3][3],[2][1]
-patient_A_t6.bam,patient_A,6,FALSE,[0-35][36-NA],[3][3],[2][1]
-patient_A_t12.bam,patient_A,12,FALSE,[0-35][36-NA],[3][3],[2][1]
-```
-
-```bash
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/results \
-  --path_ref www/HTTset20.fasta \
-  --path_settings /path/to/settings.xlsx \
-  --control_sample_selection flagged
-```
-
-Module 6 outputs include timepoint progression, baseline comparisons, and instability metrics over time.
-
-### Workflow 5: Large dataset HPC run
-
-```bash
-# Edit paths in job script
-nano scripts/duke_myriad.sh
-
-# Submit
-qsub scripts/duke_myriad.sh
-
-# Monitor
-watch -n 5 'qstat -u $USER'
-tail -f logs/duke_*.out
-
-# Resume if job times out (resume = TRUE by default)
-qsub scripts/duke_myriad.sh
-```
-
-### Workflow 6: Re-run specific modules
-
-```bash
-# Update settings and re-run Module 6 only
-./duke --run_modules 6 --path_settings updated_settings.xlsx --resume TRUE ...
-
-# Re-run from Module 2 with updated exclusions
-./duke --run_modules 2,3,4,5,6,7 --path_manual_exclusions updated_exclusions.xlsx ...
-
-# Force re-run of a specific module by deleting its cached output
-rm result_duke/module_data/03_repeat_detection.RData
-./duke --run_modules 3,4,5,6,7 ...
-```
-
-### Workflow 7: Parameter optimisation
-
-```bash
-# Test with downsampling to iterate quickly
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/test_params \
-  --path_ref www/HTTset20.fasta \
-  --downsample 500 \
-  --rpt_max_mismatch 0 \
-  --threads 4
-
-# Adjust and re-run
-./duke \
-  --dir_data /path/to/data \
-  --dir_out /path/to/test_params_v2 \
-  --path_ref www/HTTset20.fasta \
-  --downsample 500 \
-  --rpt_max_mismatch 1 \
-  --rpt_max_gap 9 \
-  --threads 4
-```
+**Combine runs done separately in v2** – no longer needed: one run with a tracts table joins the tracts by read name.
 
 ---
 
 ## Troubleshooting
 
-**"Error: --path_ref is required"**
-```bash
-./duke --path_ref /path/to/reference.fasta ...
-# Or use the demo: ./duke --path_ref www/HTTset20.fasta ...
-```
-
-**"duke: command not found"**
-```bash
-chmod +x duke
-cd ~/Scratch/bin/duke
-./duke --help
-```
-
-**"Error: there is no package called 'openxlsx'"**
-```bash
-export R_LIBS_USER=~/R/library
-# Or install — see Installation section
-```
-
-**"scripts/duke_cli.R not found"**
-```bash
-head duke    # Should show: Rscript "$SCRIPT_DIR/scripts/duke_cli.R" "$@"
-# Run from the duke root directory
-```
-
-**"Settings file not found" or Module 6 fails without settings**
-```bash
-# Skip Module 6
-./duke --run_modules 1,2,3,4,5,7 ...
-
-# Or create a settings file and provide it
-./duke --path_settings my_settings.xlsx ...
-```
-
-**"Cannot parse analysis_ranges" or "Bracketed parameter error"**
-
-Format must be `[value1][value2]` with no spaces between brackets. Use `NA` for unbounded upper limits. All bracketed columns must have the same number of values per row.
-
-```
-✅  [0-35][36-NA]
-❌  [0-35] [36-NA]    (space between brackets)
-❌  [0-35,36-NA]      (comma instead of ][)
-❌  [0-35][36-100]    (should be [36-NA] for unbounded)
-```
-
-**"Mismatch in bracketed parameter lengths"**
-
-```
-✅  analysis_ranges: [0-35][36-NA]   floor: [3][3]   max_peaks: [2][1]
-❌  analysis_ranges: [0-35][36-NA]   floor: [3]       max_peaks: [2][1]
-```
-
-**"file_name not found" in settings file**
-```bash
-ls -1 /path/to/data    # Check exact filenames including extension
-# file_name must match exactly, e.g. sample_001.bam (not sample_001)
-```
-
-**Manual exclusions not working**
-```bash
-samtools view input.bam | cut -f1 | head -5    # Get exact read names
-# file_name: use base name without extension (sample_001, not sample_001.bam)
-# Excel sheet must be named "Exclusions" (case-sensitive)
-# Check Module 2 output for: "Alignments excluded: X"
-```
-
-**Job stuck at Module 4 (very slow)**
-
-Insufficient memory. Use at least 4 GB/core, 8 GB recommended:
-```bash
-#$ -l mem=8G
-```
-
-**"Cannot allocate memory" (Kathleen)**
-```bash
-# Request double cores, use half for processing
-#$ -pe mpi 160
-#$ -l mem=2G
-# --threads $NSLOTS  (set automatically from scheduler)
-```
-
-**"Error: cannot open the connection" when running Rmd**
-```bash
-# Verify scripts have the knit_root_dir fix (v2.1.0+)
-grep "knit_root_dir" scripts/duke_run.R    # Should return a line
-```
+- **"Reference must contain exactly one N block"** – mask the repeat with one run of N; for separate tracts use separate references in the tracts table.
+- **A tract is detected in few reads** (Module 3 detection plot) – check the motif and that the N block covers the tract; lower `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` for very interrupted tracts.
+- **Few UMIs extracted** – the Module 4 outcome plot says which flank is missing; check the flank sequences and orientation, and `umi_search_window`.
+- **Module 6 skipped** – no settings file, or no file names in it match the data (`missing` samples are listed in the report).
+- **Results did not change after updating Duke** – resume reused old modules; delete `module_data/`.
+- **"umi_min_reads must exceed umi_top_cluster_k"** – with exactly k reads `top_cluster` returns their median; raise `umi_min_reads` or change the statistic.
 
 ---
 
-## Version history
+## Changes from v2.3.1
 
-### v2.3.1 (May 2026) — Current
+**New**
+- Several tracts in one run (any number), on one shared reference or separate references, with the sequence between adjacent tracts reported per read, `sum` and `span` composite measures, per-tract metrics, and tract-against-tract plots and correlations.
+- Optional UMI module (Module 4): flank-based extraction with user-set flanks (default M13-F / ciosiF+1), directional clustering, allele-aware splitting of mixed families, `top_cluster` collapse; every Module 6 and 7 result for reads and for molecules.
+- Modal, median and mean length by every counting method (Module 3 and `count_methods` in Module 6).
+- Read accounting from input to analysed reads (Module 2), carried onto every sample card.
+- Sample cards: one figure per sample with every measure; cohort heatmaps; timecourses by group for the headline metrics.
+- `--dry_run`; `./duke --help` grouped by module; logs per run with the resolved parameters and tracts.
 
-Cross-cutting plot and clarity refinements following the v2.3.0 PacBio HiFi run review, plus a clustering bugfix.
+**Changed**
+- Counts are pure units with a 30 bp search pad beyond the flank boundaries: LOI alleles are no longer under-counted by 1. Expect +1 in most LOI reads and in about 1% of standard-allele reads (reads with a sequencing error that turns CAA into CAG).
+- `expansion_index` and `contraction_index` are now the sums of positive and negative changes divided by n, so they add up to II; the v2 quantities are now `mean_expansion_size` and `mean_contraction_size`. `prop_above_k` / `prop_below_k` added.
+- Manual control lengths are opt-in (`use_manual_controls`); in v2 they were applied whenever present.
+- Defaults: `trim`, `check_duplicate_readnames` and `cluster` now FALSE. `na_repeat_handling` is now `keep`: reads that span both flanks but have no tract count against the detection rate but get no length, instead of a length of 0 that fell into ranges starting at 0 or NA (`convert_to_zero` restores v2).
+- Resume refuses to run a module on upstream results made with other parameters (it names the module to add to `run_modules`), and adding or replacing input files re-runs Module 1.
+- Modules reorganised: 4 (allele calling) and 5 (waterfalls) are now Module 5 (allele structure); Module 6 is instability; all repeat-length figures are in Module 7.
+- Module 3 is vectorised (15 s against several minutes on the test set); Module 7 writes about one figure per sample instead of ~18,000 PNGs.
+- Resume uses parameter hashes per module, so a changed parameter re-runs exactly the modules it affects.
 
-**Module 1 — Import and QC (clarity)**
-- 📝 PacBio HiFi section heading cleanup: dropped redundant `(np)` / `(rq)` parentheticals from subsection headings since the aux tags are defined once at the section top. Headings now read `Pass count distribution`, `Read quality distribution`, `Pass count vs read length`, etc. First prose mention under each heading uses the `Pass count (np)` convention
+**Fixed after the first v3 build**
+- Haplotype clustering compared the full ~2.5 kb flanks of every pair of reads by edit distance (as in v2), which takes hours per sample. It now uses variant k-mers: 14 PacBio samples in 1 min 20 s, and 20,000 reads in under 10 s. Tested with planted variants: haplotypes in 20–50% of reads are found with 98–100% accuracy, and on real data the haplotype split matches the CAG allele in 87–99% of reads.
+- BAMs are read with samtools instead of Rsamtools, so the "[samopen] no @SQ lines in the header" notice no longer appears for every PacBio BAM. The reads, qualities and PacBio tags are identical.
+- The reports no longer load MathJax, which removes pandoc's `--mathjax` warning.
 
-**Module 2 — Alignment**
-- ✨ Segment lengths plot redesigned: all five segments (`pre`, `left`, `mid`, `right`, `post`) on a single x-axis in order, y-axis = per-sample median segment length, boxplot + jittered sample points + red mean diamond, with mean values labelled above each diamond (rotated 45°). Replaces the previous mid-only plot. Output PNG renamed `repeat_segment_length.png` → `segment_lengths.png`
-
-**Module 3 — Repeat detection**
-- 📝 Rewrote the unclear "Module 3 repeat tract repositioning" sentence in the Flank length QC section to state plainly what determines flank lengths
-- 📝 Added explanatory paragraph covering all four flank-QC plots (distributions, sweep, filter effect, count method comparison)
-- ✨ Count method comparison plot reframed as *"hypothetical filter outcomes"* — title and subtitle now make explicit that the series show *what would happen if each filter were applied*, not the currently-applied state
-- ✨ Repeat count distribution heatmap now in **dataset order** (not median order); subtitle and x-axis label updated; `heatmap_sample_index` lookup in `repeat_detection.xlsx` re-ordered to match
-- ✨ Ridge plot uses a single fill colour (`#619CFF`) instead of `fill = file_stem` — scales to cohorts of any size without exhausting colour palettes
-
-**Module 4 — Allele calling**
-- 🐛 R (`repeat_cluster`) and H (`haplotype_cluster`) columns now populated when clustering by a single dimension. Previously both columns were `NA_character_` for `cluster_by = "repeat"` or `cluster_by = "haplotype"`. Now `repeat_cluster = as.character(cluster_number)` for repeat-only, and `haplotype_cluster = as.character(cluster_number)` for haplotype-only. The `"both"` strategy behaviour is unchanged. R and H reflect original (pre-renumbering) cluster IDs, matching the `"both"` strategy convention
-
-**Module 6 — Range analysis (interpretation)**
-- 📝 New markdown section above the modal-vs-mean plot explains how to read per-sample skew (point position relative to identity line) and the three lm-fit patterns: slope ≈ 1 with intercept ≈ 0 (symmetric distributions, typical of narrow ranges); slope ≈ 1 with intercept > 0 (uniform right-skew across the cohort); slope < 1 with intercept > 0 (skew direction flips with mode — the signature of open-ended ranges capturing both the inherited and the expanded alleles). Plot chunk split to accommodate the prose
-
-**Module 6 — Range analysis (optional group/time plots)**
-- ✨ **NEW:** `cohort_plot_by` controls which dimensions the Module 6 cohort plots (experiment map + density ridges) use: `c("group", "time")`, `c("group")`, `c("time")`, or `character(0)`. The requested dimensions are intersected with the columns actually present in the settings file, with a note logged when intent and availability disagree. CLI flag `--cohort_plot_by` (comma-separated)
-- 🐛 **FIXED:** `group` and `time` are now genuinely optional for the cohort plots. Previously a blank `time` column emptied the density-plot data frame (hard `!is.na(time)` filter) and produced no ridge plots at all, and individual blank cells in either column silently dropped those samples. Now missing values are handled gracefully — blank `group` → `"ungrouped"`; blank `time` → labelled `(t=)` and ordered after timed samples by name. The cohort density plots are written to a fixed folder, `10_density_cohort` (the dimensions plotted are conveyed by each plot's title/subtitle and file names)
-- 🐛 **FIXED:** Omitting any optional settings column (`group`, `time`, `group_control_sample`, `exclude`) no longer errors. These columns are now created as all-NA when absent immediately after the settings file is loaded, so any combination of required-only / partial settings files runs cleanly. NA is the correct default in every case (no group/time, no flagged controls, nothing excluded). Previously the columns were referenced unconditionally and a missing one aborted Module 6
-- 🐛 **FIXED:** `control_sample_selection = "earliest"` now guards on time availability and coerces `time` numerically before taking the per-group minimum (previously it could do a lexicographic `min()` or drop a group's controls silently when time was blank); group controls skip with an explicit message when no group is present
-- 🧹 **TIDY:** Removed dead `sample_group` lookup in Module 7's per-sample density block (computed but never used; the plot fill is a fixed colour)
-- ✨ **NEW:** `--keep_bam` (Module 2, default FALSE) retains the sorted+indexed alignment BAMs (one per sample × reference) in `<dir_out>/02_alignment/bam/` for IGV inspection, instead of deleting them after they are read into R. The BAMs are written outside `temp/`, so they are independent of `--remove_temp`/`--remove_intermediate`; failed-alignment BAMs are still cleaned up, and it takes effect only when alignment actually runs (not on a resumed cache hit)
-- 🐛 **FIXED (Module 4):** Two-step clustering (`--cluster_by repeat,haplotype`) aborted the clustering chunk with "the condition has length > 1". The clustering function supported the length-2 vector, but the Module 4 chunk still used scalar guards (`%in% c("haplotype","both")`, `== "repeat"`); these are now vector-safe. Valid values are `repeat`, `haplotype`, `repeat,haplotype`, or `none` — the literal word "both" is not accepted
-- 🔧 **CHANGED:** Module 3's per-read output directory renamed `read_counts/` → `read_repeat_counts/`, since the files hold the repeat count per read (not a count of reads) and the old name collided with the `read_counts` sheet in `range_analysis.xlsx`
-- 🔧 **CHANGED (Module 4):** `variant.xlsx` `summary` columns renamed `deletion`/`insertion`/`mismatch` → `deletion_bases`/`insertion_bases`/`mismatch_bases` to make explicit that they are per-base counts (one row per differing consensus position). `consensus.xlsx`, and both `variant.xlsx` tabs (`summary`, `all_variants`), now also carry `repeat_cluster` and `haplotype_cluster`, so a consensus/variant row identifies its allele without joining back to `cluster_summary`
-- ✨ **NEW:** The `instability_metrics` sheet now carries the per-sample metadata columns `group_control_sample`, `time` and `exclude` (joined from `distribution_summary`; `group` was already present), grouped at the front of the sheet. This makes it self-sufficient for longitudinal (instability vs `time`) and group-level analysis and for filtering controls / excluded samples, without joining back to `distribution_summary` or the settings file
-
-### v2.3.0 (May 2026)
-- ✨ **NEW:** PacBio HiFi auto-detection in Module 1 — per-sample, keyed by file_stem; checks the `np:i:` tag on the first record of each BAM and falls back to `@PG PN=ccs/skera/lima` header lines (case-insensitive). Mixed cohorts handled correctly
-- ✨ **NEW:** `extract_pacbio_metadata()` helper in `01_import.R` — single-pass extraction of per-read aux tags (`np`, `rq`, `ec`, `zm`, `bq`) into a tidy data.frame
-- ✨ **NEW:** PacBio HiFi metrics section in Module 1 with three new diagnostic plots — pass count (`np`) distribution, read quality (`rq`) distribution, and np-vs-length scatter; per-sample summary table exported to `qc.xlsx`. Section auto-skipped on non-PacBio cohorts
-- ✨ **NEW:** Three new `module1_output` slots appended — `is_pacbio` (named logical vector), `read_metadata` (per-read aux tags, PacBio samples only), and `pacbio_summary` (per-sample np/rq summary). Existing 7 slots unchanged in name, order, and content
-- ✨ **NEW:** `--np_min` flag drops PacBio HiFi reads with `np < N` (default: NULL = no filter). Applies only to detected PacBio samples; FASTQ, FASTA, and non-PacBio BAMs are unaffected. Subsets `seq[[file_stem]]` and `read_metadata[[file_stem]]` together so all downstream modules see consistent reads
-- ✨ **NEW:** `--pacbio_scatter_downsample` controls the np-vs-length scatter render cap (default 50,000; NA = plot all). Consistent with `--waterfall_downsample` and `--visualise_alignment_downsample`. The lm fit + R² are computed on the rendered subset
-- ✨ **NEW:** `qc_summary$mean_np / median_np / sd_np / mean_rq / median_rq / sd_rq` columns populated for PacBio samples (NA elsewhere)
-- ✅ **COMPATIBILITY:** Fully backward-compatible for non-PacBio inputs. `detect_pacbio()` returns FALSE for FASTQ/FASTA/non-PacBio BAM, and the cost is a one-record scan per BAM. PacBio metadata cache (`01_pacbio_metadata.RData`) is independent of existing caches
-
-### v2.2.0 (April 2026)
-- ✨ **NEW:** Module diagnostics in every HTML report — timing table (all 7 modules) and output manifest (modules 1–4, 6); both exported to each module's Excel file
-- ✨ **NEW:** `export_read_counts` — per-read repeat counts exported to `{sample}.tsv.gz` (default TRUE)
-- ✨ **NEW:** `check_duplicate_readnames` parameter (Module 1; default TRUE)
-- ✨ **NEW:** Flank length QC filtering — `rm_flank_length_outliers`, `flank_iqr_multiplier` (Module 3)
-- ✨ **NEW:** Plot output control — `plot_dpi`, `plot_per_sample` (Modules 2, 3, 4)
-- ✨ **NEW:** `format_size()`, `format_elapsed()`, `build_timing_table()` helpers in `00_utils.R`
-- ✨ **NEW:** Provenance columns in Module 6 xlsx — `control_aggregation_used` in `group_controls` and `range_summary` sheets, and `setpoint_aggregation` in `instability_metrics` (`NA` for `sample_relative` rows)
-- 🐛 **FIXED:** Modules 5 and 7 no longer have spurious resume checks
-- 🐛 **FIXED:** Manifest in-memory sizes now use adaptive units (B/KB/MB/GB)
-- 🐛 **FIXED:** Summary section crash when running partial module sets
-- 🐛 **FIXED:** Reference N-masking now case-insensitive (`NNNNN` or `nnnnn`)
-- 🐛 **FIXED:** Clustering early-exit return type inconsistency
-- 🐛 **FIXED:** GMM connection leak in Module 4 clustering
-- 🐛 **FIXED:** `control_aggregation_method` in Module 6 is now honoured — previously the flag was documented and echoed at startup but the underlying aggregation across control samples was hardcoded to `mean()` regardless of the setting. Default (`"median"`) runs therefore produced `mean`-aggregated setpoints. Results including `control_setpoint`, all `control_relative` instability metrics, and plot 09 (`11_control_setpoints.png`) will change on re-run if `control_aggregation_method != "mean"`
-- 🔧 **REMOVED:** `log_dir`, `verbose`, `waterfall_per_sample`, `repeat_histogram_per_sample`, `repeat_scatter_per_sample`
-- 🔧 **UPDATED:** `consensus_downsample` default 200 → 50; `waterfall_per_cluster` default TRUE → FALSE
-- 📄 **STREAMLINED:** HPC job scripts; README restructured for new users
-
-### v2.1.0 (January 2026)
-- 🐛 **FIXED:** `knit_root_dir` handling for Rmd files in subdirectories
-- 📚 **ENHANCED:** Comprehensive reorganisation documentation
-- 📊 **ADDED:** Job monitoring commands in README
-- 📖 **IMPROVED:** Complete input file format documentation
-- 🎯 **ADDED:** Demo reference (HTTset20.fasta) and adapters (adapters.csv)
-- 📋 **ADDED:** Common workflows section
-
-### v2.0.1 (January 2025)
-- ✨ **NEW:** Command-line interface
-- ✅ **NEW:** `trim` parameter (optional adapter trimming)
-- 🔧 **RENAMED:** `visualise_alignment_downsample` (was: `_n_reads`)
-- 🐛 **FIXED:** CLI resume detection; resume default now TRUE
-- 📦 **ORGANISED:** Library files with module prefixes (00–07)
-
-### v2.0.0
-- Modular architecture (7 modules)
-- Resume capability
-- Cleanup options
+**Removed**
+- Per-sample × per-range histogram, scatter and density PNGs (replaced by the sample cards and heatmaps). Parameters for them are ignored with a message.
 
 ---
 
-## Citation
-
-If you use the Duke pipeline in your research, please cite:
+## Citation and contact
 
 Hölbling, B.V. et al. A multimodal screening platform for endogenous dipeptide repeat proteins in C9orf72 patient iPSC-neurons. *Cell Reports* (2025). https://www.sciencedirect.com/science/article/pii/S2211124725004668
 
----
-
-## Contact
-
-**Michael Flower**  
-Senior Clinical Research Fellow  
-UCL Queen Square Institute of Neurology, London, UK
-
-- Email: michael.flower@ucl.ac.uk
-- UCL Profile: https://profiles.ucl.ac.uk/45681-michael-flower
-- ORCID: https://orcid.org/0000-0001-5568-6239
-- GitHub: https://github.com/mike-flower/duke
-- Issues: https://github.com/mike-flower/duke/issues
+Michael Flower, UCL Queen Square Institute of Neurology – michael.flower@ucl.ac.uk – https://github.com/mike-flower/duke

@@ -1,0 +1,250 @@
+---
+title: "Duke"
+subtitle: "Module 4: UMI"
+author: "Michael Flower"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: false
+    code_folding: hide
+    df_print: paged
+    mathjax: null
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6)
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 4: UMI";</script>')
+```
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(data.table); library(ggplot2); library(scales); library(DT)
+})
+source("lib/load_all.R")
+module_start <- proc.time()["elapsed"]; timings <- c()
+umi_dir <- file.path(params$dir_out, "04_umi"); plots_dir <- file.path(umi_dir, "plots")
+dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+xlsx_path <- file.path(umi_dir, "umi.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
+```
+
+# Overview
+
+**Module 4: UMI**
+
+Every read in a UMI family descends from one original DNA molecule with one true repeat length, so the spread of lengths within a family is PCR slippage plus sequencing error. This module turns reads into molecules:
+
+1. The UMI is the sequence between `r params$umi_flank_5` (5') and `r params$umi_flank_3` (3'), located on the strand-corrected read with up to `r params$umi_flank_max_mismatch` edits (an exact match is used where there is one), and must be `r params$umi_len_min`–`r params$umi_len_max` bases long
+2. UMIs are clustered per sample with the directional rule at edit distance `r params$umi_cluster_max_dist`: a UMI joins a neighbour that has at least twice its reads (minus one)
+3. Each read is assigned to an allele by splitting the primary measure's (`r params$tracts_table$tract[1]`) read distribution at the valley between the alleles; a family with at least two reads on each allele is `r ifelse(params$umi_split_mixed, "split into two molecules", "kept as one molecule and flagged")`
+4. Molecules with fewer than `r params$umi_min_reads` reads are dropped, and every measure is collapsed to one length per molecule with **`r params$umi_collapse_stat`**`r if (params$umi_collapse_stat == "top_cluster") sprintf(" (the median of the highest window of half-width %g + %g × length holding at least %d reads)", params$umi_top_cluster_w, params$umi_top_cluster_wfrac, params$umi_top_cluster_k) else ""`
+
+Modules 6 and 7 then report every result twice: per read and per molecule.
+
+**Outputs:**
+
+- `04_umi/umi.xlsx` – extraction, clustering and molecule summaries per sample
+- `04_umi/molecules/{sample}.tsv.gz` – one row per molecule with its length for every measure
+- `module_data/04_umi.RData` – read-to-molecule map and molecule lengths
+
+---
+
+# UMI extraction
+
+```{r extract}
+.t <- proc.time()["elapsed"]
+safe_load_module(file.path(params$dir_out, "module_data", "02_alignment.RData"), 2)
+safe_load_module(file.path(params$dir_out, "module_data", "03_repeat_detection.RData"), 3)
+primary <- module3_output$primary
+ref1 <- names(module2_output$refs)[1]
+aln <- module2_output$alignments[[ref1]][, .(file_stem, qname, query_sequence)]
+rm(module2_output); invisible(gc())
+per_sample <- split(aln, aln$file_stem)
+extracted <- apply_fn(names(per_sample), function(s) {
+  a <- per_sample[[s]]
+  cbind(a[, .(file_stem, qname)], extract_umis(a$query_sequence, params$umi_flank_5, params$umi_flank_3,
+                                                params$umi_flank_max_mismatch, params$umi_search_window,
+                                                params$umi_len_min, params$umi_len_max))
+})
+umi_reads <- rbindlist(extracted); rm(extracted, per_sample, aln)
+timings["Extraction"] <- proc.time()["elapsed"] - .t
+outcome <- umi_reads[, .N, by = .(file_stem, umi_outcome)][, prop := N / sum(N), by = file_stem]
+cat(sprintf("UMI extracted from %s of %s reads (%.1f%%).", comma(sum(umi_reads$umi_outcome == "UMI extracted")),
+            comma(nrow(umi_reads)), 100 * mean(umi_reads$umi_outcome == "UMI extracted")))
+```
+
+## Extraction outcome
+
+Each point is one sample: the share of its reads in each outcome. **No 5' flank** usually means the read was trimmed or truncated before the UMI (check that demultiplexing leaves the 5' flank in the read); **wrong length** UMIs are mostly synthesis or sequencing indels.
+
+```{r outcome_plot, fig.height=5}
+outcome[, umi_outcome := factor(umi_outcome, levels = c("UMI extracted", "UMI wrong length or contains N", "no 3' flank", "flanks overlap", "no 5' flank"))]
+p_out <- ggplot(outcome, aes(umi_outcome, prop)) + box_points_mean(digits = 3) + coord_flip() +
+  scale_y_continuous(labels = pct_axis()) + labs(x = NULL, y = "Reads in the sample", title = "UMI extraction outcome, per sample") + theme_bw()
+print(p_out); save_plot(p_out, file.path(plots_dir, "extraction_outcome.png"), 9, 5)
+```
+
+## UMI length
+
+Lengths of every UMI found between the flanks, before the length filter (dashed lines: accepted range). The designed length should dominate; a shoulder one base either side is indels.
+
+```{r umi_length, fig.height=4.5}
+lens <- umi_reads[!is.na(umi_length), .N, by = umi_length]
+p_len <- ggplot(lens, aes(umi_length, N)) + geom_col(fill = "#377eb8") +
+  geom_vline(xintercept = c(params$umi_len_min - 0.5, params$umi_len_max + 0.5), linetype = "dashed") +
+  geom_text(aes(label = percent(N / sum(N), 0.1)), vjust = -0.4, size = 3) +
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.1))) +
+  labs(x = "UMI length (bases)", y = "Reads", title = "UMI length, all samples") + theme_bw()
+print(p_len); save_plot(p_len, file.path(plots_dir, "umi_length.png"), 8, 4.5)
+```
+
+---
+
+# Molecules
+
+```{r molecules}
+.t <- proc.time()["elapsed"]
+lengths <- module3_output$lengths
+prim <- lengths[measure == primary, .(file_stem, qname, primary = length)]
+umi_reads <- prim[umi_reads, on = .(file_stem, qname)]
+by_s <- split(umi_reads[!is.na(umi) & !is.na(primary)], by = "file_stem")
+len_s <- split(lengths, by = "file_stem")
+mols <- apply_fn(names(by_s), function(s) form_molecules(s, by_s[[s]], len_s[[s]][, .(qname, measure, length)], params))
+read_map <- rbindlist(lapply(mols, `[[`, "reads"))
+molecules <- rbindlist(lapply(mols, `[[`, "molecules"))
+molecule_lengths <- rbindlist(lapply(mols, `[[`, "molecule_lengths"))
+clustering <- rbindlist(lapply(mols, `[[`, "clustering"))
+rm(mols, by_s, len_s)
+umi_reads <- read_map[, .(file_stem, qname, umi_group, read_allele, molecule_id)][umi_reads, on = .(file_stem, qname)]
+timings["Clustering and collapse"] <- proc.time()["elapsed"] - .t
+summary_tab <- molecules[, .(molecules = .N, kept = sum(kept), mixed_families = sum(mixed_umi),
+                             reads_in_kept = sum(n_reads[kept]), median_reads_per_kept = as.numeric(median(n_reads[kept]))), by = file_stem]
+summary_tab <- clustering[, .(file_stem, n_reads_with_umi, distinct_umis, umi_groups, umis_with_neighbour, expected_by_chance, valley, allele_centres)][summary_tab, on = "file_stem"]
+dt_full(summary_tab, caption = "UMI clustering and molecules per sample", digits = 2)
+```
+
+## Reads per molecule
+
+How many reads each molecule (UMI family, after clustering) received, pooled across samples, on a log scale. The dashed line is the minimum kept (`umi_min_reads` = `r params$umi_min_reads`). Many single-read families mean the run was too shallow for the number of tagged molecules, or that UMIs carrying errors were not merged.
+
+```{r family_size, fig.height=4.5}
+fs <- molecules[, .N, by = n_reads]
+p_fam <- ggplot(fs, aes(n_reads, N)) + geom_col(fill = "#377eb8") + geom_vline(xintercept = params$umi_min_reads - 0.5, linetype = "dashed") +
+  scale_x_log10(breaks = c(1, 2, 3, 5, 10, 20, 50, 100, 200, 500)) + scale_y_continuous(labels = comma) +
+  labs(x = "Reads in the molecule (log scale)", y = "Molecules", title = "Reads per molecule, all samples",
+       subtitle = sprintf("%s molecules, %s kept (%.1f%%)", comma(nrow(molecules)), comma(sum(molecules$kept)), 100 * mean(molecules$kept))) + theme_bw()
+print(p_fam); save_plot(p_fam, file.path(plots_dir, "reads_per_molecule.png"), 8, 4.5)
+```
+
+## UMI neighbours against chance
+
+Each point is one sample. The x-axis is the number of distinct UMIs expected to have another UMI within `r max(1, params$umi_cluster_max_dist)` substitution(s) purely by chance, for that many random barcodes of that length; the y-axis is how many actually had one. Points far above the line are UMIs carrying sequencing errors, which clustering merges back into their parent; points near the line mean little to merge.
+
+```{r neighbours, fig.height=5}
+p_nb <- ggplot(clustering, aes(expected_by_chance, umis_with_neighbour)) + geom_abline(linetype = "dashed", colour = "grey50") +
+  geom_point(colour = "#377eb8", size = 2.5) + scale_x_continuous(labels = comma) + scale_y_continuous(labels = comma) +
+  labs(x = "UMIs expected to have a neighbour by chance", y = "UMIs observed with a neighbour", title = "UMI neighbours: observed against chance") + theme_bw()
+print(p_nb); save_plot(p_nb, file.path(plots_dir, "umi_neighbours.png"), 7, 5)
+```
+
+## Reads and molecules per sample
+
+Reads with a UMI (grey) and molecules kept (teal) per sample, on a log scale. The ratio is the mean family depth.
+
+```{r reads_molecules, fig.height=5}
+rm_tab <- summary_tab[, .(file_stem, Reads = reads_in_kept, Molecules = kept)] %>% pivot_longer(-file_stem)
+ord <- summary_tab[order(kept), file_stem]
+p_rm <- ggplot(rm_tab, aes(factor(file_stem, levels = ord), value, colour = name)) + geom_point(size = 2) +
+  scale_colour_manual(values = c(Reads = "grey55", Molecules = "#00838f"), name = NULL) + scale_y_log10(labels = comma) +
+  labs(x = "Samples, ordered by molecules kept", y = "Count (log scale)", title = "Reads in kept molecules, and molecules, per sample") +
+  theme_bw() + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+print(p_rm); save_plot(p_rm, file.path(plots_dir, "reads_and_molecules.png"), 10, 5)
+```
+
+---
+
+# What collapsing removes
+
+## Read error within molecules
+
+For every read in a kept molecule: its `r primary` length minus its molecule's collapsed length, pooled across samples and split by allele. The spread of this distribution is the error that collapsing removes; its asymmetry is the direction of that error (PCR slippage favours contraction, so the left tail is usually longer).
+
+```{r within_error, fig.height=5}
+ml_p <- molecule_lengths[measure == primary, .(molecule_id, molecule_length = length)]
+we <- umi_reads[!is.na(molecule_id), .(molecule_id, primary)][ml_p, on = "molecule_id", nomatch = NULL]
+we <- molecules[, .(molecule_id, allele)][we, on = "molecule_id"]
+we[, dev := primary - molecule_length]
+we_sum <- we[, .(reads = .N, below = mean(dev < -0.5), exact = mean(abs(dev) <= 0.5), above = mean(dev > 0.5), sd = sd(dev)), by = allele]
+p_we <- ggplot(we[abs(dev) <= 30], aes(dev)) + geom_histogram(binwidth = 1, fill = "#00838f") +
+  facet_wrap(~ allele, scales = "free_y", ncol = 1, labeller = labeller(allele = function(a) paste("Allele:", a))) +
+  geom_vline(xintercept = 0, linetype = "dashed") + scale_y_continuous(labels = comma) +
+  labs(x = sprintf("Read length minus its molecule's length (%s units; within +/-30 shown)", primary), y = "Reads",
+       title = "Within-molecule read error") + theme_bw()
+print(p_we); save_plot(p_we, file.path(plots_dir, "within_molecule_error.png"), 9, 6)
+dt_compact(we_sum, caption = "Within-molecule read error by allele (below / exact / above the molecule's length)", digits = 3)
+```
+
+## Read and molecule distributions
+
+For each sample, the `r primary` length distribution of its reads (grey) and of its molecules (teal), each scaled to its own total. Collapsing should narrow each allele's peak and remove the stutter shoulder below it. Up to 12 samples are shown here; every sample is in `plots/reads_vs_molecules/`.
+
+```{r dist_compare, fig.height=8}
+dc <- rbind(lengths[measure == primary, .(file_stem, unit = "Reads", length)],
+            molecule_lengths[measure == primary, .(file_stem, unit = "Molecules", length)])
+dc <- dc[, .N, by = .(file_stem, unit, length)][, prop := N / sum(N), by = .(file_stem, unit)]
+draw_dc <- function(d, title) ggplot(d, aes(length, prop, colour = unit)) + geom_step(direction = "mid") +
+  scale_colour_manual(values = c(Reads = "grey55", Molecules = "#00838f"), name = NULL) +
+  scale_y_continuous(labels = pct_axis(0.1)) + labs(x = paste(primary, "length"), y = "Share of reads or molecules", title = title) + theme_bw()
+show <- head(unique(dc$file_stem), 12)
+p_dc <- draw_dc(dc[file_stem %in% show], "Repeat length: reads against molecules") + facet_wrap(~ file_stem, scales = "free", ncol = 3) +
+  theme(strip.text = element_text(size = 7))
+print(p_dc); save_plot(p_dc, file.path(plots_dir, "reads_vs_molecules.png"), 12, 9)
+if (params$plot_per_sample) for (s in unique(dc$file_stem))
+  save_plot(draw_dc(dc[file_stem == s], s), file.path(plots_dir, "reads_vs_molecules", paste0(s, ".png")), 9, 4.5)
+```
+
+---
+
+# Save output
+
+```{r save}
+mol_dir <- file.path(umi_dir, "molecules"); dir.create(mol_dir, showWarnings = FALSE)
+wide <- dcast(molecule_lengths, file_stem + molecule_id ~ measure, value.var = "length")
+wide <- molecules[kept == TRUE, .(file_stem, molecule_id, umi, allele, n_reads, mixed_umi, allele_agreement)][wide, on = .(file_stem, molecule_id)]
+for (s in unique(wide$file_stem)) fwrite(wide[file_stem == s], file.path(mol_dir, paste0(s, ".tsv.gz")), sep = "\t")
+module4_output <- list(umi_reads = umi_reads, molecules = molecules, molecule_lengths = molecule_lengths,
+                       clustering = clustering, summary = summary_tab, hash = params$module_hash)
+output_path <- file.path(params$dir_out, "module_data", "04_umi.RData")
+save(module4_output, file = output_path)
+write_excel_function(list(summary = summary_tab, extraction = dcast(outcome, file_stem ~ umi_outcome, value.var = "N", fill = 0),
+                          within_molecule_error = we_sum), xlsx_path)
+```
+
+**`r comma(sum(molecules$kept))`** molecules kept across **`r uniqueN(molecules$file_stem)`** samples.
+
+---
+
+# Diagnostics
+
+```{r diagnostics}
+timing_df <- build_timing_table(timings)
+manifest <- build_manifest(module4_output, c(
+  umi_reads = "One row per read: UMI, extraction outcome, UMI group, read allele, molecule",
+  molecules = "One row per molecule: UMI, allele, reads, mixed flag, kept flag",
+  molecule_lengths = "Long table (molecule_id, measure, length) of collapsed lengths for kept molecules",
+  clustering = "Per-sample clustering summary", summary = "Per-sample molecule summary", hash = "Parameter hash used for resume"))
+write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)
+dt_compact(timing_df, caption = "Section timing")
+dt_compact(manifest, caption = sprintf("module4_output – %s on disk", format_size(file.size(output_path))))
+```
+
+# Session info
+
+```{r session_info}
+sessionInfo()
+```

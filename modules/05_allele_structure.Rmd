@@ -1,0 +1,222 @@
+---
+title: "Duke"
+subtitle: "Module 5: Allele structure"
+author: "Michael Flower"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: false
+    code_folding: hide
+    df_print: paged
+    mathjax: null
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6)
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 5: Allele structure";</script>')
+```
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(Biostrings); library(dplyr); library(tidyr); library(data.table); library(ggplot2); library(scales); library(DT)
+  if (params$cluster) { library(DECIPHER); library(mclust); library(cluster) }
+})
+source("lib/load_all.R")
+module_start <- proc.time()["elapsed"]; timings <- c()
+st_dir <- file.path(params$dir_out, "05_allele_structure"); plots_dir <- file.path(st_dir, "plots")
+dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+temp_dir <- module_temp_dir(params$dir_out, "m5", params$module_hash)
+xlsx_path <- file.path(st_dir, "allele_structure.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
+```
+
+# Overview
+
+**Module 5: Allele structure**
+
+This module looks at the sequence of the reads around the primary tract:
+
+1. **Allele clustering** (`cluster = `r params$cluster``): reads are grouped by repeat length (`r paste(params$cluster_by, collapse = " then ")`). The number of length clusters is chosen by a Gaussian mixture, and clusters holding under `r percent(params$repeat_cluster_min_prop)` of a sample's reads are merged into their neighbour, so an expansion smear is not cut into many small clusters. With `haplotype` in `cluster_by`, reads are also grouped by flank haplotype: 15-mers found in 10–90% of reads are kept only when at least 7 others appear in exactly the same reads (the signature of a real SNP or indel, not a sequencing error), they are grouped into variant blocks, and each read is scored on the k-mers it carries from each allele of each block. A split is accepted when the mean silhouette exceeds 0.5 and every cluster holds at least 5% of reads, so haplotypes carried by more than about 10–20% of reads are found. Reads whose flank variants combine the two alleles' haplotypes (e.g. PCR chimeras) form their own cluster
+2. **Consensus sequences** for the left flank, tract and right flank of each cluster (DECIPHER, up to `r params$consensus_downsample` reads, `r percent(params$consensus_threshold)` agreement)
+3. **Variants** in each cluster's flank consensus against the reference, in coordinates of the full reference FASTA (so the VCFs load in IGV alongside it). The tract itself is excluded; its length is measured in Module 3
+4. **Waterfall plots** (`waterfall = `r params$waterfall``): reads stacked by repeat length with each base coloured, `r params$waterfall_flank_bp` bp of flank either side of the tract
+
+**Outputs:**
+
+- `05_allele_structure/allele_structure.xlsx` – clusters, consensus lengths and sequences, variants
+- `05_allele_structure/consensus/*.fasta`, `05_allele_structure/variants/*.vcf`
+- `05_allele_structure/plots/waterfall/{sample}.png`
+
+```{r load}
+safe_load_module(file.path(params$dir_out, "module_data", "03_repeat_detection.RData"), 3)
+primary <- module3_output$primary
+d_all <- module3_output$alignment_counts_slim[, .(file_stem, qname, left, mid, right, length = repeat_count)]
+tracts <- params$tracts_table
+ref <- parse_reference_sequence(tracts$path_ref[1])
+samples <- unique(d_all$file_stem)
+```
+
+---
+
+# Allele clustering
+
+```{r clustering, eval=params$cluster}
+.t <- proc.time()["elapsed"]
+per_sample <- split(d_all, by = "file_stem")
+clusters <- rbindlist(apply_fn(names(per_sample), function(s) {
+  cache <- file.path(temp_dir, paste0("cluster_", s, ".RData"))
+  if (safe_load_cache(cache, environment())) return(res)
+  d <- per_sample[[s]]
+  res <- cbind(d[, .(file_stem, qname)], cluster_sample(as.data.frame(d), params))
+  save(res, file = cache); res
+}))
+d_all <- clusters[d_all, on = .(file_stem, qname)]
+cluster_summary <- d_all[, .(reads = .N, modal_length = { tb <- table(length); as.numeric(names(tb)[which.max(tb)]) },
+                             median_length = as.numeric(median(length)), mean_length = mean(length), sd_length = sd(length),
+                             repeat_cluster = repeat_cluster[1], haplotype_cluster = haplotype_cluster[1]), by = .(file_stem, cluster_number)]
+cluster_summary[, proportion := reads / sum(reads), by = file_stem]
+setorder(cluster_summary, file_stem, cluster_number)
+timings["Clustering"] <- proc.time()["elapsed"] - .t
+```
+
+Each point is one sample: how many clusters it was split into. A heterozygous sample with two alleles should give 2; more usually means an expanded allele with a wide distribution or a sample mixture, and each cluster's share is in the table below.
+
+```{r cluster_count, eval=params$cluster, fig.height=4.5}
+cc <- cluster_summary[, .(clusters = .N), by = file_stem]
+p_cc <- ggplot(cc, aes(x = "", y = clusters)) + box_points_mean() + scale_y_continuous(breaks = pretty_breaks()) +
+  labs(x = NULL, y = "Clusters", title = "Clusters per sample") + theme_bw()
+print(p_cc); save_plot(p_cc, file.path(plots_dir, "clusters_per_sample.png"), 5, 4.5)
+dt_full(cluster_summary, caption = "Clusters per sample (cluster 1 = most reads)", digits = 3)
+```
+
+---
+
+# Consensus and variants
+
+```{r consensus, eval=params$cluster}
+.t <- proc.time()["elapsed"]
+keys <- unique(d_all[, .(file_stem, cluster_number)])
+cons <- rbindlist(apply_fn(seq_len(nrow(keys)), function(i) {
+  s <- keys$file_stem[i]; k <- keys$cluster_number[i]
+  cache <- file.path(temp_dir, paste0("consensus_", s, "_", k, ".RData"))
+  if (safe_load_cache(cache, environment())) return(res)
+  d <- d_all[file_stem == s & cluster_number == k]
+  cl <- consensus_function(d$left, params$consensus_threshold, params$consensus_downsample)
+  cm <- consensus_function(d$mid, params$consensus_threshold, params$consensus_downsample)
+  cr <- consensus_function(d$right, params$consensus_threshold, params$consensus_downsample)
+  res <- data.table(file_stem = s, cluster_number = k, reads_for_consensus = cm$n,
+                    consensus_left = cl$consensus, consensus_mid = cm$consensus, consensus_right = cr$consensus)
+  save(res, file = cache); res
+}))
+cons <- cluster_summary[, .(file_stem, cluster_number, reads, proportion, modal_length)][cons, on = .(file_stem, cluster_number)]
+cons[, `:=`(left_bp = nchar(consensus_left), mid_bp = nchar(consensus_mid), right_bp = nchar(consensus_right))]
+cons_dir <- file.path(st_dir, "consensus"); dir.create(cons_dir, showWarnings = FALSE)
+hdr <- with(cons, sprintf("%s_cluster%02d_n%d_mode%s_prop%.3f", file_stem, cluster_number, reads, round(modal_length), proportion))
+for (seg in c("left", "mid", "right")) {
+  x <- cons[[paste0("consensus_", seg)]]; ok <- !is.na(x)
+  if (any(ok)) writeXStringSet(DNAStringSet(setNames(x[ok], paste0(hdr[ok], "_", seg))), file.path(cons_dir, paste0("consensus_", seg, ".fasta")))
+}
+full <- paste0(ifelse(is.na(cons$consensus_left), "", cons$consensus_left), ifelse(is.na(cons$consensus_mid), "", cons$consensus_mid),
+               ifelse(is.na(cons$consensus_right), "", cons$consensus_right))
+writeXStringSet(DNAStringSet(setNames(full, hdr)), file.path(cons_dir, "consensus_full.fasta"))
+timings["Consensus"] <- proc.time()["elapsed"] - .t
+dt_full(cons[, .(file_stem, cluster_number, reads, reads_for_consensus, modal_length, left_bp, mid_bp, right_bp)],
+        caption = "Consensus sequence lengths per cluster (sequences in allele_structure.xlsx and consensus/)")
+```
+
+```{r variants, eval=params$cluster && params$call_variants}
+.t <- proc.time()["elapsed"]
+left_ref <- substr(ref$full, 1, ref$n_start - 1); right_ref <- substr(ref$full, ref$n_end + 1, nchar(ref$full))
+variants <- rbindlist(lapply(seq_len(nrow(cons)), function(i) {
+  v <- rbind(call_flank_variants(cons$consensus_left[i], left_ref, 0L), call_flank_variants(cons$consensus_right[i], right_ref, ref$n_end))
+  if (is.null(v) || !nrow(v)) return(NULL)
+  data.table(file_stem = cons$file_stem[i], cluster_number = cons$cluster_number[i], v)
+}))
+var_dir <- file.path(st_dir, "variants"); dir.create(var_dir, showWarnings = FALSE)
+if (nrow(variants)) {
+  variants[, column := paste0(file_stem, "_cluster", cluster_number)]
+  for (s in unique(variants$file_stem)) {
+    cols <- paste0(s, "_cluster", sort(unique(cons$cluster_number[cons$file_stem == s])))
+    write_vcf(as.data.frame(variants[file_stem == s]), cols, ref$ref_id, nchar(ref$full), ref$path, file.path(var_dir, paste0(s, ".vcf")))
+  }
+  write_vcf(as.data.frame(variants), paste0(cons$file_stem, "_cluster", cons$cluster_number), ref$ref_id, nchar(ref$full), ref$path,
+            file.path(var_dir, "all_samples.vcf"))
+}
+var_summary <- if (nrow(variants)) variants[, .N, by = .(pos, ref, alt, type)][, clusters := N][order(-N)] else data.table()
+timings["Variants"] <- proc.time()["elapsed"] - .t
+cat(sprintf("%d variant calls across %d clusters; %d distinct variants.", nrow(variants), nrow(cons), nrow(var_summary)))
+```
+
+The most frequent variants across all cluster consensuses, with positions on the full reference (`r ref$ref_id`, N block at `r ref$n_start`–`r ref$n_end`). A variant present in nearly every cluster is a difference between the reference and these lines rather than a somatic change.
+
+```{r variant_table, eval=params$cluster && params$call_variants}
+if (nrow(var_summary)) dt_full(var_summary[, .(pos, ref, alt, type, clusters)], caption = "Variants by number of cluster consensuses carrying them")
+```
+
+---
+
+# Waterfall plots
+
+Each figure shows up to `r format(params$waterfall_downsample, big.mark = ",")` reads from one sample, ordered from shortest to longest `r primary` tract, with each base coloured and `r params$waterfall_flank_bp` bp of flank either side. A pure tract gives a regular stripe; interruptions show as vertical lines at a fixed offset from the tract start or end, and sequence variants in the flanks as columns of a different colour. One example is shown; all are in `plots/waterfall/`.
+
+```{r waterfall, eval=params$waterfall, fig.height=8}
+.t <- proc.time()["elapsed"]
+wf_dir <- file.path(plots_dir, "waterfall")
+first <- NULL
+for (s in samples) {
+  d <- as.data.frame(d_all[file_stem == s])
+  p <- create_waterfall_plot(d, paste("Waterfall:", s), params$waterfall_flank_bp, params$waterfall_downsample,
+                             paste(primary, "length"))
+  if (is.null(p)) next
+  if (is.null(first)) first <- p
+  save_plot(p, file.path(wf_dir, paste0(s, ".png")), 12, 9)
+  if (params$cluster && params$waterfall_per_cluster) for (k in unique(d$cluster_number)) {
+    pk <- create_waterfall_plot(d[d$cluster_number == k, ], sprintf("Waterfall: %s, cluster %d", s, k), params$waterfall_flank_bp,
+                                params$waterfall_downsample, paste(primary, "length"))
+    if (!is.null(pk)) save_plot(pk, file.path(wf_dir, "by_cluster", sprintf("%s_cluster%02d.png", s, k)), 12, 9)
+  }
+}
+timings["Waterfalls"] <- proc.time()["elapsed"] - .t
+if (!is.null(first)) print(first)
+```
+
+---
+
+# Save output
+
+```{r save}
+module5_output <- list(
+  clusters = if (params$cluster) d_all[, .(file_stem, qname, cluster_number, repeat_cluster, haplotype_cluster)] else NULL,
+  cluster_summary = if (params$cluster) cluster_summary else NULL,
+  consensus = if (params$cluster) cons else NULL,
+  variants = if (params$cluster && params$call_variants) variants else NULL, hash = params$module_hash)
+output_path <- file.path(params$dir_out, "module_data", "05_allele_structure.RData")
+save(module5_output, file = output_path)
+write_excel_function(list(cluster_summary = module5_output$cluster_summary, consensus = module5_output$consensus,
+                          variants = module5_output$variants), xlsx_path)
+```
+
+---
+
+# Diagnostics
+
+```{r diagnostics}
+timing_df <- build_timing_table(timings)
+manifest <- build_manifest(module5_output, c(clusters = "Cluster assignment per read", cluster_summary = "Clusters per sample",
+  consensus = "Consensus sequences per cluster", variants = "Variants per cluster consensus (full-reference coordinates)",
+  hash = "Parameter hash used for resume"))
+write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)
+dt_compact(timing_df, caption = "Section timing")
+dt_compact(manifest, caption = sprintf("module5_output – %s on disk", format_size(file.size(output_path))))
+```
+
+# Session info
+
+```{r session_info}
+sessionInfo()
+```

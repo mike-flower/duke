@@ -1,0 +1,457 @@
+---
+title: "Duke"
+subtitle: "Module 6: Instability"
+author: "Michael Flower"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: false
+    code_folding: hide
+    df_print: paged
+    mathjax: null
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 11, fig.height = 6)
+```
+
+```{r set_tab_title, echo=FALSE, results='asis'}
+cat('<script>document.title = "Duke | Module 6: Instability";</script>')
+```
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(data.table); library(ggplot2); library(scales); library(DT)
+})
+source("lib/load_all.R")
+module_start <- proc.time()["elapsed"]; timings <- c()
+ins_dir <- file.path(params$dir_out, "06_instability"); plots_dir <- file.path(ins_dir, "plots")
+dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
+xlsx_path <- file.path(ins_dir, "instability.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
+unit_cols <- c(reads = "grey40", molecules = "#00838f")
+```
+
+# Overview
+
+**Module 6: Instability**
+
+This module handles:
+
+1. Reading the settings file: analysis ranges, groups, time, control samples, manual control lengths and exclusions
+2. For every measure (each tract and each combined measure), every range and every sample: distribution statistics and modal peaks
+3. Group control setpoints, and instability metrics relative to the sample's own setpoint and to its group control
+4. All of the above per read and, when UMIs were used, per molecule
+5. Modal, median and mean length by counting method (full, match, pure)
+6. Per-read comparison of pairs of measures: whether reads that changed in one tract also changed in the other
+
+**Metric definitions** (*d* = length − setpoint for each read or molecule in the range, *n* = how many):
+
+| Metric | Definition |
+|---|---|
+| `instability_index` | mean(*d*) – Lee et al. (2010); signed |
+| `expansion_index`, `contraction_index` | sum of positive (negative) *d* divided by *n*, so that II = EI + CI |
+| `mean_expansion_size`, `mean_contraction_size` | mean of positive (negative) *d* – how big a typical change is (Duke 2.x called these EI and CI) |
+| `prop_above`, `prop_below`, `prop_at` | share with *d* > 0.5, *d* < −0.5, \|*d*\| ≤ 0.5 |
+| `prop_above_k`, `prop_below_k` | share with *d* ≥ k or ≤ −k, for k = `r paste(params$expansion_thresholds, collapse = ", ")` |
+| `expansion_ratio`, `contraction_ratio` | reads above (below) ÷ reads at the setpoint. Kept for continuity, but its denominator is a single length bin, so it is noisy; `prop_above_k` is the stable alternative |
+| `modal_diff`, `median_diff`, `mean_diff` | sample statistic − setpoint |
+
+The setpoint is the **`r params$control_setpoint_metric`**: the sample's own (`sample_relative`) or the `r params$control_aggregation_method` across its group's control samples (`control_relative`; selection: `r params$control_sample_selection`). `r if (params$use_manual_controls) "A manual control length in the settings file (manual_control_repeat_length) replaces the group control for that sample and range." else "Manual control lengths in the settings file are not used (use_manual_controls = FALSE); set it to TRUE to make them replace the group control."`
+
+**Outputs:**
+
+- `06_instability/instability.xlsx` – ranges, distribution statistics, peaks, controls, instability metrics, counting-method summary, pair statistics
+- `06_instability/plots/` – timecourses by group for every measure and range, pair plots
+
+---
+
+# Settings
+
+```{r load}
+.t <- proc.time()["elapsed"]
+safe_load_module(file.path(params$dir_out, "module_data", "03_repeat_detection.RData"), 3)
+measures <- module3_output$measures; primary <- module3_output$primary
+units <- list(reads = module3_output$lengths[, .(file_stem, id = qname, measure, length)])
+m4_path <- file.path(params$dir_out, "module_data", "04_umi.RData")
+if (isTRUE(params$umi) && file.exists(m4_path)) {
+  safe_load_module(m4_path, 4)
+  units$molecules <- module4_output$molecule_lengths[, .(file_stem, id = molecule_id, measure, length)]
+}
+samples_in_data <- unique(units$reads$file_stem)
+st <- load_settings(params$path_settings, samples_in_data)
+settings <- st$used
+range_table <- build_range_table(settings, measures$measure, primary)
+timings["Load"] <- proc.time()["elapsed"] - .t
+```
+
+`r nrow(settings)` samples have settings and are analysed. `r if (length(st$missing)) sprintf("%d samples in the data have no settings row and are left out: %s.", length(st$missing), paste(head(st$missing, 5), collapse = ", ")) else "Every sample in the data has a settings row."` `r if (nrow(st$excluded)) sprintf("%d samples are marked exclude and are left out of every analysis.", nrow(st$excluded)) else ""` Units analysed: **`r paste(names(units), collapse = " and ")`**.
+
+How each measure's ranges are defined: a measure with its own `analysis_ranges_<measure>` column uses ranges on its own scale; otherwise reads are selected by their **`r primary`** length using the primary ranges, and the metrics are calculated on that measure.
+
+```{r range_overview}
+ro <- as.data.table(range_table)[, .(samples = uniqueN(file_stem), ranges = paste(unique(range_label), collapse = "; ")),
+                                 by = .(measure, range_measure, range_name)]
+dt_full(ro, caption = "Ranges by measure (range_measure = the length used to select the reads)")
+```
+
+## Experiment map
+
+Each bubble is one combination of group and time, sized and labelled by the number of samples.
+
+```{r experiment_map, fig.height=max(3, 0.35 * length(unique(settings$group)) + 2)}
+has_group <- any(!is.na(settings$group)) && "group" %in% params$cohort_plot_by
+has_time <- any(!is.na(settings$time)) && "time" %in% params$cohort_plot_by
+# group_label is the key for group controls, so it always follows the settings
+# group column; cohort_plot_by only changes how the plots are laid out
+settings$group_label <- ifelse(is.na(settings$group), "ungrouped", settings$group)
+em <- settings %>% dplyr::count(group_label, time)
+p_map <- if (has_time) ggplot(em, aes(time, group_label, size = n)) + geom_point(colour = "steelblue", alpha = 0.7) +
+  geom_text(aes(label = n), size = 3, colour = "white") + scale_size_continuous(range = c(4, 14), guide = "none") +
+  labs(x = "Time", y = NULL, title = "Samples by group and time") + theme_bw() else
+  ggplot(em, aes(n, group_label)) + geom_col(fill = "steelblue") + geom_text(aes(label = n), hjust = -0.3) +
+  labs(x = "Samples", y = NULL, title = "Samples per group") + theme_bw()
+print(p_map); save_plot(p_map, file.path(plots_dir, "experiment_map.png"), 10, max(3, 0.35 * length(unique(settings$group_label)) + 2))
+```
+
+---
+
+# Distribution statistics
+
+```{r distributions}
+.t <- proc.time()["elapsed"]
+wide <- lapply(units, function(u) dcast(u[file_stem %in% settings$file_stem], file_stem + id ~ measure, value.var = "length"))
+rt_by_sample <- split(as.data.table(range_table), by = "file_stem")
+select_values <- function(W, r) {
+  rm <- W[[r$range_measure]]; v <- W[[r$measure]]
+  if (is.null(rm) || is.null(v)) return(numeric(0))
+  v <- v[!is.na(rm) & rm >= r$lo & rm <= r$hi]
+  apply_floor(v[is.finite(v)], r$floor)
+}
+dist_list <- list(); peak_list <- list()
+for (u in names(wide)) {
+  Wsplit <- split(wide[[u]], by = "file_stem")
+  res <- apply_fn(intersect(names(rt_by_sample), names(Wsplit)), function(s) {
+    W <- Wsplit[[s]]; rr <- rt_by_sample[[s]]
+    out <- vector("list", nrow(rr)); pk <- vector("list", nrow(rr))
+    for (i in seq_len(nrow(rr))) {
+      r <- rr[i]
+      rm <- W[[r$range_measure]]
+      n_total <- if (is.null(rm)) 0L else sum(!is.na(rm) & rm >= r$lo & rm <= r$hi)
+      x <- select_values(W, r)
+      out[[i]] <- data.frame(file_stem = s, unit = u, measure = r$measure, range_measure = r$range_measure,
+                             analysis_range_name = r$range_name, range_label = r$range_label, n_total = n_total, distribution_stats(x))
+      pk[[i]] <- data.frame(file_stem = s, unit = u, measure = r$measure, analysis_range_name = r$range_name,
+                            find_modal_peaks(x, r$max_peaks, params$range_peak_span))
+    }
+    list(dist = rbindlist(out), peaks = rbindlist(pk))
+  })
+  dist_list[[u]] <- rbindlist(lapply(res, `[[`, "dist")); peak_list[[u]] <- rbindlist(lapply(res, `[[`, "peaks"))
+}
+distribution_summary <- rbindlist(dist_list); modal_peaks <- rbindlist(peak_list)
+meta <- as.data.table(settings)[, .(file_stem, group, group_label, time, is_control)]
+distribution_summary <- meta[distribution_summary, on = "file_stem"]
+timings["Distributions"] <- proc.time()["elapsed"] - .t
+```
+
+## Reads and molecules in each range
+
+Each point is one sample: how many reads (and molecules) fall in each range of the primary measure. Ranges with only a handful of reads per sample give unreliable metrics.
+
+```{r range_counts, fig.height=5}
+rc <- distribution_summary[measure == primary]
+p_rc <- ggplot(rc, aes(analysis_range_name, pmax(n_total, 1), colour = unit)) +
+  geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.6, size = 1.2) +
+  scale_y_log10(labels = comma) + scale_colour_manual(values = unit_cols, name = NULL) +
+  labs(x = "Analysis range", y = "Count in range (log scale)", title = paste("Reads and molecules per range:", primary)) +
+  theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(p_rc); save_plot(p_rc, file.path(plots_dir, "counts_per_range.png"), 11, 5)
+```
+
+---
+
+# Group controls
+
+```{r controls}
+.t <- proc.time()["elapsed"]
+sp_metric <- params$control_setpoint_metric
+ctrl_pool <- distribution_summary[!is.na(get(sp_metric))]
+if (params$control_sample_selection == "flagged") ctrl_pool <- ctrl_pool[is_control == TRUE]
+if (params$control_sample_selection == "earliest") {
+  if (!any(!is.na(distribution_summary$time))) stop("control_sample_selection = 'earliest' needs a time column in the settings file")
+  ctrl_pool <- ctrl_pool[!is.na(time)][, .SD[time == min(time)], by = .(group_label, unit, measure, analysis_range_name)]
+}
+group_controls <- if (isTRUE(params$group_control) && nrow(ctrl_pool)) ctrl_pool[, .(
+  control_setpoint = aggregate_controls(get(sp_metric), params$control_aggregation_method),
+  control_sd = sd(get(sp_metric)), control_n = .N, control_samples = paste(file_stem, collapse = "; ")),
+  by = .(group_label, unit, measure, analysis_range_name)] else data.table()
+if (isTRUE(params$group_control) && nrow(group_controls) == 0)
+  warning("No control samples found (selection: ", params$control_sample_selection, "). Only sample-relative metrics are calculated.")
+timings["Controls"] <- proc.time()["elapsed"] - .t
+if (nrow(group_controls)) dt_full(group_controls, caption = sprintf("Group control setpoints (%s of the controls' %s)", params$control_aggregation_method, sp_metric), digits = 2)
+```
+
+---
+
+# Instability metrics
+
+```{r instability}
+.t <- proc.time()["elapsed"]
+setp <- distribution_summary[, .(file_stem, unit, measure, analysis_range_name, group_label, own = get(sp_metric))]
+if (nrow(group_controls)) {
+  setp <- group_controls[, .(group_label, unit, measure, analysis_range_name, control_setpoint, control_sd, control_n)][setp, on = .(group_label, unit, measure, analysis_range_name)]
+} else setp[, `:=`(control_setpoint = NA_real_, control_sd = NA_real_, control_n = NA_integer_)]
+manual <- as.data.table(range_table)[!is.na(manual_control) & isTRUE(params$use_manual_controls), .(file_stem, measure, analysis_range_name = range_name, manual_control)]
+setp <- manual[setp, on = .(file_stem, measure, analysis_range_name)]
+setp[, control_source := fifelse(!is.na(manual_control), "manual", fifelse(!is.na(control_setpoint), "group control", NA_character_))]
+setp[!is.na(manual_control), `:=`(control_setpoint = manual_control, control_sd = NA_real_, control_n = NA_integer_)]
+inst_list <- list()
+for (u in names(wide)) {
+  Wsplit <- split(wide[[u]], by = "file_stem")
+  sp_u <- split(setp[unit == u], by = "file_stem")
+  res <- apply_fn(intersect(names(rt_by_sample), names(Wsplit)), function(s) {
+    W <- Wsplit[[s]]; rr <- rt_by_sample[[s]]; sp <- sp_u[[s]]
+    out <- list()
+    for (i in seq_len(nrow(rr))) {
+      r <- rr[i]; x <- select_values(W, r)
+      spi <- sp[measure == r$measure & analysis_range_name == r$range_name]
+      for (type in c("sample_relative", "control_relative")) {
+        s0 <- if (type == "sample_relative") spi$own[1] else spi$control_setpoint[1]
+        if (!length(s0) || is.na(s0)) next
+        out[[length(out) + 1]] <- data.frame(file_stem = s, unit = u, measure = r$measure, analysis_range_name = r$range_name,
+          setpoint_type = type, setpoint_metric = sp_metric,
+          setpoint_source = if (type == "sample_relative") "sample" else spi$control_source[1],
+          instability_stats(x, s0, params$expansion_thresholds))
+      }
+    }
+    rbindlist(out)
+  })
+  inst_list[[u]] <- rbindlist(res)
+}
+instability_metrics <- rbindlist(inst_list)
+setnames(instability_metrics, "setpoint", "setpoint_repeat_length")
+instability_metrics <- distribution_summary[, .(file_stem, unit, measure, analysis_range_name, group, group_label, time, is_control,
+                                                modal_length, median_length, mean_length, sd)][instability_metrics, on = .(file_stem, unit, measure, analysis_range_name)]
+instability_metrics[, `:=`(modal_diff = modal_length - setpoint_repeat_length, median_diff = median_length - setpoint_repeat_length,
+                           mean_diff = mean_length - setpoint_repeat_length)]
+cz <- setp[, .(file_stem, unit, measure, analysis_range_name, own, control_setpoint, control_sd)]
+instability_metrics <- cz[instability_metrics, on = .(file_stem, unit, measure, analysis_range_name)]
+instability_metrics[setpoint_type == "control_relative" & control_sd > 0, z_score := (own - control_setpoint) / control_sd]
+instability_metrics[, c("own", "control_setpoint", "control_sd") := NULL]
+timings["Instability metrics"] <- proc.time()["elapsed"] - .t
+```
+
+## Timecourses by group
+
+```{r headline_setup}
+plot_ranges <- if (length(params$plot_ranges)) params$plot_ranges else head(sort(unique(range_table$range_name[range_table$measure == primary])), 2)
+hl <- intersect(params$headline_metrics, names(instability_metrics))
+hl_type <- if (params$headline_setpoint_type %in% instability_metrics$setpoint_type) params$headline_setpoint_type else "sample_relative"
+hl_labels <- c(modal_length = "Modal length", median_length = "Median length", mean_length = "Mean length",
+               instability_index = "Instability index", expansion_index = "Expansion index", contraction_index = "Contraction index",
+               mean_expansion_size = "Mean expansion size", expansion_ratio = "Expansion ratio",
+               setNames(paste0("Share >= setpoint + ", params$expansion_thresholds), paste0("prop_above_", params$expansion_thresholds)),
+               prop_above = "Reads above setpoint")
+timecourse_plot <- function(d, title) {
+  # One row per metric (each with its own y axis, % ticks for proportions), one column per group
+  rows <- lapply(seq_along(hl), function(k) {
+    v <- hl[k]; dd <- d[, .(time, group_label, unit, value = get(v))]
+    is_prop <- grepl("^prop", v)
+    base <- if (has_time) ggplot(dd, aes(time, value, colour = unit)) + geom_point(alpha = 0.6, size = 1.6) +
+        stat_summary(aes(group = unit), fun = mean, geom = "line", linewidth = 0.8)
+      else ggplot(dd, aes(group_label, value, colour = unit)) + geom_boxplot(outlier.shape = NA, fill = NA) +
+        geom_jitter(width = 0.15, height = 0, alpha = 0.6)
+    base + facet_wrap(~ group_label, nrow = 1, scales = if (has_time) "fixed" else "free_x") +
+      scale_colour_manual(values = unit_cols, name = NULL, drop = TRUE) +
+      (if (is_prop) scale_y_continuous(labels = pct_axis()) else scale_y_continuous()) +
+      labs(x = if (k == length(hl)) (if (has_time) "Time" else NULL) else NULL, y = if (v %in% names(hl_labels)) hl_labels[[v]] else v) +
+      theme_bw() + theme(legend.position = if (k == 1) "top" else "none",
+                         strip.text = if (k == 1) element_text(size = 8) else element_blank(),
+                         strip.background = if (k == 1) element_rect() else element_blank(),
+                         axis.text.x = if (k == length(hl)) element_text() else element_blank())
+  })
+  patchwork::wrap_plots(rows, ncol = 1) + patchwork::plot_annotation(title = title,
+    subtitle = sprintf("Points = samples; lines = mean at each time.\nInstability metrics %s; setpoint = %s.", gsub("_", " ", hl_type), gsub("_", " ", sp_metric)))
+}
+n_groups <- length(unique(instability_metrics$group_label))
+tc_w <- min(40, 3 + 3.2 * n_groups); tc_h <- min(40, 1.9 * length(hl) + 2)
+```
+
+The headline metrics for each group, plotted against time: one column per group, one row per metric, each row on its own scale. Length metrics (modal, median, mean) are the sample's own; the instability metrics are `r gsub("_", " ", hl_type)`. Reads are grey`r if ("molecules" %in% names(units)) " and molecules teal" else ""`. Shown here: **`r primary`**, ranges `r paste(plot_ranges, collapse = ", ")`. Every measure and range is saved in `plots/timecourse/`.
+
+```{r headline_plots, fig.width=tc_w, fig.height=tc_h, results='asis'}
+.t <- proc.time()["elapsed"]
+for (m in measures$measure) for (rg in sort(unique(range_table$range_name[range_table$measure == m]))) {
+  d <- instability_metrics[measure == m & analysis_range_name == rg & setpoint_type == hl_type]
+  if (!nrow(d)) next
+  lab <- range_table$range_label[range_table$measure == m & range_table$range_name == rg][1]
+  p <- timecourse_plot(d, sprintf("%s, %s (%s)", m, rg, lab))
+  save_plot(p, file.path(plots_dir, "timecourse", safe_path(m), paste0(safe_path(m), "-", rg, ".png")), tc_w, tc_h)
+  if (m == primary && rg %in% plot_ranges) { cat("\n\n### ", m, ", ", rg, " (", lab, ")\n\n", sep = ""); print(p) }
+}
+timings["Timecourse plots"] <- proc.time()["elapsed"] - .t
+```
+
+```{r instability_table}
+show_cols <- c("file_stem", "unit", "measure", "analysis_range_name", "group", "time", "setpoint_type", "setpoint_repeat_length",
+               "n_used", "modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "contraction_index",
+               paste0("prop_above_", params$expansion_thresholds), "expansion_ratio", "z_score")
+dt_full(instability_metrics[, intersect(show_cols, names(instability_metrics)), with = FALSE], caption = "Instability metrics (key columns; every column is in instability.xlsx)", digits = 3)
+```
+
+---
+
+# Length by counting method
+
+For the primary-range selection of each tract, the modal, median and mean length calculated from each counting method. Each point is one sample and range: the **match** and **pure** modal lengths minus the **full** modal length. Zero means the methods agree; a consistent negative offset for **pure** shows a recurring interruption inside the tract.
+
+```{r count_methods, fig.height=5}
+.t <- proc.time()["elapsed"]
+rtr <- module3_output$read_tracts[file_stem %in% settings$file_stem]
+tract_names <- module3_output$tracts$tract
+cm <- rbindlist(lapply(tract_names, function(t) {
+  cols <- paste0(t, c("_full", "_match", "_pure"))
+  rr <- as.data.table(range_table)[measure == t]
+  sel_col <- function(rm) if (rm == t) paste0(t, "_", module3_output$tracts$count_method[module3_output$tracts$tract == t]) else
+    paste0(rm, "_", module3_output$tracts$count_method[module3_output$tracts$tract == rm])
+  rbindlist(lapply(split(rr, by = "file_stem"), function(r) {
+    x <- rtr[file_stem == r$file_stem[1]]
+    rbindlist(lapply(seq_len(nrow(r)), function(i) {
+      sc <- sel_col(r$range_measure[i]); keep <- !is.na(x[[sc]]) & x[[sc]] >= r$lo[i] & x[[sc]] <= r$hi[i]
+      if (!any(keep)) return(NULL)
+      do.call(data.table, c(list(file_stem = r$file_stem[1], tract = t, analysis_range_name = r$range_name[i], n = sum(keep)),
+        unlist(lapply(c("full", "match", "pure"), function(mm) { v <- x[[paste0(t, "_", mm)]][keep]; v <- v[!is.na(v)]
+          if (!length(v)) return(setNames(list(NA_real_, NA_real_, NA_real_), paste0(c("modal_", "median_", "mean_"), mm)))
+          setNames(list(.mode(v), stats::median(v), mean(v)), paste0(c("modal_", "median_", "mean_"), mm)) }), recursive = FALSE)))
+    }))
+  }))
+}))
+timings["Counting methods"] <- proc.time()["elapsed"] - .t
+if (nrow(cm)) {
+cmd <- melt(cm[, .(file_stem, tract, analysis_range_name, match = modal_match - modal_full, pure = modal_pure - modal_full)],
+            id.vars = c("file_stem", "tract", "analysis_range_name"), variable.name = "method", value.name = "diff")
+p_cm <- ggplot(cmd[analysis_range_name %in% plot_ranges], aes(method, diff)) + box_points_mean(digits = 2) +
+  facet_grid(tract ~ analysis_range_name) +
+  labs(x = "Counting method", y = "Modal length minus full-count modal length", title = "Modal length by counting method") + theme_bw()
+print(p_cm); save_plot(p_cm, file.path(plots_dir, "modal_by_counting_method.png"), 9, 5)
+}
+```
+
+```{r count_method_table}
+if (nrow(cm)) dt_full(cm, caption = "Modal, median and mean length per sample and range by counting method", digits = 2)
+```
+
+---
+
+# Measures against each other
+
+```{r pairs_setup}
+tr_meas <- measures$measure[measures$type == "tract"]
+pairs <- if (length(params$measure_pairs)) strsplit(params$measure_pairs, ":") else if (length(tr_meas) > 1) combn(tr_meas, 2, simplify = FALSE) else list()
+has_pairs <- length(pairs) > 0
+```
+
+`r if (!has_pairs) "Only one tract was measured, so there are no pairs to compare." else ""`
+
+```{r pairs, eval=has_pairs, fig.height=5.5, results='asis'}
+.t <- proc.time()["elapsed"]
+pair_stats <- list(); pair_bins <- list()
+for (pr in pairs) {
+  A <- pr[1]; B <- pr[2]
+  for (u in names(wide)) {
+    W <- wide[[u]]
+    if (!all(c(A, B) %in% names(W))) next
+    for (rg in plot_ranges) {
+      rr <- as.data.table(range_table)[measure == A & range_name == rg]
+      if (!nrow(rr)) next
+      d <- rr[, .(file_stem, range_measure, lo, hi)][W, on = "file_stem", nomatch = NULL]
+      d <- d[!is.na(get(A)) & !is.na(get(B))]
+      d <- d[get(unique(range_measure)[1]) >= lo & get(unique(range_measure)[1]) <= hi]
+      if (!nrow(d)) next
+      d[, `:=`(a = get(A), b = get(B))]
+      d[, `:=`(dA = a - median(a), dB = b - median(b)), by = file_stem]
+      ps <- d[, .(n = .N, rho = suppressWarnings(cor(a, b, method = "spearman")), median_A = median(a), median_B = median(b)), by = file_stem]
+      ps[, `:=`(unit = u, measure_A = A, measure_B = B, analysis_range_name = rg)]
+      pair_stats[[length(pair_stats) + 1]] <- ps
+      d[, dA_bin := pmin(pmax(round(dA), -15), 15)]
+      pb <- d[, .(mean_dB = mean(dB), n = .N), by = .(file_stem, dA_bin)][meta, on = "file_stem", nomatch = NULL]
+      pb[, `:=`(unit = u, measure_A = A, measure_B = B, analysis_range_name = rg)]
+      pair_bins[[length(pair_bins) + 1]] <- pb
+      # per-sample scatter
+      if (params$plot_per_sample) for (s in unique(d$file_stem)) {
+        ds <- d[file_stem == s]; if (nrow(ds) > params$pair_max_points) { set.seed(123); ds <- ds[sample(.N, params$pair_max_points)] }
+        p <- ggplot(ds, aes(a, b)) + geom_jitter(width = 0.25, height = 0.25, alpha = 0.3, size = 0.8) +
+          labs(x = paste(A, "length"), y = paste(B, "length"), title = s, subtitle = sprintf("%s, %s, %s; each point = one %s, jittered by up to 0.25", u, rg, A, sub("s$", "", u))) + theme_bw()
+        save_plot(p, file.path(plots_dir, "pairs", paste0(A, "_vs_", B), u, paste0(s, "-", rg, ".png")), 7, 6)
+      }
+    }
+  }
+}
+pair_stats <- rbindlist(pair_stats); pair_bins <- rbindlist(pair_bins)
+timings["Pairs"] <- proc.time()["elapsed"] - .t
+for (pr in pairs) for (rg in plot_ranges) {
+  A <- pr[1]; B <- pr[2]
+  pb <- pair_bins[measure_A == A & measure_B == B & analysis_range_name == rg]
+  if (!nrow(pb)) next
+  cat(sprintf("\n\n### %s against %s, %s\n\n", B, A, rg))
+  cat(sprintf("For each sample, every %s's change from the sample's median in **%s** (x, rounded, capped at ±15) against its change in **%s** (y). Each thin line is one sample; the thick line is the mean across samples in the group. A flat line at zero means %s does not change with %s; a rising line means reads that expanded in %s also lengthened in %s. Reads and molecules are drawn separately; read-level co-variation can partly reflect PCR and sequencing error on the same read.\n\n",
+              "read or molecule", A, B, B, A, A, B))
+  p <- ggplot(pb, aes(dA_bin, mean_dB, colour = unit)) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_line(aes(group = interaction(file_stem, unit)), alpha = 0.25) +
+    stat_summary(aes(group = unit), fun = mean, geom = "line", linewidth = 1.1) +
+    facet_wrap(~ group_label) + scale_colour_manual(values = unit_cols, name = NULL) +
+    labs(x = sprintf("Change in %s from the sample median", A), y = sprintf("Mean change in %s", B),
+         title = sprintf("%s change against %s change, %s", B, A, rg)) + theme_bw() + theme(legend.position = "top")
+  print(p); save_plot(p, file.path(plots_dir, paste0("pair_", A, "_vs_", B, "_", rg, ".png")), 11, 5.5)
+  ps <- pair_stats[measure_A == A & measure_B == B & analysis_range_name == rg][meta, on = "file_stem", nomatch = NULL]
+  p2 <- ggplot(ps, aes(group_label, rho, colour = unit)) + geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.7) +
+    scale_colour_manual(values = unit_cols, name = NULL) +
+    labs(x = NULL, y = "Spearman correlation", title = sprintf("Per-sample correlation of %s and %s lengths, %s", A, B, rg)) +
+    theme_bw() + theme(axis.text.x = element_text(angle = 30, hjust = 1))
+  print(p2); save_plot(p2, file.path(plots_dir, paste0("pair_correlation_", A, "_vs_", B, "_", rg, ".png")), 10, 5)
+}
+```
+
+---
+
+# Save output
+
+```{r save}
+module6_output <- list(settings = settings, range_table = range_table, distribution_summary = distribution_summary, modal_peaks = modal_peaks,
+                       group_controls = group_controls, instability_metrics = instability_metrics, count_methods = cm,
+                       pair_stats = if (has_pairs) pair_stats else NULL, pair_bins = if (has_pairs) pair_bins else NULL,
+                       excluded = st$excluded, hash = params$module_hash)
+output_path <- file.path(params$dir_out, "module_data", "06_instability.RData")
+save(module6_output, file = output_path)
+write_excel_function(list(range_table = range_table, distribution_summary = distribution_summary, modal_peaks = modal_peaks,
+                          group_controls = group_controls, instability_metrics = instability_metrics, count_methods = cm,
+                          pair_stats = module6_output$pair_stats, excluded_samples = st$excluded), xlsx_path)
+```
+
+---
+
+# Diagnostics
+
+```{r diagnostics}
+timing_df <- build_timing_table(timings)
+manifest <- build_manifest(module6_output, c(settings = "Settings rows analysed", range_table = "Ranges per sample and measure",
+  distribution_summary = "Distribution statistics per sample, unit, measure and range", modal_peaks = "Modal peaks per range",
+  group_controls = "Group control setpoints", instability_metrics = "Instability metrics per sample, unit, measure, range and setpoint type",
+  count_methods = "Modal/median/mean by counting method", pair_stats = "Per-sample statistics for pairs of measures",
+  pair_bins = "Binned change in one measure against another", excluded = "Samples marked exclude", hash = "Parameter hash used for resume"))
+write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)
+dt_compact(timing_df, caption = "Section timing")
+dt_compact(manifest, caption = sprintf("module6_output – %s on disk", format_size(file.size(output_path))))
+```
+
+# Session info
+
+```{r session_info}
+sessionInfo()
+```
