@@ -12,7 +12,7 @@
 #$ -m bea
 
 # ==============================================================================
-# Duke 3.0.3 - Myriad Job Script
+# Duke 3.0.4 - Myriad Job Script
 # Recommended config: 12 cores, 64GB/core, 48h, 500GB tmpfs
 # See README.md for resource guidance and alternative configurations
 # ==============================================================================

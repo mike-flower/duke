@@ -137,11 +137,14 @@ Each point is one sample: the percentage of its aligned reads in which **no** tr
 det <- rbindlist(lapply(tracts$tract, function(t) {
   read_tracts[!is.na(get(paste0(t, "_found"))), .(tract = t, aligned_reads = .N, with_tract = sum(get(paste0(t, "_found")))), by = file_stem]
 }))[, detection_rate := with_tract / aligned_reads]
-miss_acc <- if (max(1 - det$detection_rate) < 0.01) 0.001 else 0.1
-p_det <- ggplot(det, aes(tract, 1 - detection_rate)) + box_points_mean(digits = if (miss_acc < 0.01) 3 else 1, percent = TRUE) +
-  scale_y_continuous(labels = pct_axis(miss_acc), limits = c(0, NA), expand = expansion(mult = c(0.02, 0.1))) +
+miss <- 1 - det$detection_rate
+# Decimal places from the size of the largest value, so tiny rates are not all printed as 0.000%
+miss_digits <- if (max(miss) > 0) max(1, -floor(log10(max(miss) * 100)) + 1) else 1
+p_det <- ggplot(det, aes(tract, 1 - detection_rate)) + box_points_mean(digits = miss_digits, percent = TRUE) +
+  scale_y_continuous(labels = pct_axis(), limits = c(0, NA), expand = expansion(mult = c(0.02, 0.1))) +
   labs(x = "Tract", y = "Aligned reads with no tract found", title = "Reads without a tract, per sample",
-       subtitle = sprintf("Mean detection rate %s", percent(mean(det$detection_rate), 0.001))) + theme_bw()
+       subtitle = sprintf("%s of %s aligned reads had no tract (%s)", comma(sum(det$aligned_reads - det$with_tract)),
+                          comma(sum(det$aligned_reads)), percent(1 - sum(det$with_tract) / sum(det$aligned_reads), 10^-miss_digits))) + theme_bw()
 print(p_det); save_plot(p_det, file.path(plots_dir, "detection_rate.png"), 7, 5)
 ```
 
@@ -178,6 +181,7 @@ by_len <- rbindlist(lapply(tracts$tract, function(t) {
   d[, .(tract = t, bin_width = w, reads = .N, full_ne_match = mean(full != match), full_ne_pure = mean(full != pure),
         mean_full_minus_pure = mean(full - pure)), by = .(file_stem, length_bin)]
 }))
+setorder(by_len, tract, file_stem, length_bin)
 ```
 
 ## Disagreement by tract length
@@ -201,7 +205,9 @@ fill_gaps <- function(d, keys) {
 bl_plot <- fill_gaps(bl_long[reads >= 20], c("tract", "method", "file_stem"))
 pooled_long[, bin_width := by_len$bin_width[match(tract, by_len$tract)]]
 pooled_plot <- fill_gaps(pooled_long, c("tract", "method"))
-p_agree <- ggplot(bl_plot, aes(length_bin, share)) +
+# Each bin is drawn at its centre (a 5-unit bin starting at 10 covers 10-14)
+bl_plot[, x := length_bin + (bin_width - 1) / 2]; pooled_plot[, x := length_bin + (bin_width - 1) / 2]
+p_agree <- ggplot(bl_plot, aes(x, share)) +
   geom_line(aes(group = file_stem), colour = "grey70", alpha = 0.6) +
   geom_line(data = pooled_plot, aes(colour = method), linewidth = 1) +
   facet_grid(method ~ tract, scales = "free_x") +
@@ -235,7 +241,7 @@ print(p_cs); save_plot(p_cs, file.path(plots_dir, "count_methods_scatter.png"), 
 
 ## Where the tract is broken
 
-For reads whose tract is broken (two or more runs), the position of each break as a fraction of the way along the tract (0 = the 5' start, 1 = the 3' end), from up to 2,000 broken reads per sample. **Sequencing errors** give a flat distribution, because they can fall anywhere; a **real interruption** gives a sharp peak at the same position in read after read, and would mean **pure** or **match** is the more meaningful count for that tract. Fewer breaks appear within the first and last two units, because a tract must start and end with `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` perfect units; in short tracts the positions fall on a few fixed fractions, so those bars are spiky.
+For reads whose tract is broken (two or more runs), the position of each break as a fraction of the way along the tract (0 = the 5' start, 1 = the 3' end), from up to 2,000 broken reads per sample. **Sequencing errors** give a flat distribution, because they can fall anywhere; a **real interruption** gives a sharp peak at the same position in read after read, and would mean **pure** or **match** is the more meaningful count for that tract. Fewer breaks appear within the first and last two units, because a tract must start and end with `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` perfect units; each break is known only to the nearest unit, so it is placed at random within that unit; without this, short tracts (with only a few possible break positions) would give a comb of spikes that looks like interruptions.
 
 ```{r break_positions, fig.height=4.5}
 set.seed(123)
@@ -244,7 +250,9 @@ bp <- rbindlist(lapply(tracts$tract, function(t) {
   d <- d[, .SD[sample(.N, min(.N, 2000))], by = file_stem]
   if (!nrow(d)) return(NULL)
   runs <- lapply(strsplit(d$s, ",", fixed = TRUE), as.numeric)
-  pos <- lapply(runs, function(r) head(cumsum(r), -1) / sum(r))
+  # A break is known only to the unit, so it is placed at random within that unit; otherwise
+  # short tracts (only a few possible positions) give a comb of spikes that looks like interruptions
+  pos <- lapply(runs, function(r) (head(cumsum(r), -1) - stats::runif(length(r) - 1)) / sum(r))
   data.table(tract = t, position = unlist(pos))
 }))
 if (nrow(bp)) {
@@ -284,7 +292,8 @@ dt_full(modal_method, caption = "Modal tract length per sample by counting metho
 ```{r between, eval=any(grepl("^between_", names(read_tracts))), fig.height=5}
 bcols <- grep("^between_", names(read_tracts), value = TRUE)
 between <- rbindlist(lapply(bcols, function(b) {
-  read_tracts[!is.na(get(b)), .(n = .N), by = .(file_stem, sequence = get(b))][, `:=`(junction = sub("^between_", "", b), prop = n / sum(n)), by = file_stem]
+  d <- read_tracts[, .(file_stem, sequence = get(b))][!is.na(sequence)]
+  d[, .(n = .N), by = .(file_stem, sequence)][, `:=`(junction = sub("^between_", "", b), prop = n / sum(n)), by = file_stem]
 }))
 between[sequence == "", sequence := "(none: tracts adjacent)"]
 top <- between[, .(reads = sum(n), samples = uniqueN(file_stem)), by = .(junction, sequence)][order(junction, -reads)][, head(.SD, 6), by = junction]

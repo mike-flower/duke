@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.0.3"
+duke_version <- "3.0.4"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -25,7 +25,7 @@ duke_version <- "3.0.3"
   `3` = c("tracts_table", "composites_table", "rm_flank_length_outliers", "flank_iqr_multiplier"),
   `4` = c("umi", "umi_flank_5", "umi_flank_3", "umi_flank_max_mismatch", "umi_search_window", "umi_len_min",
           "umi_len_max", "umi_cluster_max_dist", "umi_min_reads", "umi_collapse_stat", "umi_top_cluster_k",
-          "umi_top_cluster_w", "umi_top_cluster_wfrac", "umi_allele_min_sep", "umi_split_mixed"),
+          "umi_top_cluster_w", "umi_top_cluster_wfrac", "umi_top_cluster_min_share"),
   `5` = c("cluster", "cluster_by", "repeat_cluster_max", "repeat_cluster_min_prop", "repeat_cluster_downsample",
           "haplotype_cluster_max", "haplotype_cluster_downsample", "haplotype_region", "haplotype_trim_length",
           "consensus_threshold", "consensus_downsample", "call_variants", "waterfall", "waterfall_downsample",

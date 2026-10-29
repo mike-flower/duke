@@ -42,8 +42,8 @@ Every read in a UMI family descends from one original DNA molecule with one true
 
 1. The UMI is the sequence between `r params$umi_flank_5` (5') and `r params$umi_flank_3` (3'), located on the strand-corrected read with up to `r params$umi_flank_max_mismatch` edits (an exact match is used where there is one), and must be `r params$umi_len_min`–`r params$umi_len_max` bases long
 2. UMIs are clustered per sample with the directional rule at edit distance `r params$umi_cluster_max_dist`: a UMI joins a neighbour that has at least twice its reads (minus one)
-3. Each read is assigned to an allele by splitting the primary measure's (`r params$tracts_table$tract[1]`) read distribution at the valley between the alleles (where the gap between them is empty, just above the shorter allele, so reads in between go with the longer one); a family with at least two reads on each allele is `r ifelse(params$umi_split_mixed, "split into two molecules", "kept as one molecule and flagged")`
-4. Molecules with fewer than `r params$umi_min_reads` reads are dropped, and every measure is collapsed to one length per molecule with **`r params$umi_collapse_stat`**`r if (params$umi_collapse_stat == "top_cluster") sprintf(" (the median of the highest window of half-width %g + %g × length holding at least %d reads)", params$umi_top_cluster_w, params$umi_top_cluster_wfrac, params$umi_top_cluster_k) else ""`
+3. Each UMI family (all reads whose UMIs clustered together) is one molecule. Repeat length plays no part in forming molecules: PCR slippage and deletion can make reads of one molecule differ by tens of units, which is the error collapsing is meant to remove, so length cannot be used to decide which reads belong together. Nothing is assumed about how many alleles or clones a sample has
+4. Molecules with fewer than `r params$umi_min_reads` reads are dropped, and every measure is collapsed to one length per molecule with **`r params$umi_collapse_stat`**`r if (params$umi_collapse_stat == "top_cluster") sprintf(" (the median of the highest window of half-width %g + %g × length holding at least %d reads%s)", params$umi_top_cluster_w, params$umi_top_cluster_wfrac, params$umi_top_cluster_k, if (params$umi_top_cluster_min_share > 0) sprintf(" and at least %s of the molecule's reads", percent(params$umi_top_cluster_min_share)) else "") else ""`. A length halfway between two whole units goes to the one more of the molecule's reads sit on
 
 Modules 6 and 7 then report every result twice: per read and per molecule.
 
@@ -106,7 +106,7 @@ lb[, label := factor(label, levels = rev(label))]
 p_len <- ggplot(lb, aes(share, label, fill = accepted)) + geom_col() +
   geom_text(aes(label = sprintf("%s  (%s)", percent(share, 0.01), comma(N))), hjust = -0.05, size = 3.2) +
   scale_fill_manual(values = c(`TRUE` = "#00838f", `FALSE` = "grey65"), labels = c(`TRUE` = "accepted", `FALSE` = "rejected"), name = NULL) +
-  scale_x_continuous(labels = pct_axis(), expand = expansion(mult = c(0, 0.25))) +
+  scale_x_continuous(labels = pct_axis(), breaks = seq(0, 1, 0.25), expand = expansion(mult = c(0, 0.25))) +
   labs(x = "Share of UMIs (number of reads in brackets)", y = "UMI length", title = "UMI length, all samples") + theme_bw()
 print(p_len); save_plot(p_len, file.path(plots_dir, "umi_length.png"), 9, max(3, 0.35 * nrow(lb) + 1.5))
 ```
@@ -122,41 +122,43 @@ prim <- lengths[measure == primary, .(file_stem, qname, primary = length)]
 umi_reads <- prim[umi_reads, on = .(file_stem, qname)]
 by_s <- split(umi_reads[!is.na(umi) & !is.na(primary)], by = "file_stem")
 len_s <- split(lengths, by = "file_stem")
-mols <- apply_fn(names(by_s), function(s) form_molecules(s, by_s[[s]], len_s[[s]][, .(qname, measure, length)], params))
+mols <- apply_fn(names(by_s), function(s) form_molecules(s, by_s[[s]], len_s[[s]][, .(qname, measure, length)], params, primary))
 read_map <- rbindlist(lapply(mols, `[[`, "reads"))
 molecules <- rbindlist(lapply(mols, `[[`, "molecules"))
 molecule_lengths <- rbindlist(lapply(mols, `[[`, "molecule_lengths"))
 clustering <- rbindlist(lapply(mols, `[[`, "clustering"))
+collapse_compare <- rbindlist(lapply(mols, `[[`, "collapse_compare"))
 rm(mols, by_s, len_s)
-umi_reads <- read_map[, .(file_stem, qname, umi_group, read_allele, molecule_id)][umi_reads, on = .(file_stem, qname)]
+umi_reads <- read_map[, .(file_stem, qname, umi_group, molecule_id)][umi_reads, on = .(file_stem, qname)]
 timings["Clustering and collapse"] <- proc.time()["elapsed"] - .t
-summary_tab <- molecules[, .(molecules = .N, kept = sum(kept), mixed_families = sum(mixed_umi),
+summary_tab <- molecules[, .(molecules = .N, kept = sum(kept),
                              reads_in_kept = sum(n_reads[kept]), median_reads_per_kept = as.numeric(median(n_reads[kept]))), by = file_stem]
-summary_tab <- clustering[, .(file_stem, n_reads_with_umi, distinct_umis, umi_groups, umis_with_neighbour, expected_by_chance, valley, allele_centres)][summary_tab, on = "file_stem"]
+summary_tab <- clustering[, .(file_stem, n_reads_with_umi, distinct_umis, umi_groups, umis_with_neighbour, expected_by_chance)][summary_tab, on = "file_stem"]
 dt_full(summary_tab, caption = "UMI clustering and molecules per sample", digits = 2)
 ```
 
 ## Reads per molecule
 
-How many reads each molecule (a UMI family after clustering) received, pooled across samples: one bar for each number of reads from 1 to 30, then one for more than 30. The left panel counts molecules and the right panel the reads those molecules hold; teal molecules are kept (at least `umi_min_reads` = `r params$umi_min_reads` reads) and grey ones dropped. Single-read molecules are usually the most numerous but hold few of the reads; many of them mean the run was too shallow for the number of tagged molecules, or that UMIs carrying errors were not merged.
+How many reads each molecule (a UMI family after clustering) received, pooled across samples. Each bar is one number of reads from 1 to 10, then a band of sizes (11–15, 16–20, 21–30, 31–50, 51–100, 101–200, 201–500, more than 500), so that both small and very large molecules are readable. The top panel counts molecules and the bottom panel the reads those molecules hold; teal molecules are kept (at least `umi_min_reads` = `r params$umi_min_reads` reads) and grey ones dropped. Single-read molecules are usually the most numerous but hold few of the reads; many of them mean the run was too shallow for the number of tagged molecules, or that UMIs carrying errors were not merged.
 
-```{r family_size, fig.height=5}
-fs <- molecules[, .(molecules = .N, reads = sum(n_reads)), by = .(size = pmin(n_reads, 31L), kept)]
-fs[, size_lab := factor(data.table::fifelse(size > 30, ">30", as.character(size)), levels = c(as.character(1:30), ">30"))]
-fs <- melt(fs, id.vars = c("size", "size_lab", "kept"), measure.vars = c("molecules", "reads"), variable.name = "what", value.name = "n")
+```{r family_size, fig.height=5.5}
+size_breaks <- c(0:10, 15, 20, 30, 50, 100, 200, 500, Inf)
+size_labels <- c(as.character(1:10), "11-15", "16-20", "21-30", "31-50", "51-100", "101-200", "201-500", ">500")
+fs <- molecules[, .(molecules = .N, reads = sum(n_reads)), by = .(size_lab = cut(n_reads, size_breaks, labels = size_labels), kept)]
+fs <- melt(fs, id.vars = c("size_lab", "kept"), measure.vars = c("molecules", "reads"), variable.name = "what", value.name = "n")
 fs[, what := factor(what, levels = c("molecules", "reads"), labels = c("Molecules", "Reads in those molecules"))]
 km <- molecules[kept == TRUE, n_reads]
 mode_k <- if (length(km)) as.integer(names(which.max(table(km)))) else NA_integer_
 p_fam <- ggplot(fs, aes(size_lab, n, fill = kept)) + geom_col(width = 0.85) + facet_wrap(~ what, ncol = 1, scales = "free_y") +
   scale_fill_manual(values = c(`TRUE` = "#00838f", `FALSE` = "grey65"), labels = c(`TRUE` = "kept", `FALSE` = "dropped"), name = NULL) +
-  scale_x_discrete(breaks = c("1", "2", "3", "5", "10", "15", "20", "25", "30", ">30")) +
-  scale_y_continuous(labels = comma) +
+  scale_x_discrete(drop = FALSE) + scale_y_continuous(labels = comma) +
   labs(x = "Reads in the molecule", y = "Count", title = "Reads per molecule, all samples",
        subtitle = sprintf("%s molecules; %s kept (%.1f%%), holding %.1f%% of the reads. Kept molecules: median %s reads, commonest %s, middle 50%% %s-%s",
                           comma(nrow(molecules)), comma(length(km)), 100 * length(km) / nrow(molecules),
                           100 * sum(km) / sum(molecules$n_reads), median(km), mode_k,
-                          stats::quantile(km, 0.25), stats::quantile(km, 0.75))) + theme_bw()
-print(p_fam); save_plot(p_fam, file.path(plots_dir, "reads_per_molecule.png"), 11, 6)
+                          stats::quantile(km, 0.25), stats::quantile(km, 0.75))) + theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(p_fam); save_plot(p_fam, file.path(plots_dir, "reads_per_molecule.png"), 11, 6.5)
 ```
 
 Per sample: each point is one sample, its number of kept molecules against the median number of reads per kept molecule. Samples to the left have few molecules (little input DNA or few reads); samples low down were sequenced too shallowly for their number of molecules.
@@ -164,7 +166,7 @@ Per sample: each point is one sample, its number of kept molecules against the m
 ```{r family_size_sample, fig.height=5}
 ps <- molecules[kept == TRUE, .(kept = .N, median_reads = as.numeric(median(n_reads))), by = file_stem]
 p_ps <- ggplot(ps, aes(kept, median_reads)) + geom_point(colour = "#00838f", size = 2.5, alpha = 0.8) +
-  scale_x_log10(labels = comma) + scale_y_log10(breaks = c(1, 2, 3, 5, 10, 20, 50, 100, 200)) +
+  scale_x_log10(labels = comma) + scale_y_log10(breaks = c(1, 2, 3, 5, 10, 20, 30, 50, 100, 200, 500)) +
   labs(x = "Molecules kept (log scale)", y = "Median reads per kept molecule (log scale)", title = "Molecules and depth per sample") + theme_bw()
 print(p_ps); save_plot(p_ps, file.path(plots_dir, "molecules_and_depth.png"), 8, 5)
 ```
@@ -180,7 +182,7 @@ Each pair of points joined by a line is one sample. Observed far above expected 
 ```{r neighbours, fig.height=5}
 nb <- clustering[, .(file_stem, Expected = expected_by_chance / distinct_umis, Observed = umis_with_neighbour / distinct_umis)]
 nb_l <- melt(nb, id.vars = "file_stem", variable.name = "what", value.name = "share")
-p_nb <- ggplot(nb_l, aes(what, share)) + geom_line(aes(group = file_stem), colour = "grey75") + box_points_mean(digits = 2, percent = TRUE) +
+p_nb <- ggplot(nb_l, aes(what, share)) + geom_line(aes(group = file_stem), colour = "grey75") + box_points_mean(digits = 2, percent = TRUE, jitter = 0) +
   scale_y_continuous(labels = pct_axis()) +
   labs(x = NULL, y = "Distinct UMIs with a neighbour", title = "UMI neighbours: observed against chance",
        subtitle = sprintf("Median per sample: %s observed, %s expected by chance", percent(median(nb$Observed), 0.1), percent(median(nb$Expected), 0.01))) + theme_bw()
@@ -189,92 +191,11 @@ print(p_nb); save_plot(p_nb, file.path(plots_dir, "umi_neighbours.png"), 7, 5)
 
 ---
 
-# Families with reads on both alleles
-
-UMI families are formed from the UMI sequences alone; repeat length plays no part. Afterwards, each read is labelled short or long by the sample's allele boundary (the dashed line in the read-against-molecule plots below), and a family with at least two reads on **each** side is a *mixed family*. With `umi_split_mixed = `r params$umi_split_mixed`` mixed families `r if (params$umi_split_mixed) "are split into one molecule per allele (a side with fewer than umi_min_reads reads is then dropped)" else "are kept whole and only flagged"`; set `umi_split_mixed` to `r !params$umi_split_mixed` to `r if (params$umi_split_mixed) "keep them whole" else "split them"`.
-
-Splitting matters because the default length, `top_cluster`, takes the longest length supported by at least two reads: a family whose reads are mostly short but which carries a few long reads would otherwise be called long. Reads on the minority side can come from **template switching** between molecules during PCR (they then sit at the other allele's usual length) or from **large slippage or deletion** within the molecule's own allele (they then fall between the alleles). The plots below show which it is in this run.
-
-```{r mixed_families}
-.t <- proc.time()["elapsed"]
-fam <- umi_reads[!is.na(umi_group) & read_allele %in% c("short", "long"),
-                 .(n = .N, n_short = sum(read_allele == "short"), n_long = sum(read_allele == "long"),
-                   short_median = as.numeric(median(primary[read_allele == "short"])),
-                   long_median = as.numeric(median(primary[read_allele == "long"]))), by = .(file_stem, umi_group)]
-fam[, mixed := pmin(n_short, n_long) >= 2L]
-fam[, minority := pmin(n_short, n_long)][, minority_share := minority / n]
-fam[, minority_side := data.table::fifelse(n_short < n_long, "short", "long")]
-mixed_tab <- fam[, .(families = .N, families_3plus = sum(n >= params$umi_min_reads), mixed_families = sum(mixed),
-                     share_of_families_3plus_mixed = sum(mixed) / max(1, sum(n >= params$umi_min_reads)),
-                     reads = sum(n), reads_in_mixed = sum(n[mixed]), share_of_reads_in_mixed = sum(n[mixed]) / sum(n),
-                     minority_reads = sum(minority[mixed])), by = file_stem]
-cat(sprintf("%s of %s families with at least %d reads (%.1f%%) have at least two reads on each allele; they hold %.1f%% of the reads. Splitting is %s.",
-            comma(sum(mixed_tab$mixed_families)), comma(sum(mixed_tab$families_3plus)), params$umi_min_reads,
-            100 * sum(mixed_tab$mixed_families) / max(1, sum(mixed_tab$families_3plus)),
-            100 * sum(mixed_tab$reads_in_mixed) / sum(mixed_tab$reads), if (params$umi_split_mixed) "on" else "off"))
-```
-
-## How many families are mixed
-
-Each point is one sample: the share of its families (with at least `r params$umi_min_reads` reads) that are mixed, and the share of its reads that sit in mixed families. A sample far above the others has more cross-allele reads, for example from more PCR cycles or a misplaced allele boundary (check its boundary in the table below).
-
-```{r mixed_share, fig.height=5}
-ms <- melt(mixed_tab[, .(file_stem, `Families mixed` = share_of_families_3plus_mixed, `Reads in mixed families` = share_of_reads_in_mixed)],
-           id.vars = "file_stem", variable.name = "what", value.name = "share")
-p_ms <- ggplot(ms, aes(what, share)) + box_points_mean(digits = 1, percent = TRUE) +
-  scale_y_continuous(labels = pct_axis(), limits = c(0, NA), expand = expansion(mult = c(0.02, 0.1))) +
-  labs(x = NULL, y = "Share of the sample", title = "Families with reads on both alleles, per sample") + theme_bw()
-print(p_ms); save_plot(p_ms, file.path(plots_dir, "mixed_families_share.png"), 8, 5)
-```
-
-```{r mixed_table}
-dt_full(clustering[, .(file_stem, valley, allele_centres)][mixed_tab, on = "file_stem"],
-        caption = "Mixed families per sample, with the allele boundary (valley) and allele centres", digits = 3)
-```
-
-## What a mixed family looks like
-
-**Left:** how many reads the minority side has, as a share of the family. Template switching late in PCR gives a small minority (a few reads in a large family); two molecules that share a UMI by chance give two substantial sides. **Right:** for every mixed family (up to 5,000 per sample), the median length of its short-side reads against the median length of its long-side reads, shaded by the number of families. Families from template switching sit at the two allele peaks (one dense cell); families whose short side comes from large slippage or deletion of the long allele spread along the x-axis between the alleles.
-
-```{r mixed_shape, fig.height=5}
-mf <- fam[mixed == TRUE]
-set.seed(123)
-mf_s <- mf[, .SD[sample(.N, min(.N, 5000))], by = file_stem]
-p_min <- ggplot(mf, aes(minority_share)) + geom_histogram(binwidth = 0.025, boundary = 0, fill = "#00838f") +
-  scale_x_continuous(labels = pct_axis(), limits = c(0, 0.5)) + scale_y_continuous(labels = comma) +
-  labs(x = "Minority side, share of the family's reads", y = "Mixed families", title = "Size of the minority side") + theme_bw()
-p_sl <- ggplot(mf_s, aes(short_median, long_median)) + geom_bin2d(binwidth = c(2, 2)) +
-  scale_fill_viridis_c(trans = "log10", labels = comma, name = "Families") +
-  labs(x = paste("Median", primary, "length, short-side reads"), y = paste("Median", primary, "length, long-side reads"),
-       title = "Lengths on the two sides") + theme_bw()
-p_mixed <- if (nrow(mf)) patchwork::wrap_plots(p_min, p_sl, widths = c(1, 1.2)) else NULL
-if (!is.null(p_mixed)) { print(p_mixed); save_plot(p_mixed, file.path(plots_dir, "mixed_families_shape.png"), 12, 5) } else cat("No mixed families.\n")
-```
-
-## Where the minority reads fall
-
-The `r primary` length of every minority-side read in a mixed family (up to 5,000 families per sample), pooled across samples, with the majority-side reads of the same families for comparison, on a square-root axis. Minority reads piled at the other allele's peak point to template switching; minority reads spread between the peaks point to slippage or deletion.
-
-```{r minority_lengths, fig.height=4.5}
-if (nrow(mf)) {
-  mr <- umi_reads[mf_s[, .(file_stem, umi_group, minority_side)], on = .(file_stem, umi_group), nomatch = NULL][read_allele %in% c("short", "long")]
-  mr[, side := factor(data.table::fifelse(read_allele == minority_side, "Minority side", "Majority side"), levels = c("Majority side", "Minority side"))]
-  p_mr <- ggplot(mr, aes(primary, fill = side)) + geom_histogram(binwidth = 1, position = "identity", alpha = 0.7) +
-    scale_fill_manual(values = c(`Majority side` = "grey60", `Minority side` = "#d95f02"), name = NULL) +
-    scale_y_continuous(trans = "sqrt", labels = comma) +
-    labs(x = paste(primary, "length of the read"), y = "Reads (square-root axis)", title = "Reads in mixed families, by side") + theme_bw()
-  print(p_mr); save_plot(p_mr, file.path(plots_dir, "mixed_families_reads.png"), 10, 4.5)
-}
-timings["Mixed families"] <- proc.time()["elapsed"] - .t
-```
-
----
-
 # What collapsing removes
 
 ## Read error within molecules
 
-For every read in a kept molecule, and for every measure (each tract and each combined measure): the read's length minus its molecule's collapsed length. This is the error that collapsing removes. The comparison is made read by read against the molecule's own length, so no allele split is needed and it works the same for controls, single-allele samples and samples with several expanded clones.
+For every read in a kept molecule, and for every measure (each tract and each combined measure): the read's length minus its molecule's collapsed length. This is the error that collapsing removes. Each read is compared with its own molecule, so nothing is assumed about alleles: it works the same for controls, single-allele samples and samples with several expanded clones.
 
 ```{r within_error_data}
 .t <- proc.time()["elapsed"]
@@ -320,18 +241,58 @@ p_wh <- ggplot(wl[abs(dev) <= 30], aes(dev)) + geom_histogram(binwidth = 1, fill
   scale_y_continuous(trans = "sqrt", labels = comma) +
   labs(x = "Read length minus its molecule's length (units)", y = "Reads (square-root axis)", title = "Within-molecule read error, all lengths") + theme_bw()
 print(p_wh); save_plot(p_wh, file.path(plots_dir, "within_molecule_error_hist.png"), max(8, 4 * nrow(measures)), 4.5)
+far <- wl[measure == primary, .(reads = .N, far_below = mean(dev < -10), far_above = mean(dev > 10)), by = file_stem]
 rm(wl, rm_map)
 timings["Within-molecule error"] <- proc.time()["elapsed"] - .t
 ```
 
+### Reads far from their molecule, per sample
+
+Each point is one sample: the share of its reads (in kept molecules) whose `r primary` length is more than 10 units shorter, or more than 10 units longer, than their own molecule's length. These are the large PCR errors that collapsing removes: big slippage or deletion (shorter) and PCR chimeras or insertions (longer). It is a measure of PCR damage that needs no assumption about alleles. A sample far above the others had a harder PCR (more cycles, less template, or a long expanded allele), and its read-level results will be the most distorted.
+
+```{r far_reads, fig.height=5}
+far_l <- melt(far, id.vars = c("file_stem", "reads"), variable.name = "what", value.name = "share")
+far_l[, what := factor(what, levels = c("far_below", "far_above"), labels = c("More than 10 units shorter", "More than 10 units longer"))]
+p_far <- ggplot(far_l, aes(what, share)) + box_points_mean(digits = 1, percent = TRUE) +
+  scale_y_continuous(labels = pct_axis(), limits = c(0, NA), expand = expansion(mult = c(0.02, 0.1))) +
+  labs(x = NULL, y = "Reads in the sample", title = "Reads far from their molecule's length, per sample") + theme_bw()
+print(p_far); save_plot(p_far, file.path(plots_dir, "reads_far_from_molecule.png"), 8, 5)
+```
+
+## How the length rule changes molecules
+
+Each molecule's `r primary` length calculated by four rules, all from the same reads: **top_cluster** with only `umi_top_cluster_k` = `r params$umi_top_cluster_k` reads needed (the current default), **top_cluster** that also needs 20% of the molecule's reads, the **mode** (the commonest length) and the **median**. top_cluster takes the longest length well supported by the molecule's reads, because PCR slippage mostly shortens reads; with only 2 reads needed, 2 stray long reads (for example PCR chimeras) can set the length of a large molecule. The 20% rule stops that. The mode and median follow the majority of reads and so are pulled down by slippage. The plot shows the length distribution of molecules (whole run, each sample weighted equally) under each rule; the table gives, for each rule, how many molecules differ from the current default by more than 2 units.
+
+```{r collapse_compare, fig.height=5}
+rule_names <- c(top_cluster_k2 = "top_cluster, 2 reads", top_cluster_share20 = "top_cluster, 20% of reads", mode = "mode", median = "median")
+cc <- melt(collapse_compare, id.vars = c("file_stem", "molecule_id", "n_reads"), measure.vars = names(rule_names), variable.name = "rule", value.name = "length")
+cc[, rule := factor(rule_names[as.character(rule)], levels = rule_names)]
+ccd <- cc[, .N, by = .(file_stem, rule, length = floor(length + 0.5))][, prop := N / sum(N), by = .(file_stem, rule)]
+xmax_cc <- stats::quantile(collapse_compare$top_cluster_k2, 0.999, na.rm = TRUE) + 10
+ccg <- CJ(file_stem = unique(ccd$file_stem), rule = factor(rule_names, levels = rule_names), length = seq(0, ceiling(xmax_cc)))
+ccc <- ccd[ccg, on = .(file_stem, rule, length)][is.na(prop), prop := 0][, .(prop = mean(prop)), by = .(rule, length)]
+p_cc <- ggplot(ccc, aes(length, prop, colour = rule)) + geom_step(direction = "mid") +
+  scale_colour_manual(values = c("#00838f", "#d95f02", "#7570b3", "grey45"), name = NULL) +
+  scale_y_continuous(trans = "sqrt", labels = pct_axis()) +
+  labs(x = paste(primary, "length of the molecule"), y = "Share of molecules (square-root axis)",
+       title = "Molecule length by length rule: whole run", subtitle = "Each sample weighted equally") + theme_bw() + theme(legend.position = "bottom")
+print(p_cc); save_plot(p_cc, file.path(plots_dir, "length_rule_comparison.png"), 10, 5)
+rule_tab <- rbindlist(lapply(names(rule_names)[-1], function(r) {
+  d <- collapse_compare[[r]] - collapse_compare$top_cluster_k2
+  data.table(rule = rule_names[[r]], molecules = sum(is.finite(d)), shorter_by_more_than_2 = mean(d < -2, na.rm = TRUE),
+             longer_by_more_than_2 = mean(d > 2, na.rm = TRUE), median_difference = stats::median(d, na.rm = TRUE))
+}))
+dt_compact(rule_tab, caption = "Molecule length by each rule compared with top_cluster (2 reads), all samples", digits = 3)
+```
+
 ## Read and molecule distributions
 
-The `r primary` length distribution of reads (grey) and of molecules (teal) for the whole run: each sample's distribution is scaled to its own total and then averaged, so every sample counts equally whatever its depth. The y-axis is square-root so that a minor allele is visible next to the major one, and the x-axis stops at the length that 99.9% of molecules fall below. Collapsing should narrow each allele's peak and remove the stutter shoulder below it. One sample is shown below as an example; every sample, with its allele boundary marked, is in `plots/reads_vs_molecules/`.
+The `r primary` length distribution of reads (grey) and of molecules (teal) for the whole run: each sample's distribution is scaled to its own total and then averaged, so every sample counts equally whatever its depth. The y-axis is square-root so that a minor allele is visible next to the major one, and the x-axis stops at the length that 99.9% of molecules fall below. Collapsing should narrow each allele's peak and remove the stutter shoulder below it. One sample is shown below as an example; every sample is in `plots/reads_vs_molecules/`.
 
 ```{r dist_compare, fig.height=4.5}
 dc <- rbind(lengths[measure == primary, .(file_stem, unit = "Reads", length)],
             molecule_lengths[measure == primary, .(file_stem, unit = "Molecules", length)])
-dc <- dc[, .N, by = .(file_stem, unit, length = round(length))][, prop := N / sum(N), by = .(file_stem, unit)]
+dc <- dc[, .N, by = .(file_stem, unit, length = floor(length + 0.5))][, prop := N / sum(N), by = .(file_stem, unit)]
 # Lengths with no reads or molecules are drawn as zero, so the step line drops between peaks
 dc <- dc[dc[, .(length = seq(min(length), max(length))), by = .(file_stem, unit)], on = .(file_stem, unit, length)]
 dc[is.na(prop), `:=`(N = 0L, prop = 0)]
@@ -347,13 +308,10 @@ print(p_cohort); save_plot(p_cohort, file.path(plots_dir, "reads_vs_molecules_co
 
 xmax <- molecule_lengths[measure == primary, .(xmax = stats::quantile(length, 0.999, na.rm = TRUE) + 10), by = file_stem]
 dc <- xmax[dc, on = "file_stem"][length <= xmax]
-vl <- clustering[!is.na(valley), .(file_stem, valley)]
 draw_dc <- function(d, title) ggplot(d, aes(length, prop, colour = unit)) + geom_step(direction = "mid") +
-  geom_vline(data = vl[file_stem %in% d$file_stem], aes(xintercept = valley), linetype = "dashed", colour = "grey40") +
   scale_colour_manual(values = c(Reads = "grey55", Molecules = "#00838f"), name = NULL) +
   scale_y_continuous(trans = "sqrt", labels = pct_axis()) +
-  labs(x = paste(primary, "length"), y = "Share of reads or molecules (square-root axis)", title = title,
-       subtitle = "Dashed line = the sample's allele boundary") + theme_bw()
+  labs(x = paste(primary, "length"), y = "Share of reads or molecules (square-root axis)", title = title) + theme_bw()
 first <- unique(dc$file_stem)[1]
 p_dc <- draw_dc(dc[file_stem == first], paste("Example sample:", first))
 print(p_dc)
@@ -368,14 +326,15 @@ if (params$plot_per_sample) for (s in unique(dc$file_stem))
 ```{r save}
 mol_dir <- file.path(umi_dir, "molecules"); dir.create(mol_dir, showWarnings = FALSE)
 wide <- dcast(molecule_lengths, file_stem + molecule_id ~ measure, value.var = "length")
-wide <- molecules[kept == TRUE, .(file_stem, molecule_id, umi, allele, n_reads, mixed_umi, allele_agreement)][wide, on = .(file_stem, molecule_id)]
+wide <- molecules[kept == TRUE, .(file_stem, molecule_id, umi, n_reads)][wide, on = .(file_stem, molecule_id)]
 for (s in unique(wide$file_stem)) fwrite(wide[file_stem == s], file.path(mol_dir, paste0(s, ".tsv.gz")), sep = "\t")
 module4_output <- list(umi_reads = umi_reads, molecules = molecules, molecule_lengths = molecule_lengths,
-                       clustering = clustering, summary = summary_tab, mixed_families = mixed_tab, hash = params$module_hash)
+                       clustering = clustering, summary = summary_tab, collapse_compare = collapse_compare, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "04_umi.RData")
 save(module4_output, file = output_path)
 write_excel_function(list(summary = summary_tab, extraction = dcast(outcome, file_stem ~ umi_outcome, value.var = "N", fill = 0),
-                          mixed_families = mixed_tab, within_molecule_error = we_sum, within_error_by_length = we_len), xlsx_path)
+                          within_molecule_error = we_sum, within_error_by_length = we_len, reads_far_from_molecule = far,
+                          length_rule_comparison = rule_tab), xlsx_path)
 ```
 
 **`r comma(sum(molecules$kept))`** molecules kept across **`r uniqueN(molecules$file_stem)`** samples.
@@ -387,11 +346,11 @@ write_excel_function(list(summary = summary_tab, extraction = dcast(outcome, fil
 ```{r diagnostics}
 timing_df <- build_timing_table(timings)
 manifest <- build_manifest(module4_output, c(
-  umi_reads = "One row per read: UMI, extraction outcome, UMI group, read allele, molecule",
-  molecules = "One row per molecule: UMI, allele, reads, mixed flag, kept flag",
+  umi_reads = "One row per read: UMI, extraction outcome, UMI group, molecule",
+  molecules = "One row per molecule (UMI family): UMI, reads, kept flag",
   molecule_lengths = "Long table (molecule_id, measure, length) of collapsed lengths for kept molecules",
   clustering = "Per-sample clustering summary", summary = "Per-sample molecule summary",
-  mixed_families = "Per-sample families with reads on both alleles", hash = "Parameter hash used for resume"))
+  collapse_compare = "Per kept molecule: primary-measure length by four length rules", hash = "Parameter hash used for resume"))
 write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)
 dt_compact(timing_df, caption = "Section timing")
 dt_compact(manifest, caption = sprintf("module4_output – %s on disk", format_size(file.size(output_path))))

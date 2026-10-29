@@ -22,7 +22,7 @@ wrap_label <- function(x, width = 14) {
 # alleles fill the panel; the colour is on a log scale from 0.01%, so a minor allele
 # or a thin expansion tail is as visible as the main peak, and lengths with no reads
 # stay white.
-length_heatmap <- function(d, title, binwidth = 1, ylab = "Repeat length") {
+length_heatmap <- function(d, title, binwidth = 1, ylab = "Repeat length", unit = "reads") {
   d <- data.table::as.data.table(d)
   ymax <- stats::quantile(d$length, 0.999, na.rm = TRUE)
   n_out <- sum(d$length > ymax, na.rm = TRUE)
@@ -35,7 +35,7 @@ length_heatmap <- function(d, title, binwidth = 1, ylab = "Repeat length") {
     ggplot2::facet_grid(~ group_label, scales = "free_x", space = "free_x", labeller = ggplot2::as_labeller(wrap_label)) +
     ggplot2::scale_y_continuous(expand = c(0, 0), breaks = scales::pretty_breaks(10)) +
     ggplot2::labs(x = NULL, y = ylab, title = title,
-                  subtitle = sprintf("Lengths above %s (the top 0.1%%, %s reads) not drawn", round(ymax), format(n_out, big.mark = ","))) +
+                  subtitle = sprintf("Lengths above %s (the top 0.1%%, %s %s) not drawn", round(ymax), format(n_out, big.mark = ","), unit)) +
     ggplot2::theme_bw() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7),
                    panel.spacing = grid::unit(2, "pt"), strip.text = ggplot2::element_text(size = 7),
@@ -49,7 +49,7 @@ length_panel <- function(reads, molecules = NULL, marks = NULL, title = NULL, xl
   p <- ggplot2::ggplot(data.frame(length = reads), ggplot2::aes(length)) +
     ggplot2::geom_histogram(binwidth = binwidth, fill = "grey60", colour = NA, boundary = -0.5 * binwidth)
   if (!is.null(molecules) && length(molecules)) {
-    b <- round(molecules / binwidth)
+    b <- floor(molecules / binwidth + 0.5)
     mh <- data.frame(length = seq(min(b) - 1, max(b) + 1) * binwidth)
     mh$Freq <- tabulate(b - min(b) + 2, nbins = nrow(mh))
     mh$scaled <- mh$Freq * length(reads) / length(molecules)
@@ -64,7 +64,11 @@ length_panel <- function(reads, molecules = NULL, marks = NULL, title = NULL, xl
                           inherit.aes = FALSE, size = 2.6, hjust = -0.05, label.size = 0, fill = "white", alpha = 0.8) +
       ggplot2::scale_colour_manual(values = cols, guide = "none")
   }
-  p + (if (sqrt_y) ggplot2::scale_y_sqrt(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05)))
+  # The x-axis stops at the 99.9th percentile of the reads, so a few very long reads do
+  # not squash the distribution into the left of the panel
+  xr <- c(min(reads, na.rm = TRUE), stats::quantile(reads, 0.999, na.rm = TRUE)) + c(-2, 2) * binwidth
+  p + ggplot2::coord_cartesian(xlim = xr) +
+    (if (sqrt_y) ggplot2::scale_y_sqrt(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05)))
        else ggplot2::scale_y_continuous(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05)))) +
     ggplot2::labs(x = xlab, y = if (sqrt_y) "Reads (square-root scale)" else "Reads", title = title) +
     ggplot2::theme_bw() + ggplot2::theme(plot.title = ggplot2::element_text(size = 10))

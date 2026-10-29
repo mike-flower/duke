@@ -96,7 +96,7 @@ for (u in c("reads", if (!is.null(mol)) "molecules")) for (m in measures$measure
   src <- if (u == "reads") lengths[measure == m, .(file_stem, length)] else mol[measure == m, .(file_stem, length)]
   if (!nrow(src)) next
   d <- meta[, .(file_stem, sample_label = short_label, group_label)][src, on = "file_stem"]
-  p <- length_heatmap(d, sprintf("%s length, %s", m, u), params$repeat_histogram_binwidth, paste(m, "length"))
+  p <- length_heatmap(d, sprintf("%s length, %s", m, u), params$repeat_histogram_binwidth, paste(m, "length"), u)
   save_plot(p, file.path(plots_dir, sprintf("heatmap_%s_%s.png", safe_path(m), u)), hm_w, 7)
   if (u == "reads" || m == primary) { cat(sprintf("\n\n## %s, %s\n\n", m, u)); print(p) }
 }

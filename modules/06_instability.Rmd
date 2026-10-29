@@ -288,7 +288,7 @@ The headline metrics for each group, plotted against time: one column per group,
 for (m in measures$measure) for (rg in sort(unique(range_table$range_name[range_table$measure == m]))) {
   d <- instability_metrics[measure == m & analysis_range_name == rg & setpoint_type == hl_type]
   if (!nrow(d)) next
-  lab <- range_table$range_label[range_table$measure == m & range_table$range_name == rg][1]
+  lab <- range_table$range_text[range_table$measure == m & range_table$range_name == rg][1]
   p <- timecourse_plot(d, sprintf("%s, %s (%s)", m, rg, lab))
   save_plot(p, file.path(plots_dir, "timecourse", safe_path(m), paste0(safe_path(m), "-", rg, ".png")), tc_w, tc_h)
   if (m == primary && rg %in% plot_ranges) { cat("\n\n### ", m, ", ", rg, " (", lab, ")\n\n", sep = ""); print(p) }

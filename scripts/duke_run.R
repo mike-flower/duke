@@ -142,10 +142,9 @@ params <- list(
   umi_top_cluster_w = 3,
   # top_cluster: length-proportional part of the window half-width
   umi_top_cluster_wfrac = 0.1,
-  # Minimum separation (repeats) between alleles when splitting UMI families
-  umi_allele_min_sep = 20,
-  # Split a UMI family with at least 2 reads on each allele into two molecules
-  umi_split_mixed = TRUE,
+  # top_cluster: share of the molecule's reads the window must also hold (0 = only
+  # umi_top_cluster_k reads needed)
+  umi_top_cluster_min_share = 0,
 
   # --- Allele structure --------------------------------------------------------
   # Cluster reads into alleles, build consensus sequences and call variants

@@ -86,8 +86,7 @@ duke_param_spec <- function() {
     .p("umi_top_cluster_k", 2L, "int", "UMI", "top_cluster: reads required in the window"),
     .p("umi_top_cluster_w", 3, "num", "UMI", "top_cluster: constant part of the window half-width (repeats)"),
     .p("umi_top_cluster_wfrac", 0.10, "num", "UMI", "top_cluster: length-proportional part of the window half-width"),
-    .p("umi_allele_min_sep", 20, "num", "UMI", "Minimum separation (repeats) between alleles when splitting UMI families"),
-    .p("umi_split_mixed", TRUE, "lgl", "UMI", "Split a UMI family with at least 2 reads on each allele into two molecules"),
+    .p("umi_top_cluster_min_share", 0, "num", "UMI", "top_cluster: share of the molecule's reads the window must also hold (0 = only umi_top_cluster_k reads needed)"),
 
     # --- Module 5: allele structure ---------------------------------------------------------
     .p("cluster", FALSE, "lgl", "Allele structure", "Cluster reads into alleles, build consensus sequences and call variants"),
@@ -149,7 +148,8 @@ duke_defaults <- function() {
 .legacy_params <- list(
   repeat_histogram = NULL, repeat_scatter = NULL, repeat_density = NULL,
   repeat_distribution_metrics = NULL, cluster_consensus = NULL, dna_colours = NULL,
-  waterfall_y_axis_labels = NULL, haplotype_method = NULL, visualise_alignment_n_reads = NULL
+  waterfall_y_axis_labels = NULL, haplotype_method = NULL, visualise_alignment_n_reads = NULL,
+  umi_allele_min_sep = NULL, umi_split_mixed = NULL
 )
 
 # Merge user params into defaults, coerce types and validate

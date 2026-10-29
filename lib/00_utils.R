@@ -250,11 +250,12 @@ pct_axis <- function(accuracy = NULL) scales::label_percent(accuracy = accuracy)
 
 # Consistent summary layers: box + every point + mean diamond, with the mean
 # written in red beside the box (clear of the points). percent = TRUE writes a
-# proportion as a percentage with `digits` decimals.
-box_points_mean <- function(point_colour = "grey30", digits = 1, label = TRUE, percent = FALSE) {
+# proportion as a percentage with `digits` decimals. jitter = 0 keeps points on the
+# category line (needed when lines join paired points).
+box_points_mean <- function(point_colour = "grey30", digits = 1, label = TRUE, percent = FALSE, jitter = 0.15) {
   lay <- list(
     ggplot2::geom_boxplot(outlier.shape = NA, fill = "grey92", colour = "grey40", width = 0.5),
-    ggplot2::geom_jitter(width = 0.15, height = 0, size = 1.8, alpha = 0.7, colour = point_colour),
+    ggplot2::geom_jitter(width = jitter, height = 0, size = 1.8, alpha = 0.7, colour = point_colour),
     ggplot2::stat_summary(fun = mean, geom = "point", shape = 18, size = 4, colour = "red")
   )
   fmt <- if (percent) function(v) scales::percent(v, accuracy = 10^-digits) else function(v) formatC(v, format = "f", digits = digits)
