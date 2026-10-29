@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.0.2** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.0.3** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -181,9 +181,11 @@ The first tract is the primary measure: it is used for the read selection above,
 
 Set these to match your own oligos. Reads are oriented to the reference first, so the flanks are searched on the forward strand.
 
-**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is then split by allele: the allele boundary is found per sample from the valley in the repeat-length distribution, and a family with at least two reads on each allele is split into two molecules (`umi_split_mixed`). Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: the densest window of reads (`umi_top_cluster_k` reads within ±(`w` + `wfrac` × length)), which ignores PCR stutter and chimeric outliers better than the median.
+**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is then split by allele: the allele boundary is found per sample from the valley in the repeat-length distribution (where the alleles are far apart and the gap between them is nearly empty, the boundary is placed just above the shorter allele, so contracted copies of the longer allele stay with it), and a family with at least two reads on each allele is split into two molecules (`umi_split_mixed`). Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: the densest window of reads (`umi_top_cluster_k` reads within ±(`w` + `wfrac` × length)), which ignores PCR stutter and chimeric outliers better than the median.
 
-**Report.** Extraction outcome per sample (found, no 5' flank, no 3' flank, wrong length), UMI length, reads per molecule, UMI neighbours against the number expected by chance (a check that clustering merges errors, not distinct UMIs), within-molecule length error by allele, and reads against molecules.
+**Splitting mixed families.** UMI families are formed from the UMI sequences alone. A family with at least two reads on each side of the allele boundary is then split into one molecule per allele (`umi_split_mixed = TRUE`, the default), because `top_cluster` takes the longest well-supported length and would otherwise call a mostly short family long because of a few long reads. Set `umi_split_mixed = FALSE` to keep such families whole (consider `umi_collapse_stat = "mode"` then, so that the majority of reads sets the length). The Module 4 section *Families with reads on both alleles* shows how many families are mixed and what their minority reads look like.
+
+**Report.** Extraction outcome per sample (found, no 5' flank, no 3' flank, wrong length), UMI length, reads per molecule, mixed families, UMI neighbours against the number expected by chance (a check that clustering merges errors, not distinct UMIs), within-molecule length error by allele, and reads against molecules.
 
 **Downstream.** Modules 6 and 7 report every distribution and metric for reads and for molecules (`unit` column). Each measure is collapsed separately, so a molecule's `CAG_CCG_sum` is the collapsed sum, not the sum of the collapsed CAG and CCG. `04_umi/molecules/{sample}.tsv.gz` lists every molecule.
 
@@ -215,7 +217,7 @@ Set these to match your own oligos. Reads are oriented to the reference first, s
 
 ## How repeats are counted
 
-Duke counts **pure repeat units**. For a 47Q HTT allele (`(CAG)n CAA CAG CCG CCA (CCG)7`): standard 45 CAG, DOI (loss of CAA CAG duplicated) 43 CAG, LOI (loss of interruption, CAA → CAG) 47 CAG.
+Duke counts the **repeat tract itself**: the run of CAG units, without the interruptions and sequence that follow it. For a 47Q HTT allele (`(CAG)n CAA CAG CCG CCA (CCG)7`): standard 45 CAG, DOI (loss of CAA CAG duplicated) 43 CAG, LOI (loss of interruption, CAA → CAG) 47 CAG.
 
 A tract is a run of motif matches, with gaps of up to `rpt_max_gap` bases inside a run and `rpt_max_tract_gap` between runs merged. It must start and end with `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` perfect units, which trims e.g. a trailing `CAACAG` off the CAG tract. The search covers the sequence between the two flank alignments plus `rpt_flank_pad` bases (30) either side, because the aligner sometimes places the last unit inside a flank (the cause of the 1-unit under-count of LOI alleles in v2).
 
@@ -227,7 +229,9 @@ Three counts per tract:
 | `match` | exact motif matches in the tract |
 | `pure` | the longest uninterrupted run |
 
-Module 3 reports the modal length of every sample by every method (`modal_by_method`), and how often the methods agree.
+**Why `full` is the default.** A single wrong base inside the tract breaks it into two runs. `full` runs across it (the gap is within `rpt_max_gap`), `match` loses one unit, and `pure` drops to the longer of the two pieces. Sequencing errors inside long repeats are common enough for this to matter: in the 2026 jasmine MSH3ko/MLH1ko UMI run (PacBio HiFi, read quality about Q42 overall), in one sample 6% of reads with a 14-CAG tract but 58% of reads with a ~130-CAG tract had a broken tract, with breaks at random positions, so the median `pure` count of the long allele was 88 against 132 for `full` and 131 for `match`. `pure` is only the right count where the question is a real interruption, and Module 3 shows which situation you are in.
+
+Module 3 compares the methods read by read, so no assumption about alleles or controls is needed: the share of reads where `match` or `pure` differs from `full` at each tract length (per sample and pooled), each count against `full` for every read, and where along the tract the breaks fall (flat = sequencing errors; a sharp peak = a real interruption). The tables are in `repeat_detection.xlsx` (`method_agreement`, `method_by_length`, `modal_by_method`).
 
 ### Repeat detection parameters (Module 3)
 
@@ -482,7 +486,7 @@ Edit the paths in the script, then `qsub scripts/duke_myriad.sh` (or `sbatch` fo
 
 Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data read so far), `qdel <id>`, `qacct -j <id>` (SGE); `squeue -u $USER`, `scancel <id>`, `sacct -j <id>` (Slurm). Duke's progress goes to the scheduler's `logs/duke_<id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's warnings and messages go to the run log only. Loading R on a compute node can take a few minutes before the first Duke line appears, and on shared filesystems new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file.
 
-**Run time.** Module 3 is vectorised (seconds per sample) and Module 7 writes one card per sample instead of one plot per sample × range × plot type, so Modules 3 to 7 take minutes rather than hours. Module 2 (minimap2) and, when enabled, trimming and clustering dominate. On 2 cores, 14 PacBio samples of 2,500 reads run Modules 1 to 7 with clustering in about 3 minutes.
+**Run time.** On 2 cores, 14 PacBio samples of 2,500 reads run Modules 1 to 7 with clustering in about 3 minutes. On a full run (Myriad, 6 cores, 66 PacBio samples, 21 M reads, 2026 jasmine UMI run), Module 1 took 28 min, Module 2 35 min to 1 h 12 min (depending on what else shared the node) and Module 3 about 1 h, against about 1.5 h, 6.5 h and 7.5 h for the same data in v2.3.1. Run time grows roughly in proportion to the number of reads; trimming and clustering, when switched on, add to it. Module 1 holds the reads in memory: about 12.5 GB for 21 M reads.
 
 ---
 
@@ -507,8 +511,10 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - **"Reference must contain exactly one N block"** – mask the repeat with one run of N; for separate tracts use separate references in the tracts table.
 - **A tract is detected in few reads** (Module 3 detection plot) – check the motif and that the N block covers the tract; lower `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` for very interrupted tracts.
 - **Few UMIs extracted** – the Module 4 outcome plot says which flank is missing; check the flank sequences and orientation, and `umi_search_window`.
-- **Module 6 skipped** – no settings file was given, or the path does not exist (the run log says "Skipped (no settings file ...)"; check the path).
-- **"No analysis ranges could be read from the settings file"** – none of the settings rows match a sample in `dir_data`, or the matching rows have no `analysis_ranges`. Check that `file_name` matches the input file names.
+- **"Settings file not found"** – `path_settings` was given but the file is not there; Duke stops before running anything. `--dry_run` checks every input path.
+- **Module 6 skipped** – no settings file was given (`path_settings` unset).
+- **"None of the ... file names in the settings file match"** – `file_name` must be the input file name, with or without its extension; the message shows examples from both sides.
+- **"No analysis ranges could be read from the settings file"** – the matching rows have no `analysis_ranges`.
 - **Results did not change after updating Duke** – resume reused old modules; delete `module_data/`.
 - **"umi_min_reads must exceed umi_top_cluster_k"** – with exactly k reads `top_cluster` returns their median; raise `umi_min_reads` or change the statistic.
 
@@ -544,6 +550,17 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 
 **v3.0.2**
 - UMI clustering (Module 4) assigned UMIs to their groups by name, which slows down with the square of the number of distinct UMIs: 63,000 UMIs took 100 s and a sample with 300,000 about 40 minutes. It now works by position: 315,000 UMIs in 24 s, with identical groups.
+
+**v3.0.3**
+- Module 3 compares the counting methods read by read: the share of reads where `match` or `pure` differs from `full` at each tract length (per sample and pooled), each count against `full` for every read, and where along the tract the breaks fall, with `method_by_length` added to `repeat_detection.xlsx`. See [Why `full` is the default](#how-repeats-are-counted).
+- UMI allele boundary (Module 4): where the two alleles are far apart, the gap between them is nearly empty and the old rule placed the boundary anywhere in it; in the 2026 jasmine run it fell between 20 and 106 CAG depending on the sample, and where it fell inside the lower tail of the expanded allele (about 10 of 66 samples) it split up to 7,900 UMI families per sample that belonged to one molecule. The boundary is now the first point above the shorter allele where the density reaches the floor of the dip (about 20 CAG for a 14/135 sample), found with a smoothing bandwidth of at least one unit so that the gaps between whole-number lengths are not mistaken for it. This changes the Module 4 molecules for those samples. The read-against-molecule plots show the boundary.
+- Module 4 report: a new section, *Families with reads on both alleles*, shows how many UMI families are mixed (per sample, as families and as reads), how large the minority side is, the lengths on each side of every mixed family, and where the minority reads fall, so you can see whether they come from template switching (minority reads at the other allele's peak) or from large slippage or deletion (spread between the alleles), and whether splitting (`umi_split_mixed`, on by default) suits the data. Per-sample counts are in `umi.xlsx` (`mixed_families`).
+- Module 4 report: UMI length as one labelled bar per length (share and read count, accepted and rejected); reads per molecule as one bar per count from 1 to 30, for molecules and for the reads they hold, with the median, commonest and middle 50% of kept molecules, plus molecules against depth per sample; UMI neighbours as the observed against the expected share per sample, with how the expected share is calculated; within-molecule read error against molecule length for every measure (tracts and combined measures) instead of a short/long split; the read-against-molecule distribution as one whole-run summary with one example sample (every sample is still saved).
+- Module 5: the clustering and consensus sections say "Not run" when `cluster = FALSE` instead of describing results that are absent; the waterfall y-axis marks distinct lengths instead of read quantiles (which repeated the dominant allele's length).
+- Module 7: heatmaps on a log colour scale from 0.01% with the top 0.1% of lengths cut, so minor alleles and expansion tails are visible; ridge plots add one panel per plotted range and stop at the 99.9th percentile; samples are labelled by the part of the file name that differs between them.
+- Each module clears its own `plots/` folder before writing, so plots from an earlier run cannot be mistaken for new ones.
+- A `path_settings` that does not exist stops the run at the start (before, Module 6 was skipped without an error), and a settings file whose names match none of the samples says so. `--dry_run` checks that every input path exists.
+- Reports: means are written beside each box (as percentages where the axis is a percentage) instead of over the points; read quality is shown as QV; the read-length histogram has a log count axis; the detection plot shows reads without a tract; the UMI length plot labels only bars with at least 0.1%; Module 1 plots mean rather than median read length against quality; the flank-boundary columns in `alignment.xlsx` are named `prop_left_short` and `prop_right_short`.
 
 **Removed**
 - Per-sample × per-range histogram, scatter and density PNGs (replaced by the sample cards and heatmaps). Parameters for them are ignored with a message.

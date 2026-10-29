@@ -150,12 +150,21 @@ detect_alleles <- function(x, min_sep = 20, min_frac = 0.002, min_concentration 
   c2 <- dmode(side)
   if (mean(abs(side - c2) <= max(5, 0.15 * abs(c2))) < min_concentration) return(single(c1))
   centers <- sort(c(c1, c2))
-  d <- stats::density(x, n = 2048)
+  # Repeat lengths are whole numbers, so a narrow bandwidth gives a dip between every
+  # integer; a bandwidth of at least one unit gives the dip between the alleles only
+  d <- stats::density(x, n = 2048, bw = max(stats::bw.nrd0(x), 1))
   idx <- which(d$x > centers[1] & d$x < centers[2])
   if (!length(idx)) return(single(c1))
-  trough <- idx[d$y[idx] <= min(d$y[idx]) * 1.05 + 1e-12]
-  valley <- stats::median(d$x[trough])
-  h2 <- d$y[which.min(abs(d$x - c2))]; hv <- d$y[which.min(abs(d$x - valley))]
+  # The valley is the first point above the lower allele where the density reaches the
+  # floor of the dip: its minimum, or 1% of the smaller peak where the gap between the
+  # alleles is empty. Taking the first such point (rather than the middle of the flat
+  # region) keeps the boundary just above the lower allele when the alleles are far apart,
+  # so reads between them (e.g. contracted copies of the long allele) go with the long allele
+  # and the boundary never cuts into the long allele's own stutter.
+  h_small <- min(d$y[which.min(abs(d$x - centers[1]))], d$y[which.min(abs(d$x - centers[2]))])
+  floor_y <- max(min(d$y[idx]) * 1.05 + 1e-12, 0.01 * h_small)
+  valley <- d$x[idx[which(d$y[idx] <= floor_y)[1]]]
+  h2 <- d$y[which.min(abs(d$x - c2))]; hv <- min(d$y[idx])
   if (!(h2 > min_dip_ratio * hv)) return(single(c1))
   list(centers = centers, valley = valley)
 }

@@ -29,6 +29,7 @@ suppressPackageStartupMessages({
 source("lib/load_all.R")
 module_start <- proc.time()["elapsed"]; timings <- c()
 ins_dir <- file.path(params$dir_out, "06_instability"); plots_dir <- file.path(ins_dir, "plots")
+unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module would otherwise linger
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 xlsx_path <- file.path(ins_dir, "instability.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
 unit_cols <- c(reads = "grey40", molecules = "#00838f")

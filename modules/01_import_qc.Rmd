@@ -30,6 +30,7 @@ suppressPackageStartupMessages({
 source("lib/load_all.R")
 module_start <- proc.time()["elapsed"]; timings <- c()
 qc_dir <- file.path(params$dir_out, "01_import_qc"); plots_dir <- file.path(qc_dir, "plots")
+unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module would otherwise linger
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 temp_dir <- module_temp_dir(params$dir_out, "m1", params$module_hash)
 xlsx_path <- file.path(qc_dir, "qc.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
@@ -121,7 +122,8 @@ if (any_pacbio) {
   pacbio_summary <- dplyr::bind_rows(lapply(names(read_metadata), function(fs) {
     md <- read_metadata[[fs]]
     data.frame(file_stem = fs, n_reads = nrow(md), median_np = median(md$np, na.rm = TRUE), mean_np = mean(md$np, na.rm = TRUE),
-               median_rq = median(md$rq, na.rm = TRUE), mean_rq = mean(md$rq, na.rm = TRUE))
+               median_rq = median(md$rq, na.rm = TRUE), mean_rq = mean(md$rq, na.rm = TRUE),
+               median_qv = rq_to_qv(median(md$rq, na.rm = TRUE)))
   }))
   timings["PacBio metrics"] <- proc.time()["elapsed"] - .t
 }
@@ -134,12 +136,12 @@ cat(sprintf("%d of %d samples are PacBio HiFi BAMs.%s", sum(is_pacbio), length(i
 
 ## Pass count and read quality per sample
 
-Each point is one sample's median pass count (left) or median read quality (right) across its reads; the box shows the spread across samples and the red diamond and label give the cohort mean. Samples well below the others had fewer passes, and so less accurate consensus reads.
+Each point is one sample's median pass count (left) or median read quality (right) across its reads; the box shows the spread across samples and the red diamond and label give the cohort mean. Read quality is shown as a Phred-scaled QV, –10 × log10(1 – rq), so that the differences between HiFi reads are visible: rq 0.99 is QV 20, rq 0.999 is QV 30 and rq 0.9999 is QV 40 (capped at 60, PacBio's maximum). Samples well below the others had fewer passes, and so less accurate consensus reads.
 
 ```{r pacbio_plots, eval=any_pacbio, fig.height=5}
-pb_long <- pacbio_summary %>% dplyr::select(file_stem, `Median pass count (np)` = median_np, `Median read quality (rq)` = median_rq) %>%
+pb_long <- pacbio_summary %>% dplyr::select(file_stem, `Median pass count (np)` = median_np, `Median read quality (QV)` = median_qv) %>%
   pivot_longer(-file_stem, names_to = "metric", values_to = "value")
-p_pacbio <- ggplot(pb_long, aes(x = "", y = value)) + box_points_mean(digits = 3) +
+p_pacbio <- ggplot(pb_long, aes(x = "", y = value)) + box_points_mean(digits = 1) +
   facet_wrap(~ metric, scales = "free_y") +
   labs(x = NULL, y = "Per-sample median", title = "PacBio HiFi pass count and read quality",
        subtitle = sprintf("%d PacBio samples; one point per sample", nrow(pacbio_summary))) +
@@ -150,7 +152,7 @@ save_plot(p_pacbio, file.path(plots_dir, "pacbio_np_rq.png"), 10, 5)
 
 ## Pass count against read length
 
-Each point is one read (a random subset of at most `r format(params$pacbio_scatter_downsample, big.mark = ",")` across the cohort). Longer inserts take longer to read, so fewer passes fit in the movie: a negative slope is expected. Expanded alleles therefore carry fewer passes than short ones.
+Each point is one read (a random subset of at most `r format(params$pacbio_scatter_downsample, big.mark = ",")` across the cohort). Longer inserts take longer to read, so fewer passes fit in the movie: a negative slope is expected, and the fitted line shows how many fewer passes an expanded allele gets than a short one. The flat line at the top is PacBio's cap on the reported pass count.
 
 ```{r pacbio_np_length, eval=any_pacbio, fig.height=5}
 np_len <- dplyr::bind_rows(lapply(names(read_metadata), function(fs) {
@@ -217,7 +219,7 @@ timings["Adapter trimming"] <- proc.time()["elapsed"] - .t
 ```
 
 ```{r trim_plot, eval=params$trim, fig.height=5}
-p_trim <- ggplot(trim_summary, aes(x = "", y = pct_trimmed)) + box_points_mean(digits = 3) +
+p_trim <- ggplot(trim_summary, aes(x = "", y = pct_trimmed)) + box_points_mean(digits = 1, percent = TRUE) +
   scale_y_continuous(labels = pct_axis(0.1)) +
   labs(x = NULL, y = "Reads trimmed", title = "Proportion of reads with an adapter trimmed, per sample") + theme_bw()
 print(p_trim); save_plot(p_trim, file.path(plots_dir, "adapter_trimming.png"), 6, 5)
@@ -267,24 +269,25 @@ timings["Read QC"] <- proc.time()["elapsed"] - .t
 
 ## Read length distribution
 
-Read lengths from up to 2,000 reads per sample, pooled. For an amplicon each allele gives its own peak, so heterozygous samples with an expanded allele show two peaks; reads well outside them are primer dimers, truncated products or chimeras, which Module 2 removes if they do not span both flanks.
+Read lengths from up to 2,000 reads per sample, pooled, with the count axis on a log scale so that the smaller peaks are visible next to the largest. For an amplicon each allele gives its own peak, so heterozygous samples with an expanded allele show two peaks (the shorter allele usually dominates, because PCR favours shorter products); reads well outside them are primer dimers, truncated products or chimeras, which Module 2 removes if they do not span both flanks.
 
 ```{r length_hist, fig.height=5}
 p_len <- ggplot(len_sample, aes(length)) + geom_histogram(bins = 150, fill = "#377eb8") +
-  scale_x_continuous(labels = comma) + scale_y_continuous(labels = comma) +
-  labs(x = "Read length (bp)", y = "Reads", title = "Read length, pooled across samples",
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous(trans = scales::pseudo_log_trans(sigma = 1, base = 10), breaks = c(0, 10^(0:7)), labels = comma) +
+  labs(x = "Read length (bp)", y = "Reads (log scale)", title = "Read length, pooled across samples",
        subtitle = "Up to 2,000 reads per sample") + theme_bw()
 print(p_len); save_plot(p_len, file.path(plots_dir, "read_length_distribution.png"), 10, 5)
 ```
 
 ## Read length and base quality per sample
 
-Each point is one sample: its median read length against its mean base quality (Phred, per base), sized by read count. Phred scores are not stored for FASTA input, so that panel is empty for FASTA.
+Each point is one sample: its mean read length against its mean base quality (Phred, per base), sized by read count. In a heterozygous amplicon the mean length rises with the share of reads from the longer allele, so this also shows how evenly the two alleles amplified (the median is usually the shorter allele's length in every sample, so it is listed in the table but not plotted). Phred scores are not stored for FASTA input, so the plot is empty for FASTA.
 
 ```{r qc_scatter, fig.height=5}
-p_qc <- ggplot(qc_summary, aes(median_length, mean_phred, size = read_count)) +
+p_qc <- ggplot(qc_summary, aes(mean_length, mean_phred, size = read_count)) +
   geom_point(shape = 21, fill = "skyblue", alpha = 0.7) + scale_size_continuous(labels = comma, name = "Reads") +
-  scale_x_continuous(labels = comma) + labs(x = "Median read length (bp)", y = "Mean base quality (Phred)",
+  scale_x_continuous(labels = comma) + labs(x = "Mean read length (bp)", y = "Mean base quality (Phred)",
                                             title = "Read length against base quality, per sample") + theme_bw()
 print(p_qc); save_plot(p_qc, file.path(plots_dir, "quality_vs_length.png"), 10, 5)
 ```

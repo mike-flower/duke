@@ -54,6 +54,13 @@ load_settings <- function(path, samples_in_data) {
   s$is_control <- truthy(s$group_control_sample)
   s$is_excluded <- truthy(s$exclude)
   s <- s[!duplicated(s$file_stem), , drop = FALSE]
+  if (!any(s$file_stem %in% samples_in_data)) {
+    ex <- function(v) paste(utils::head(v, 3), collapse = ", ")
+    stop("None of the ", nrow(s), " file names in the settings file match the ", length(samples_in_data),
+         " samples in dir_data.\n  Settings file_name (first 3): ", ex(s$file_name),
+         "\n  Samples in the data (first 3): ", ex(samples_in_data),
+         "\n  file_name must be the input file name, with or without its extension.")
+  }
   list(all = s, used = s[s$file_stem %in% samples_in_data & !s$is_excluded, , drop = FALSE],
        excluded = s[s$file_stem %in% samples_in_data & s$is_excluded, , drop = FALSE],
        missing = setdiff(samples_in_data, s$file_stem))

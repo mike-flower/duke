@@ -30,6 +30,7 @@ suppressPackageStartupMessages({
 source("lib/load_all.R")
 module_start <- proc.time()["elapsed"]; timings <- c()
 aln_dir <- file.path(params$dir_out, "02_alignment"); plots_dir <- file.path(aln_dir, "plots")
+unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module would otherwise linger
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 temp_dir <- module_temp_dir(params$dir_out, "m2", params$module_hash)
 xlsx_path <- file.path(aln_dir, "alignment.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
@@ -121,17 +122,18 @@ dt_full(funnel, caption = "Reads per sample after each alignment step")
 
 ## Where the flank alignments end
 
-The repeat-adjacent end of each flank should align to its last (left) or first (right) reference base. Each point is one sample: the percentage of its reads whose flank alignment stops at least one base short of the N block. Reads with a shortfall are not lost – Module 3 searches `r params$rpt_flank_pad` bases into each flank so the tract is still measured in full – but a sample with a high rate has sequence next to the repeat that differs from the reference, for example an interruption variant.
+The repeat-adjacent end of each flank should align to its last (left) or first (right) reference base. Each point is one sample: the percentage of its reads whose flank alignment stops at least one base short of the N block. Reads with a shortfall are not lost – Module 3 searches `r params$rpt_flank_pad` bases into each flank so the tract is still measured in full – but a sample with a high rate has sequence next to the repeat that differs from the reference, for example an interruption variant. Compare samples with each other rather than with zero: at HTT the right flank starts with `CAACAG`, which resembles the repeat, so the aligner often starts that flank a few bases in (the median shortfall is in the table) and a high right-flank rate in every sample is expected.
 
 ```{r shortfall, fig.height=5}
 sf <- dplyr::bind_rows(lapply(names(alignments), function(r) {
   a <- alignments[[r]]
   if (!nrow(a)) return(NULL)
-  a[, .(`Left flank` = mean(left_end_shortfall > 0), `Right flank` = mean(right_start_shortfall > 0),
+  a[, .(prop_left_short = mean(left_end_shortfall > 0), prop_right_short = mean(right_start_shortfall > 0),
         median_left_shortfall = as.numeric(median(left_end_shortfall)), median_right_shortfall = as.numeric(median(right_start_shortfall))), by = file_stem][, ref_id := r]
 }))
-p_sf <- sf %>% pivot_longer(c(`Left flank`, `Right flank`), names_to = "flank", values_to = "pct") %>%
-  ggplot(aes(flank, pct)) + box_points_mean(digits = 3) + facet_wrap(~ ref_id) +
+p_sf <- sf %>% pivot_longer(c(prop_left_short, prop_right_short), names_to = "flank", values_to = "pct") %>%
+  dplyr::mutate(flank = ifelse(flank == "prop_left_short", "Left flank", "Right flank")) %>%
+  ggplot(aes(flank, pct)) + box_points_mean(digits = 1, percent = TRUE) + facet_wrap(~ ref_id) +
   scale_y_continuous(labels = pct_axis()) +
   labs(x = NULL, y = "Reads whose flank alignment stops short of the N block", title = "Flank alignment boundaries, per sample") + theme_bw()
 print(p_sf); save_plot(p_sf, file.path(plots_dir, "flank_boundary_shortfall.png"), 8, 5)
@@ -151,7 +153,7 @@ p_q1 <- qual %>% pivot_longer(c(left_mapq, right_mapq), names_to = "flank", valu
   dplyr::mutate(flank = ifelse(flank == "left_mapq", "Left flank", "Right flank")) %>%
   ggplot(aes(flank, mapq)) + box_points_mean() + facet_wrap(~ ref_id) +
   labs(x = NULL, y = "Mean MAPQ", title = "Mapping quality per sample") + theme_bw()
-p_q2 <- ggplot(qual, aes(ref_id, reverse_strand)) + box_points_mean(digits = 3) + scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
+p_q2 <- ggplot(qual, aes(ref_id, reverse_strand)) + box_points_mean(digits = 1, percent = TRUE) + scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
   labs(x = NULL, y = "Reads on the reverse strand", title = "Strand per sample") + theme_bw()
 p_quality <- patchwork::wrap_plots(p_q1, p_q2, widths = c(2, 1))
 print(p_quality); save_plot(p_quality, file.path(plots_dir, "alignment_quality_strand.png"), 11, 5)

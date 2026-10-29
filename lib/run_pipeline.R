@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.0.2"
+duke_version <- "3.0.3"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -81,6 +81,10 @@ run_duke <- function(user_params, duke_root = getwd()) {
   duke_root <- normalizePath(duke_root)
   setwd(duke_root)
   p <- resolve_params(user_params)
+  # A settings path that was given but does not exist is almost always a typo: stop now
+  # rather than run every other module and silently skip Module 6
+  if (!is.na(p$path_settings) && !file.exists(p$path_settings))
+    stop("Settings file not found: ", p$path_settings, "\n  Check the path, or leave path_settings unset to run without Module 6.")
   dir.create(p$dir_out, showWarnings = FALSE, recursive = TRUE)
 
   p$tracts_table <- resolve_tracts(p)

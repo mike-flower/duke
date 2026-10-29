@@ -225,19 +225,42 @@ save_plot <- function(p, path, width = 10, height = 6, dpi = NULL) {
   invisible(path)
 }
 
-# Label for a percentage axis that carries the % sign on the ticks
-pct_axis <- function(accuracy = 1) scales::label_percent(accuracy = accuracy)
+# Shorter sample labels for plot facets: drop the prefix every name shares (cut back
+# to the last '.', '_' or '-' so a label never starts mid-word), e.g.
+# "m84277_..._s1.hifi_reads.bc2083.skera.demux.kxF01--kxR13" -> "kxF01--kxR13"
+short_labels <- function(x) {
+  u <- unique(as.character(x))
+  if (length(u) < 2) return(setNames(u, u))
+  ch <- strsplit(u, "")
+  n <- min(lengths(ch)); k <- 0
+  while (k < n && length(unique(vapply(ch, `[`, "", k + 1))) == 1) k <- k + 1
+  pre <- substr(u[1], 1, k)
+  cut <- max(c(0, gregexpr("[._-]", pre)[[1]]))
+  out <- substring(u, cut + 1)
+  if (any(!nzchar(out)) || anyDuplicated(out)) out <- u
+  setNames(out, u)
+}
 
-# Consistent summary layers: box + every point + mean diamond with the value written beside it
-box_points_mean <- function(point_colour = "grey30", digits = 1, label = TRUE) {
+# PacBio read quality (rq, predicted accuracy) as a Phred-scaled QV, capped at 60
+rq_to_qv <- function(rq) pmin(-10 * log10(pmax(1 - rq, 1e-6)), 60)
+
+# Label for a percentage axis that carries the % sign on the ticks
+# (accuracy NULL lets scales choose enough decimals to keep the ticks distinct)
+pct_axis <- function(accuracy = NULL) scales::label_percent(accuracy = accuracy)
+
+# Consistent summary layers: box + every point + mean diamond, with the mean
+# written in red beside the box (clear of the points). percent = TRUE writes a
+# proportion as a percentage with `digits` decimals.
+box_points_mean <- function(point_colour = "grey30", digits = 1, label = TRUE, percent = FALSE) {
   lay <- list(
     ggplot2::geom_boxplot(outlier.shape = NA, fill = "grey92", colour = "grey40", width = 0.5),
     ggplot2::geom_jitter(width = 0.15, height = 0, size = 1.8, alpha = 0.7, colour = point_colour),
     ggplot2::stat_summary(fun = mean, geom = "point", shape = 18, size = 4, colour = "red")
   )
+  fmt <- if (percent) function(v) scales::percent(v, accuracy = 10^-digits) else function(v) formatC(v, format = "f", digits = digits)
   if (label) lay <- c(lay, list(ggplot2::stat_summary(
-    fun = mean, geom = "text", colour = "red", size = 3.2, hjust = -0.35,
-    ggplot2::aes(label = formatC(ggplot2::after_stat(y), format = "f", digits = digits)))))
+    fun = mean, geom = "text", colour = "red", size = 3.2, hjust = 0, position = ggplot2::position_nudge(x = 0.3),
+    ggplot2::aes(label = fmt(ggplot2::after_stat(y))))))
   lay
 }
 

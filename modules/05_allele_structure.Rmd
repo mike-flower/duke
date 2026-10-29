@@ -30,6 +30,7 @@ suppressPackageStartupMessages({
 source("lib/load_all.R")
 module_start <- proc.time()["elapsed"]; timings <- c()
 st_dir <- file.path(params$dir_out, "05_allele_structure"); plots_dir <- file.path(st_dir, "plots")
+unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module would otherwise linger
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 temp_dir <- module_temp_dir(params$dir_out, "m5", params$module_hash)
 xlsx_path <- file.path(st_dir, "allele_structure.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
@@ -65,6 +66,8 @@ samples <- unique(d_all$file_stem)
 
 # Allele clustering
 
+`r if (!params$cluster) "**Not run** (\u0060cluster = FALSE\u0060, the default). Set \u0060--cluster TRUE\u0060 to group reads into alleles, build consensus sequences and call flank variants." else ""`
+
 ```{r clustering, eval=params$cluster}
 .t <- proc.time()["elapsed"]
 per_sample <- split(d_all, by = "file_stem")
@@ -84,7 +87,7 @@ setorder(cluster_summary, file_stem, cluster_number)
 timings["Clustering"] <- proc.time()["elapsed"] - .t
 ```
 
-Each point is one sample: how many clusters it was split into. A heterozygous sample with two alleles should give 2; more usually means an expanded allele with a wide distribution or a sample mixture, and each cluster's share is in the table below.
+`r if (params$cluster) "Each point is one sample: how many clusters it was split into. A heterozygous sample with two alleles should give 2; more usually means an expanded allele with a wide distribution or a sample mixture, and each cluster's share is in the table below." else ""`
 
 ```{r cluster_count, eval=params$cluster, fig.height=4.5}
 cc <- cluster_summary[, .(clusters = .N), by = file_stem]
@@ -97,6 +100,8 @@ dt_full(cluster_summary, caption = "Clusters per sample (cluster 1 = most reads)
 ---
 
 # Consensus and variants
+
+`r if (!params$cluster) "**Not run** (needs \u0060cluster = TRUE\u0060)." else ""`
 
 ```{r consensus, eval=params$cluster}
 .t <- proc.time()["elapsed"]
@@ -152,7 +157,7 @@ timings["Variants"] <- proc.time()["elapsed"] - .t
 cat(sprintf("%d variant calls across %d clusters; %d distinct variants.", nrow(variants), nrow(cons), nrow(var_summary)))
 ```
 
-The most frequent variants across all cluster consensuses, with positions on the full reference (`r ref$ref_id`, N block at `r ref$n_start`–`r ref$n_end`). A variant present in nearly every cluster is a difference between the reference and these lines rather than a somatic change.
+`r if (params$cluster && params$call_variants) sprintf("The most frequent variants across all cluster consensuses, with positions on the full reference (%s, N block at %d–%d). A variant present in nearly every cluster is a difference between the reference and these lines rather than a somatic change.", ref$ref_id, ref$n_start, ref$n_end) else ""`
 
 ```{r variant_table, eval=params$cluster && params$call_variants}
 if (nrow(var_summary)) dt_full(var_summary[, .(pos, ref, alt, type, clusters)], caption = "Variants by number of cluster consensuses carrying them")
@@ -162,7 +167,7 @@ if (nrow(var_summary)) dt_full(var_summary[, .(pos, ref, alt, type, clusters)], 
 
 # Waterfall plots
 
-Each figure shows up to `r format(params$waterfall_downsample, big.mark = ",")` reads from one sample, ordered from shortest to longest `r primary` tract, with each base coloured and `r params$waterfall_flank_bp` bp of flank either side. A pure tract gives a regular stripe; interruptions show as vertical lines at a fixed offset from the tract start or end, and sequence variants in the flanks as columns of a different colour. One example is shown; all are in `plots/waterfall/`.
+Each figure shows up to `r format(params$waterfall_downsample, big.mark = ",")` reads from one sample, ordered from shortest to longest `r primary` tract, with each base coloured and `r params$waterfall_flank_bp` bp of flank either side. A pure tract gives a regular stripe; interruptions show as vertical lines at a fixed offset from the tract start or end, and sequence variants in the flanks as columns of a different colour. The reads are a random sample, so each allele appears in proportion to its share of the reads; the y-axis marks where the tract length first reaches each labelled value. One example is shown; all are in `plots/waterfall/`.
 
 ```{r waterfall, eval=params$waterfall, fig.height=8}
 .t <- proc.time()["elapsed"]

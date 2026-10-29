@@ -81,6 +81,16 @@ if (dry_run) {
   cat("\nTracts (5' to 3'):\n"); print(tr[, intersect(c("tract", "motif", "path_ref", "ref_group", "count_method", "na_handling"), names(tr))], row.names = FALSE)
   if (!is.null(comp) && nrow(comp)) { cat("\nComposite measures:\n"); print(comp, row.names = FALSE) }
   cat("\nModules to run:", paste(p$run_modules, collapse = ", "), "\n")
+  paths <- c(dir_data = p$dir_data, path_settings = p$path_settings, path_tracts = p$path_tracts,
+             path_trim_patterns = p$path_trim_patterns, path_manual_exclusions = p$path_manual_exclusions,
+             setNames(unique(tr$path_ref), rep("path_ref", length(unique(tr$path_ref)))))
+  paths <- paths[!is.na(paths)]
+  missing <- paths[!file.exists(paths)]
+  if (length(missing)) {
+    cat("\nNot found - a real run would stop:\n"); cat(sprintf("  %-22s %s\n", names(missing), missing), sep = "")
+    quit(status = 1)
+  }
+  cat("\nAll input paths found.\n")
   quit(status = 0)
 }
 

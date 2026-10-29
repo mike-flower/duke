@@ -279,7 +279,13 @@ create_waterfall_plot <- function(d, title, flank_bp = 60L, max_reads = 1000L, l
               mk(d$mid, function(n, i) seq_len(n) - 1L, "tract"),
               mk(rgt, function(n, i) nchar(d$mid[i]) + seq_len(n) - 1L, "right"))
   cols <- c(A = "#1b9e77", C = "#377eb8", G = "grey15", T = "#e41a1c", N = "grey70", `-` = "grey85")
-  brk <- unique(round(seq(1, nrow(d), length.out = min(12, nrow(d)))))
+  # Mark the first read at or above each of a set of evenly spaced lengths, so the
+  # labels are distinct lengths rather than read quantiles (which repeat the
+  # length of a dominant allele many times)
+  vals <- unique(c(min(d$length), pretty(d$length, n = 10), max(d$length)))
+  brk <- unique(vapply(vals, function(v) { i <- which(d$length >= v)[1]; if (is.na(i)) NA_integer_ else i }, integer(1)))
+  brk <- brk[!is.na(brk)]
+  brk <- brk[c(TRUE, diff(brk) > nrow(d) / 40)]
   ggplot2::ggplot(pd, ggplot2::aes(pos, read_order, fill = base)) +
     ggplot2::geom_raster() +
     ggplot2::geom_vline(xintercept = -0.5, linetype = "dashed", linewidth = 0.3) +

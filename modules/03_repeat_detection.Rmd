@@ -29,6 +29,7 @@ suppressPackageStartupMessages({
 source("lib/load_all.R")
 module_start <- proc.time()["elapsed"]; timings <- c()
 rep_dir <- file.path(params$dir_out, "03_repeat_detection"); plots_dir <- file.path(rep_dir, "plots")
+unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module would otherwise linger
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 xlsx_path <- file.path(rep_dir, "repeat_detection.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
 tracts <- params$tracts_table; composites <- params$composites_table
@@ -130,15 +131,17 @@ value_col <- function(m) { k <- match(m, tracts$tract); if (is.na(k)) m else pas
 
 ## Detection rate
 
-Each point is one sample: the percentage of its aligned reads in which the tract was found. A tract is missing when no run of at least `min_repeats` units overlaps the region between the flanks; for a normal-length allele this should be very rare, so a low rate points to off-target product or a reference that does not match the amplicon.
+Each point is one sample: the percentage of its aligned reads in which **no** tract was found (so lower is better, and the axis is not capped at 100%). A tract is missing when no run of at least `min_repeats` units overlaps the region between the flanks; for a normal-length allele this should be very rare, so a high rate points to off-target product or a reference that does not match the amplicon. Detection rates per sample are in the table below and in `repeat_detection.xlsx`.
 
 ```{r detection_plot, fig.height=5}
 det <- rbindlist(lapply(tracts$tract, function(t) {
   read_tracts[!is.na(get(paste0(t, "_found"))), .(tract = t, aligned_reads = .N, with_tract = sum(get(paste0(t, "_found")))), by = file_stem]
 }))[, detection_rate := with_tract / aligned_reads]
-p_det <- ggplot(det, aes(tract, detection_rate)) + box_points_mean(digits = 3) +
-  scale_y_continuous(labels = pct_axis(0.1)) +
-  labs(x = "Tract", y = "Aligned reads in which the tract was found", title = "Tract detection rate per sample") + theme_bw()
+miss_acc <- if (max(1 - det$detection_rate) < 0.01) 0.001 else 0.1
+p_det <- ggplot(det, aes(tract, 1 - detection_rate)) + box_points_mean(digits = if (miss_acc < 0.01) 3 else 1, percent = TRUE) +
+  scale_y_continuous(labels = pct_axis(miss_acc), limits = c(0, NA), expand = expansion(mult = c(0.02, 0.1))) +
+  labs(x = "Tract", y = "Aligned reads with no tract found", title = "Reads without a tract, per sample",
+       subtitle = sprintf("Mean detection rate %s", percent(mean(det$detection_rate), 0.001))) + theme_bw()
 print(p_det); save_plot(p_det, file.path(plots_dir, "detection_rate.png"), 7, 5)
 ```
 
@@ -152,27 +155,117 @@ cat(sprintf("\n\nTracts come from %d references. %s of %s reads (%.1f%%) aligned
 
 # Counting methods
 
-For each read and tract, **full** counts every base of the tract (so an interruption inside it adds units), **match** counts exact motif units, and **pure** is the longest uninterrupted run. They agree for a pure tract; where they differ the tract contains an interruption or sequencing error. Each point is one sample: the percentage of its reads where all three counts agree.
+For each read and tract, **full** counts every base of the tract (so an interruption or a sequencing error inside it adds units rather than splitting it), **match** counts exact motif units, and **pure** is the longest uninterrupted run. They agree for a clean tract. Where they differ, the tract contains either a real interruption or a sequencing error. The comparisons below are made read by read, so they need no assumption about alleles, controls or how similar the alleles of a tract are.
 
-```{r method_agreement, fig.height=5}
+```{r method_agreement}
+.t <- proc.time()["elapsed"]
 agree <- rbindlist(lapply(tracts$tract, function(t) {
   f <- paste0(t, "_full"); m <- paste0(t, "_match"); pu <- paste0(t, "_pure")
   read_tracts[get(paste0(t, "_found")) %in% TRUE,
               .(tract = t, reads = .N, all_agree = mean(get(f) == get(m) & get(m) == get(pu)),
-                mean_full_minus_pure = mean(get(f) - get(pu)), interrupted = mean(grepl(",", get(paste0(t, "_structure"))))), by = file_stem]
+                full_ne_match = mean(get(f) != get(m)), full_ne_pure = mean(get(f) != get(pu)),
+                mean_full_minus_match = mean(get(f) - get(m)), mean_full_minus_pure = mean(get(f) - get(pu)),
+                interrupted = mean(grepl(",", get(paste0(t, "_structure"))))), by = file_stem]
 }))
-p_agree <- ggplot(agree, aes(tract, all_agree)) + box_points_mean(digits = 3) + scale_y_continuous(labels = pct_axis(0.1)) +
-  labs(x = "Tract", y = "Reads where full = match = pure", title = "Agreement between counting methods, per sample") + theme_bw()
-print(p_agree); save_plot(p_agree, file.path(plots_dir, "count_method_agreement.png"), 7, 5)
+# The same comparison by tract length (full count), per sample: the bin is 1 unit for
+# short tracts and 5 units where a tract spans more than 40 units
+by_len <- rbindlist(lapply(tracts$tract, function(t) {
+  f <- paste0(t, "_full"); m <- paste0(t, "_match"); pu <- paste0(t, "_pure")
+  d <- read_tracts[get(paste0(t, "_found")) %in% TRUE, .(file_stem, full = get(f), match = get(m), pure = get(pu))]
+  span <- diff(stats::quantile(d$full, c(0.001, 0.999), na.rm = TRUE))
+  w <- if (span > 40) 5 else 1
+  d[, length_bin := floor(full / w) * w]
+  d[, .(tract = t, bin_width = w, reads = .N, full_ne_match = mean(full != match), full_ne_pure = mean(full != pure),
+        mean_full_minus_pure = mean(full - pure)), by = .(file_stem, length_bin)]
+}))
+```
+
+## Disagreement by tract length
+
+Each grey line is one sample: the share of its reads, at each tract length (full count), whose **match** or **pure** count differs from **full**; the coloured line is the cohort (all reads pooled). Lengths with fewer than 20 reads in a sample are left out of that sample's line, and lines break across lengths with no reads. If disagreement comes from sequencing errors it rises steadily with length, because a longer tract has more bases in which an error can fall: with about 0.1–0.2% errors per base inside a repeat, a 14-unit tract is almost always read cleanly, but most 120-unit (360 bp) tracts carry at least one error. **pure** then measures the distance between errors rather than the tract, which is why **full** is the default. A real interruption instead gives a step at the lengths of the allele that carries it.
+
+```{r agreement_by_length, fig.height=5.5}
+bl_long <- melt(by_len, id.vars = c("file_stem", "tract", "length_bin", "bin_width", "reads"),
+                measure.vars = c("full_ne_match", "full_ne_pure"), variable.name = "method", value.name = "share")
+bl_long[, method := factor(method, levels = c("full_ne_match", "full_ne_pure"), labels = c("match differs from full", "pure differs from full"))]
+pooled <- by_len[, .(full_ne_match = sum(full_ne_match * reads) / sum(reads), full_ne_pure = sum(full_ne_pure * reads) / sum(reads), reads = sum(reads)),
+                 by = .(tract, length_bin)][reads >= 50]
+pooled_long <- melt(pooled, id.vars = c("tract", "length_bin", "reads"), measure.vars = c("full_ne_match", "full_ne_pure"),
+                    variable.name = "method", value.name = "share")
+pooled_long[, method := factor(method, levels = c("full_ne_match", "full_ne_pure"), labels = levels(bl_long$method))]
+# Fill in empty lengths as NA so that lines break across gaps instead of joining distant lengths
+fill_gaps <- function(d, keys) {
+  grid <- d[, .(length_bin = seq(min(length_bin), max(length_bin), by = bin_width[1])), by = keys]
+  d[grid, on = c(keys, "length_bin")]
+}
+bl_plot <- fill_gaps(bl_long[reads >= 20], c("tract", "method", "file_stem"))
+pooled_long[, bin_width := by_len$bin_width[match(tract, by_len$tract)]]
+pooled_plot <- fill_gaps(pooled_long, c("tract", "method"))
+p_agree <- ggplot(bl_plot, aes(length_bin, share)) +
+  geom_line(aes(group = file_stem), colour = "grey70", alpha = 0.6) +
+  geom_line(data = pooled_plot, aes(colour = method), linewidth = 1) +
+  facet_grid(method ~ tract, scales = "free_x") +
+  scale_colour_manual(values = c("#4daf4a", "#e41a1c"), guide = "none") +
+  scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
+  labs(x = "Tract length, full count (units)", y = "Reads whose count differs from full",
+       title = "Counting-method disagreement by tract length",
+       subtitle = "Grey = one line per sample (bins with at least 20 reads); colour = all reads pooled") + theme_bw()
+print(p_agree); save_plot(p_agree, file.path(plots_dir, "count_method_agreement.png"), 10, 6)
+```
+
+## Counts against each other
+
+Each panel compares a count with **full** read by read (a random subset of up to 2,000 reads per sample), shaded by how many reads fall in each cell. Reads on the dashed diagonal have the same count by both methods. **match** stays on or just below the diagonal, because a single wrong base costs at most one unit; **pure** falls below it whenever the tract is broken, by up to half the tract for a single break near the middle.
+
+```{r count_scatter, fig.height=5.5}
+set.seed(123)
+cs <- rbindlist(lapply(tracts$tract, function(t) {
+  d <- read_tracts[get(paste0(t, "_found")) %in% TRUE, .(file_stem, full = get(paste0(t, "_full")),
+                    match = get(paste0(t, "_match")), pure = get(paste0(t, "_pure")))]
+  d <- d[, .SD[sample(.N, min(.N, 2000))], by = file_stem]
+  rbind(d[, .(tract = t, full, other = match, method = "match")], d[, .(tract = t, full, other = pure, method = "pure")])
+}))
+p_cs <- ggplot(cs, aes(full, other)) + geom_bin2d(binwidth = c(1, 1)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey40") +
+  scale_fill_viridis_c(trans = "log10", labels = comma, name = "Reads") +
+  facet_wrap(tract ~ method, scales = "free", labeller = labeller(method = c(match = "match against full", pure = "pure against full"))) +
+  labs(x = "full count (units)", y = "match or pure count (units)", title = "Counting methods against the full count, per read") + theme_bw()
+print(p_cs); save_plot(p_cs, file.path(plots_dir, "count_methods_scatter.png"), 10, 5.5)
+```
+
+## Where the tract is broken
+
+For reads whose tract is broken (two or more runs), the position of each break as a fraction of the way along the tract (0 = the 5' start, 1 = the 3' end), from up to 2,000 broken reads per sample. **Sequencing errors** give a flat distribution, because they can fall anywhere; a **real interruption** gives a sharp peak at the same position in read after read, and would mean **pure** or **match** is the more meaningful count for that tract. Fewer breaks appear within the first and last two units, because a tract must start and end with `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` perfect units; in short tracts the positions fall on a few fixed fractions, so those bars are spiky.
+
+```{r break_positions, fig.height=4.5}
+set.seed(123)
+bp <- rbindlist(lapply(tracts$tract, function(t) {
+  d <- read_tracts[grepl(",", get(paste0(t, "_structure"))), .(file_stem, s = get(paste0(t, "_structure")))]
+  d <- d[, .SD[sample(.N, min(.N, 2000))], by = file_stem]
+  if (!nrow(d)) return(NULL)
+  runs <- lapply(strsplit(d$s, ",", fixed = TRUE), as.numeric)
+  pos <- lapply(runs, function(r) head(cumsum(r), -1) / sum(r))
+  data.table(tract = t, position = unlist(pos))
+}))
+if (nrow(bp)) {
+  p_bp <- ggplot(bp, aes(position)) + geom_histogram(binwidth = 0.02, boundary = 0, fill = "#377eb8") +
+    facet_wrap(~ tract, scales = "free_y") + scale_x_continuous(labels = pct_axis(), limits = c(0, 1)) +
+    scale_y_continuous(labels = comma) +
+    labs(x = "Position of the break along the tract", y = "Breaks", title = "Where broken tracts are broken",
+         subtitle = "Flat = sequencing errors; a sharp peak = an interruption in the sequence") + theme_bw()
+  print(p_bp); save_plot(p_bp, file.path(plots_dir, "break_positions.png"), 10, 4.5)
+} else cat("No broken tracts.\n")
 ```
 
 ```{r agreement_table}
 dt_full(merge(det, agree, by = c("file_stem", "tract")), caption = "Detection and counting-method agreement per sample and tract", digits = 4)
+dt_full(by_len, caption = "Counting-method agreement per sample, tract and tract length (full count bin)", digits = 4)
+timings["Counting methods"] <- proc.time()["elapsed"] - .t
 ```
 
 ## Modal length by counting method
 
-The modal (most common) length of each tract per sample, calculated with each counting method over all reads. Per-range modal, mean and median by method are in Module 6.
+The modal (most common) length of each tract per sample, calculated with each counting method over all reads. Where a sample has two alleles this is usually the more abundant one, so the length plots above are the better guide to how the methods differ; per-range modal, mean and median by method are in Module 6.
 
 ```{r modal_by_method}
 modal_method <- rbindlist(lapply(tracts$tract, function(t) {
@@ -197,7 +290,7 @@ between[sequence == "", sequence := "(none: tracts adjacent)"]
 top <- between[, .(reads = sum(n), samples = uniqueN(file_stem)), by = .(junction, sequence)][order(junction, -reads)][, head(.SD, 6), by = junction]
 between[, label := ifelse(sequence %in% top$sequence, sequence, "other")]
 p_between <- ggplot(between[, .(prop = sum(prop)), by = .(file_stem, junction, label)], aes(label, prop)) +
-  box_points_mean(digits = 2) + facet_wrap(~ junction, scales = "free_x") + coord_flip() +
+  box_points_mean(digits = 1, percent = TRUE) + facet_wrap(~ junction, scales = "free_x") + coord_flip() +
   scale_y_continuous(labels = pct_axis()) +
   labs(x = NULL, y = "Reads in the sample", title = "Sequence between consecutive tracts",
        subtitle = "One point per sample: the share of its reads carrying each sequence (the six most common across the cohort shown)") + theme_bw()
@@ -210,7 +303,7 @@ The sequence between the CAG and CCG tracts identifies the interruption structur
 
 # Flank length
 
-The combined length of the two flanks (everything aligned outside the primary tract) should be nearly constant within a sample. Each point is one sample: the share of its reads whose combined flank length is at its modal value, or 1–10, 11–50 or more than 50 bp away from it. Large deviations are chimeras, truncated reads or boundary shifts. At HTT a sample can legitimately carry two flank lengths when its alleles differ in the CCG tract, which is why the optional filter is off by default.
+The combined length of the two flanks (everything aligned outside the primary tract) should be nearly constant within a sample. Each point is one sample: the share of its reads whose combined flank length is at its modal value, or 1–10, 11–50 or more than 50 bp away from it. Small differences (1–10 bp) are usual: the flanks include everything outside the tract, so UMI length, indels near the read ends and where the aligner starts each flank all vary by a few bases. Large deviations are chimeras, truncated reads or boundary shifts. At HTT a sample can legitimately carry two flank lengths when its alleles differ in the CCG tract, which is why the optional filter is off by default.
 
 ```{r flank_qc, fig.height=5}
 fq <- read_tracts[!is.na(left), .(file_stem, qname, flank_total = nchar(left) + nchar(right))]
@@ -218,7 +311,7 @@ fq[, modal := { tb <- table(flank_total); as.numeric(names(tb)[which.max(tb)]) }
 fq[, dev := abs(flank_total - modal)]
 fq[, band := cut(dev, c(-1, 0, 10, 50, Inf), labels = c("at modal", "1-10 bp", "11-50 bp", ">50 bp"))]
 fband <- fq[, .N, by = .(file_stem, band)][, prop := N / sum(N), by = file_stem]
-p_flank <- ggplot(fband, aes(band, prop)) + box_points_mean(digits = 3) + scale_y_continuous(labels = pct_axis()) +
+p_flank <- ggplot(fband, aes(band, prop)) + box_points_mean(digits = 1, percent = TRUE) + scale_y_continuous(labels = pct_axis()) +
   labs(x = "Distance from the sample's modal combined flank length", y = "Reads in the sample", title = "Combined flank length, per sample") + theme_bw()
 print(p_flank); save_plot(p_flank, file.path(plots_dir, "flank_length.png"), 8, 5)
 if (isTRUE(params$rm_flank_length_outliers)) {
@@ -260,11 +353,12 @@ if (isTRUE(params$export_read_counts)) {
 read_tracts[, c("left", "right") := NULL]
 module3_output <- list(read_tracts = read_tracts, lengths = lengths, measures = measures, primary = primary,
                        tracts = tracts, composites = composites, alignment_counts_slim = alignment_counts_slim,
-                       detection = det, method_agreement = agree, modal_by_method = modal_method,
+                       detection = det, method_agreement = agree, method_by_length = by_len, modal_by_method = modal_method,
                        between = if (exists("between")) between else NULL, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "03_repeat_detection.RData")
 save(module3_output, file = output_path)
 write_excel_function(list(tracts = tracts, measures = measures, detection = det, method_agreement = agree,
+                          method_by_length = by_len,
                           modal_by_method = modal_method, between_tracts = module3_output$between), xlsx_path)
 timings["Save"] <- proc.time()["elapsed"] - .t
 ```
@@ -284,6 +378,7 @@ manifest <- build_manifest(module3_output, c(
   tracts = "Resolved tracts table", composites = "Combined-measure definitions",
   alignment_counts_slim = "Primary tract per read in the Duke 2.x layout (left, mid, right, repeat_count_*)",
   detection = "Tract detection per sample", method_agreement = "Counting-method agreement per sample",
+  method_by_length = "Counting-method agreement per sample, tract and tract length",
   modal_by_method = "Modal length per sample by counting method", between = "Between-tract sequences per sample",
   hash = "Parameter hash used for resume"))
 write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)

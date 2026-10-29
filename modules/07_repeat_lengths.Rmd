@@ -29,6 +29,7 @@ suppressPackageStartupMessages({
 source("lib/load_all.R")
 module_start <- proc.time()["elapsed"]; timings <- c()
 len_dir <- file.path(params$dir_out, "07_repeat_lengths"); plots_dir <- file.path(len_dir, "plots")
+unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module would otherwise linger
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 xlsx_path <- file.path(len_dir, "repeat_lengths.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
 ```
@@ -69,7 +70,11 @@ setorder(meta, group_label, time, file_stem, na.last = TRUE)
 meta[, sample_label := make.unique(ifelse(is.na(time), file_stem, paste0(file_stem, " (t=", time, ")")))]
 meta[, sample_label := factor(sample_label, levels = sample_label)]
 meta[, sample_index := seq_len(.N)]
-meta[, short_label := make.unique(ifelse(is.na(time), as.character(sample_index), paste0(sample_index, " (t=", time, ")")))]
+# Sample labels: the part of the file name that differs between samples (e.g. kxF01--kxR13) when
+# that is short, otherwise the sample's index in this report (mapped to its file in repeat_lengths.xlsx)
+sl <- short_labels(meta$file_stem)[meta$file_stem]
+base_lab <- if (max(nchar(sl)) <= 20) sl else as.character(meta$sample_index)
+meta[, short_label := make.unique(ifelse(is.na(time), base_lab, paste0(base_lab, " (t=", time, ")")))]
 meta[, short_label := factor(short_label, levels = short_label)]
 plot_ranges <- if (length(params$plot_ranges)) params$plot_ranges else if (have_m6) head(sort(unique(range_table$range_name[range_table$measure == primary])), 2) else character(0)
 acc_path <- file.path(params$dir_out, "02_alignment", "alignment.xlsx")
@@ -82,7 +87,7 @@ funnel <- if (file.exists(acc_path)) as.data.table(readxl::read_excel(acc_path, 
 
 # Cohort heatmaps
 
-Each column is one sample and each row one repeat length; the colour is the share of that sample's reads at that length (square-root scale, so small expansion tails remain visible). Panels are settings groups, and samples within a group are in time order, labelled by their index (and time); `repeat_lengths.xlsx` maps each index to its file. A stable sample is a thin bright band; somatic expansion shows as the band spreading upward over time.
+Each column is one sample and each row one repeat length; the colour is the share of that sample's reads (or molecules) at that length, on a log scale from 0.01%, so a minor allele and a thin expansion tail are as visible as the main peak; white means no reads. The rarest 0.1% of lengths at the top are not drawn, so the alleles fill the plot. Panels are settings groups, and samples within a group are in time order, labelled by the part of the file name that differs between samples (or by an index, mapped to files in `repeat_lengths.xlsx`) and time. A stable sample is a narrow band; somatic expansion shows as the band spreading upward over time.
 
 ```{r heatmaps, results='asis', fig.height=7}
 .t <- proc.time()["elapsed"]
@@ -102,22 +107,37 @@ timings["Heatmaps"] <- proc.time()["elapsed"] - .t
 
 # Ridge plots by group
 
-Each ridge is one sample's `r primary` distribution (reads), scaled to its own height, with samples in time order from top to bottom. One panel per group. Up to four groups are shown here; every group is in `plots/ridges/`.
+Each ridge is one sample's `r primary` distribution (reads), scaled to its own height, with samples in time order from top to bottom; one figure per group. The left panel shows all reads, where the largest allele sets the height; the other panels show only the reads in each plotted range (`r paste(plot_ranges, collapse = ", ")`), so the shape of a smaller allele is visible. The x-axis stops at the cohort's 99.9th percentile. Up to four groups are shown here; every group is in `plots/ridges/`.
 
 ```{r ridges, results='asis', fig.height=6}
 .t <- proc.time()["elapsed"]
-d <- meta[, .(file_stem, sample_label, group_label)][lengths[measure == primary, .(file_stem, length)], on = "file_stem"]
+d <- meta[, .(file_stem, short_label, group_label)][lengths[measure == primary, .(file_stem, length)], on = "file_stem"]
+xcap <- stats::quantile(d$length, 0.999, na.rm = TRUE)
+d <- d[length <= xcap]
+d_all <- d[, panel := "All reads"]
+# Reads within each plotted range of the primary measure, per sample
+if (have_m6 && length(plot_ranges)) {
+  rb <- range_table[measure == primary & range_name %in% plot_ranges, .(file_stem, range_name, range_text, lo, hi)]
+  d_rng <- rbindlist(lapply(seq_len(nrow(unique(rb[, .(range_name, range_text)]))), function(k) {
+    rk <- unique(rb[, .(range_name, range_text)])[k]
+    b <- rb[range_name == rk$range_name]
+    x <- b[d[, .(file_stem, short_label, group_label, length)], on = "file_stem", nomatch = NULL][length >= lo & length <= hi]
+    x[, .(file_stem, short_label, group_label, length, panel = paste0(rk$range_name, " (", rk$range_text, ")"))]
+  }))
+  d <- rbind(d_all, d_rng)
+}
+d[, panel := factor(panel, levels = unique(panel))]
 shown <- 0
 for (g in unique(meta$group_label)) {
   dg <- d[group_label == g]
   if (!nrow(dg)) next
   n_s <- uniqueN(dg$file_stem); h <- min(40, 2 + 0.45 * n_s)
-  dg[, sample_label := factor(sample_label, levels = rev(levels(meta$sample_label)))]
-  p <- ggplot(dg, aes(length, sample_label)) +
+  dg[, short_label := factor(short_label, levels = rev(levels(meta$short_label)))]
+  p <- ggplot(dg, aes(length, short_label)) +
     geom_density_ridges(fill = "grey70", colour = "grey20", scale = 1.6, rel_min_height = 0.005, bandwidth = 1) +
-    scale_x_continuous(breaks = pretty_breaks(12)) +
+    facet_wrap(~ panel, nrow = 1, scales = "free_x") + scale_x_continuous(breaks = pretty_breaks(8)) +
     labs(x = paste(primary, "length"), y = NULL, title = paste("Repeat length by sample:", g)) + theme_bw()
-  save_plot(p, file.path(plots_dir, "ridges", paste0(safe_path(g), ".png")), 11, h)
+  save_plot(p, file.path(plots_dir, "ridges", paste0(safe_path(g), ".png")), min(45, 5 + 4 * nlevels(d$panel)), h)
   if (shown < 4) { cat(sprintf("\n\n## %s\n\n", g)); print(p); shown <- shown + 1 }
 }
 timings["Ridges"] <- proc.time()["elapsed"] - .t
