@@ -43,7 +43,7 @@ xlsx_path <- file.path(st_dir, "allele_structure.xlsx"); if (file.exists(xlsx_pa
 This module looks at the sequence of the reads around the primary tract:
 
 1. **Allele clustering** (`cluster = `r params$cluster``): reads are grouped by repeat length (`r paste(params$cluster_by, collapse = " then ")`). The number of length clusters is chosen by a Gaussian mixture, and clusters holding under `r percent(params$repeat_cluster_min_prop)` of a sample's reads are merged into their neighbour, so an expansion smear is not cut into many small clusters. With `haplotype` in `cluster_by`, reads are also grouped by flank haplotype: 15-mers found in 10–90% of reads are kept only when at least 7 others appear in exactly the same reads (the signature of a real SNP or indel, not a sequencing error), they are grouped into variant blocks, and each read is scored on the k-mers it carries from each allele of each block. A split is accepted when the mean silhouette exceeds 0.5 and every cluster holds at least 5% of reads, so haplotypes carried by more than about 10–20% of reads are found. Reads whose flank variants combine the two alleles' haplotypes (e.g. PCR chimeras) form their own cluster
-2. **Consensus sequences** for the left flank, tract and right flank of each cluster (DECIPHER, up to `r params$consensus_downsample` reads, `r percent(params$consensus_threshold)` agreement)
+2. **Consensus sequences** for the left flank, tract and right flank of each cluster (DECIPHER, up to `r params$consensus_downsample` reads, `r percent(params$consensus_threshold)` agreement; the tract consensus uses only reads at the cluster's modal length)
 3. **Variants** in each cluster's flank consensus against the reference, in coordinates of the full reference FASTA (so the VCFs load in IGV alongside it). The tract itself is excluded; its length is measured in Module 3
 4. **Waterfall plots** (`waterfall = `r params$waterfall``): reads stacked by repeat length with each base coloured, `r params$waterfall_flank_bp` bp of flank either side of the tract
 
@@ -79,6 +79,11 @@ clusters <- rbindlist(apply_fn(names(per_sample), function(s) {
   save(res, file = cache); res
 }))
 d_all <- clusters[d_all, on = .(file_stem, qname)]
+# Reads where no tract was found have no length to cluster on; they are counted
+# here and left out of the clusters, consensus and waterfalls
+no_tract <- d_all[repeat_cluster == "R0", .(reads = .N), by = file_stem]
+d_all <- d_all[repeat_cluster != "R0"]
+d_all[, cluster_number := match(cluster_number, sort(unique(cluster_number))), by = file_stem]
 cluster_summary <- d_all[, .(reads = .N, modal_length = { tb <- table(length); as.numeric(names(tb)[which.max(tb)]) },
                              median_length = as.numeric(median(length)), mean_length = mean(length), sd_length = sd(length),
                              repeat_cluster = repeat_cluster[1], haplotype_cluster = haplotype_cluster[1]), by = .(file_stem, cluster_number)]
@@ -87,12 +92,15 @@ setorder(cluster_summary, file_stem, cluster_number)
 timings["Clustering"] <- proc.time()["elapsed"] - .t
 ```
 
-`r if (params$cluster) "Each point is one sample: how many clusters it was split into. A heterozygous sample with two alleles should give 2; more usually means an expanded allele with a wide distribution or a sample mixture, and each cluster's share is in the table below." else ""`
+`r if (params$cluster) "The number of samples split into each number of clusters. A sample should give one cluster per allele it carries (two for a heterozygous sample); more usually means an allele with a wide length distribution (often an expanded one) or a mixture of cells or samples, and each cluster's share is in the table below." else ""`
+
+`r if (params$cluster && exists("no_tract") && nrow(no_tract)) sprintf("%s reads in %d samples had no %s tract to measure and are left out of the clusters, consensus and waterfalls (at most %s in one sample).", format(sum(no_tract$reads), big.mark = ","), nrow(no_tract), primary, format(max(no_tract$reads), big.mark = ",")) else ""`
 
 ```{r cluster_count, eval=params$cluster, fig.height=4.5}
-cc <- cluster_summary[, .(clusters = .N), by = file_stem]
-p_cc <- ggplot(cc, aes(x = "", y = clusters)) + box_points_mean() + scale_y_continuous(breaks = pretty_breaks()) +
-  labs(x = NULL, y = "Clusters", title = "Clusters per sample") + theme_bw()
+cc <- cluster_summary[, .(clusters = .N), by = file_stem][, .(samples = .N), by = clusters]
+p_cc <- ggplot(cc, aes(x = factor(clusters), y = samples)) + geom_col(fill = "grey60", width = 0.7) +
+  geom_text(aes(label = samples), vjust = -0.4, size = 3.5) + scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(x = "Clusters in the sample", y = "Samples", title = "Clusters per sample") + theme_bw()
 print(p_cc); save_plot(p_cc, file.path(plots_dir, "clusters_per_sample.png"), 5, 4.5)
 dt_full(cluster_summary, caption = "Clusters per sample (cluster 1 = most reads)", digits = 3)
 ```
@@ -108,11 +116,15 @@ dt_full(cluster_summary, caption = "Clusters per sample (cluster 1 = most reads)
 keys <- unique(d_all[, .(file_stem, cluster_number)])
 cons <- rbindlist(apply_fn(seq_len(nrow(keys)), function(i) {
   s <- keys$file_stem[i]; k <- keys$cluster_number[i]
-  cache <- file.path(temp_dir, paste0("consensus_", s, "_", k, ".RData"))
+  cache <- file.path(temp_dir, paste0("consensus_v307_", s, "_", k, ".RData"))
   if (safe_load_cache(cache, environment())) return(res)
   d <- d_all[file_stem == s & cluster_number == k]
   cl <- consensus_function(d$left, params$consensus_threshold, params$consensus_downsample)
-  cm <- consensus_function(d$mid, params$consensus_threshold, params$consensus_downsample)
+  # the tract consensus comes from reads at the cluster's modal length, so it
+  # shows the structure of that allele rather than a blend of lengths
+  tb <- table(d$length)
+  dm <- if (length(tb)) d[length == as.numeric(names(tb)[which.max(tb)])] else d
+  cm <- consensus_function(dm$mid, params$consensus_threshold, params$consensus_downsample)
   cr <- consensus_function(d$right, params$consensus_threshold, params$consensus_downsample)
   res <- data.table(file_stem = s, cluster_number = k, reads_for_consensus = cm$n,
                     consensus_left = cl$consensus, consensus_mid = cm$consensus, consensus_right = cr$consensus)

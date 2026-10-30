@@ -234,9 +234,15 @@ print(p_agree); save_plot(p_agree, file.path(plots_dir, "count_method_agreement.
 
 ## Counts against each other
 
-**How to read this.** Each panel compares two counts for the same reads (a random subset of up to 2,000 reads per sample): the x-axis is the read's **full** count and the y-axis its **match** (left) or **pure** (right) count, both in repeat units. The colour is how many reads fall in each cell. Reads on the dashed diagonal got the same count both ways.
+**How to read this.** Each panel compares two counts for the same reads (a random subset of up to 2,000 reads per sample): the x-axis is the read's **full** count and the y-axis its **match** (left) or **pure** (right) count, both in repeat units. The colour is how many reads fall in each cell. Reads on the dashed diagonal got the same count both ways. In the **pure** panel the dotted line is half the full count.
 
-**What it shows.** **match** stays on or just below the diagonal: a single wrong base loses at most one unit. **pure** is the longest unbroken run, so one error splits the tract in two and **pure** reports only the longer piece: anywhere from half the tract (an error in the middle) to just under the full count (an error near an end), and less again with two errors. The result is a wedge below the diagonal at the lengths where most reads are, which for an expanded allele (here about 130) means **pure** often undercounts it by tens of units. This is why **full** is the default.
+**What it shows.** A wrong base inside a tract affects the three counts differently. **match** loses only the unit the error sits in, so its reads stay on or just below the diagonal. **pure** keeps only the longest unbroken run, so one error can cost it many units. Take a read whose tract is 100 units by the full count:
+
+- No error: pure = 100, on the diagonal.
+- One error at unit 30: the tract splits into runs of 29 and 70, and pure = 70. Depending on where the error lands, pure is anywhere from 50 (an error in the middle) to 99 (an error at an end), so reads with one error fill the space between the diagonal and the dotted half-way line.
+- Two or more errors: the tract splits into three or more pieces, and pure can fall below the dotted line.
+
+Long tracts usually carry at least one error (see *Disagreement by tract length*), so at each common tract length the reads form a vertical streak hanging down from the diagonal, and together these make the wedge. The wedge is a property of the **pure** count, not of the sample: it appears wherever there are many reads of one length. **full** is the default because it is not cut short in this way.
 
 ```{r count_scatter, fig.height=5.5}
 set.seed(123)
@@ -248,17 +254,25 @@ cs <- rbindlist(lapply(tracts$tract, function(t) {
 }))
 p_cs <- ggplot(cs, aes(full, other)) + geom_bin2d(binwidth = c(1, 1)) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey40") +
+  geom_abline(data = data.frame(method = "pure"), aes(slope = 0.5, intercept = 0), linetype = "dotted", colour = "grey40") +
   scale_fill_viridis_c(trans = "log10", labels = comma, name = "Reads") +
   facet_wrap(tract ~ method, scales = "free", labeller = labeller(method = c(match = "match against full", pure = "pure against full"))) +
   labs(x = "full count (units)", y = "match or pure count (units)", title = "Counting methods against the full count, per read") + theme_bw()
 print(p_cs); save_plot(p_cs, file.path(plots_dir, "count_methods_scatter.png"), 10, 5.5)
+pure_sum <- rbindlist(lapply(tracts$tract, function(t) {
+  d <- read_tracts[get(paste0(t, "_found")) %in% TRUE, .(full = get(paste0(t, "_full")), pure = get(paste0(t, "_pure")))]
+  d[, .(tract = t, reads = .N, short = mean(pure < full), median_loss = as.numeric(median((full - pure)[pure < full])),
+        below_half = mean(pure < full / 2))]
+}))
 ```
+
+`r paste(sprintf("For %s in this run, **pure** was shorter than **full** in %s of reads; where it was, by a median of %s units, and %s of reads had **pure** below half of **full** (two or more breaks).", pure_sum$tract, percent(pure_sum$short, 0.1), format(pure_sum$median_loss), percent(pure_sum$below_half, 0.1)), collapse = " ")`
 
 ## Where the tract is broken
 
 **How to read this.** Only reads whose tract is broken (by an error or an interruption) are used, up to 2,000 per sample. For each break, the x-axis is how far along the tract it sits, from 0% (the 5' start) to 100% (the 3' end); the y-axis counts breaks. A break is known only to the nearest unit, so it is placed at random within that unit.
 
-**What it shows.** Sequencing errors can fall anywhere, so they give a flat spread. A **real interruption** (such as a CAA at the same place in every copy of an allele) would give a sharp spike at one position, and would mean **pure** or **match** is the more meaningful count for that tract. Fewer breaks appear within the first and last two units, because a tract must start and end with `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` perfect units; in a short tract that is a large share of its length, so a step near each end comes from the short allele.
+**What it shows.** Sequencing errors can fall anywhere, so they give a flat spread. A **real interruption** (such as a CAA at the same place in every copy of an allele) would give a sharp spike at one position, and would mean **pure** or **match** is the more meaningful count for that tract. Breaks are fewer close to either end, because a tract must start with `r tracts$start_perfect_repeats[1]` and end with `r tracts$end_perfect_repeats[1]` perfect units (`rpt_start_perfect_repeats`, `rpt_end_perfect_repeats`): an error there shortens the tract rather than breaking it. That edge zone is a few units long whatever the tract length, so it is a large share of a short tract and a small share of a long one; how far the dips at the ends reach therefore depends on the mix of tract lengths in the run, and is not a sign of an interruption.
 
 ```{r break_positions, fig.height=4.5}
 set.seed(123)
@@ -290,7 +304,7 @@ timings["Counting methods"] <- proc.time()["elapsed"] - .t
 
 ## Modal length by counting method
 
-The modal (most common) length of each tract per sample, calculated with each counting method over all reads. Where a sample has two alleles this is usually the more abundant one, so the length plots above are the better guide to how the methods differ; per-range modal, mean and median by method are in Module 6.
+The modal (most common) length of each tract per sample, calculated with each counting method over all reads. Where a sample has more than one allele this is usually the most abundant one, so the plots above are the better guide to how the methods differ.
 
 ```{r modal_by_method}
 modal_method <- rbindlist(lapply(tracts$tract, function(t) {

@@ -42,12 +42,26 @@ apply_fn <- function(X, FUN, ..., threads = NULL) {
   threads <- threads %||% tryCatch(get("params", envir = parent.frame())$threads,
                                    error = function(e) 1)
   threads <- threads %||% 1
+  lost <- character(0)
   if (threads > 1 && length(X) > 1) {
-    res <- pbmcapply::pbmclapply(X, FUN, ..., mc.cores = min(threads, length(X)))
+    # A worker process that is killed (usually for running out of memory) returns NULL for
+    # every item it held, with only a warning; catch that warning so the run stops instead
+    # of silently dropping those samples
+    res <- withCallingHandlers(
+      pbmcapply::pbmclapply(X, FUN, ..., mc.cores = min(threads, length(X))),
+      warning = function(w) {
+        if (grepl("did not deliver|core.*(killed|died)", conditionMessage(w))) {
+          lost <<- c(lost, conditionMessage(w)); invokeRestart("muffleWarning")
+        }
+      })
   } else {
     res <- pbapply::pblapply(X, FUN, ...)
   }
   res <- extract_apply_fn_result(res)
+  if (length(lost) || any(grepl("did not deliver", attr(res, "warning") %||% "")))
+    stop("A worker process stopped without returning its results (usually it ran out of memory), so ",
+         "some samples would be missing. Give the job more memory or lower `threads`.\n  ",
+         paste(unique(lost), collapse = "\n  "))
   # Surface worker errors rather than letting them become silent NULLs
   errs <- vapply(res, function(r) inherits(r, "try-error"), logical(1))
   if (any(errs)) stop("Worker failed for ", sum(errs), " item(s); first error:\n  ",
@@ -58,7 +72,12 @@ apply_fn <- function(X, FUN, ..., threads = NULL) {
 
 extract_apply_fn_result <- function(result) {
   if (is.list(result) && "value" %in% names(result) && "warning" %in% names(result)) {
-    if (!is.null(result$warning)) warning(result$warning$message)
+    if (!is.null(result$warning)) {
+      if (grepl("did not deliver", result$warning$message))
+        stop("A worker process stopped without returning its results (usually it ran out of memory), so ",
+             "some samples would be missing. Give the job more memory or lower `threads`.\n  ", result$warning$message)
+      warning(result$warning$message)
+    }
     result <- result$value
   }
   result
@@ -252,13 +271,13 @@ pct_axis <- function(accuracy = NULL) scales::label_percent(accuracy = accuracy)
 # written in red beside the box (clear of the points). percent = TRUE writes a
 # proportion as a percentage with `digits` decimals. jitter = 0 keeps points on the
 # category line (needed when lines join paired points).
-box_points_mean <- function(point_colour = "grey30", digits = 1, label = TRUE, percent = FALSE, jitter = 0.15) {
+box_points_mean <- function(point_colour = "grey30", digits = 1, label = TRUE, percent = FALSE, jitter = 0.15, fmt = NULL) {
   lay <- list(
     ggplot2::geom_boxplot(outlier.shape = NA, fill = "grey92", colour = "grey40", width = 0.5),
     ggplot2::geom_jitter(width = jitter, height = 0, size = 1.8, alpha = 0.7, colour = point_colour),
     ggplot2::stat_summary(fun = mean, geom = "point", shape = 18, size = 4, colour = "red")
   )
-  fmt <- if (percent) function(v) scales::percent(v, accuracy = 10^-digits) else function(v) formatC(v, format = "f", digits = digits)
+  if (is.null(fmt)) fmt <- if (percent) function(v) scales::percent(v, accuracy = 10^-digits) else function(v) formatC(v, format = "f", digits = digits)
   if (label) lay <- c(lay, list(ggplot2::stat_summary(
     fun = mean, geom = "text", colour = "red", size = 3.2, hjust = 0, position = ggplot2::position_nudge(x = 0.3),
     ggplot2::aes(label = fmt(ggplot2::after_stat(y))))))

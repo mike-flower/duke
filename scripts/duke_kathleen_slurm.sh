@@ -11,7 +11,7 @@
 #SBATCH --mail-user=michael.flower@ucl.ac.uk
 
 # ==============================================================================
-# Duke 3.0.5 - New Kathleen Job Script (Slurm)
+# Duke 3.0.7 - New Kathleen Job Script (Slurm)
 # Config: 80 tasks across 2 nodes, 2GB/task = 160GB total, 48h
 # Note: submit with sbatch (not qsub); no chmod needed
 # See README.md for resource guidance and SGE vs Slurm command reference
@@ -42,7 +42,7 @@ cd ~/Scratch/bin/duke
 ./duke \
   --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
   --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
-  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
+  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20_cagcaa.fasta \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
   --threads $SLURM_NTASKS \
   --resume TRUE

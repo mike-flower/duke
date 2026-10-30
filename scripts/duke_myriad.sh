@@ -12,7 +12,7 @@
 #$ -m bea
 
 # ==============================================================================
-# Duke 3.0.5 - Myriad Job Script
+# Duke 3.0.7 - Myriad Job Script
 # Recommended config: 12 cores, 64GB/core, 48h, 500GB tmpfs
 # See README.md for resource guidance and alternative configurations
 # ==============================================================================
@@ -38,7 +38,7 @@ echo ""
 ./duke \
   --dir_data /home/skgtmdf/Scratch/data/2025.12.17_pb_test/data \
   --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
-  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20.fasta \
+  --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20_cagcaa.fasta \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
   --threads $NSLOTS \
   --resume TRUE

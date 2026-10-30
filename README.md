@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.0.5** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.0.7** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -78,7 +78,7 @@ duke/
 
 ```bash
 ./duke --dir_data ~/data/run1 --dir_out ~/data/run1/result_duke \
-       --path_ref www/HTTset20.fasta --path_settings ~/data/run1/settings_duke.xlsx --threads 8
+       --path_ref www/HTTset20_cagcaa.fasta --path_settings ~/data/run1/settings_duke.xlsx --threads 8
 ```
 
 `./duke --help` lists every option by module with its default. Add `--dry_run` to any command to print the resolved parameters and tracts without running anything.
@@ -95,7 +95,7 @@ BAM, FASTQ (`.fastq`, `.fq`, gzipped or not) or FASTA, searched recursively. The
 
 ### Reference (`path_ref`)
 
-A FASTA with one block of `N` (five or more) where the repeat is. Duke aligns each read to the sequence either side of the block, so the block can be any length. `www/HTTset20.fasta` covers the HTT CAG tract; `www/HTTset20_cag_ccg.fasta` covers the CAG and the CCG tract together.
+A FASTA with one block of `N` (five or more) where the repeat is. Duke aligns each read to the sequence either side of the block, so the block can be any length. For HTT, `www/HTTset20_cagcaa.fasta` is the reference for the CAG tract: its N block covers the CAG tract and the CAA CAG after it, so the end of the tract is found by tract detection rather than fixed by the flank alignment. `www/HTTset20_cag_ccg.fasta` covers the CAG and the CCG tract together, for CAG and CCG profiling. `www/HTTset20.fasta` (N block on the CAG tract only) is kept for comparison with earlier runs; on the 2026 jasmine run it gave the same modal length as `HTTset20_cagcaa` in every sample, by reads and by molecules.
 
 ### Settings file (`path_settings`, needed for Module 6)
 
@@ -104,7 +104,7 @@ One row per sample, `.xlsx` (first sheet) or `.csv`:
 | Column | Required | Example | Meaning |
 |---|---|---|---|
 | `file_name` | yes | `sample_01.bam` | The input file (with or without extension) |
-| `analysis_ranges` | yes | `[0-35][36-NA]` | Ranges on the primary measure, one bracket each; `NA` = unbounded |
+| `analysis_ranges` | yes | `[0-35][36-NA]` | Ranges on the primary measure (the first tract in the tracts table, or the single tract from `rpt_pattern`), in units of its motif, one bracket each; `NA` = unbounded |
 | `floor` | no | `[3][3]` | Remove lengths with fewer reads than this (a value below 1 is a fraction of the modal bin); 1 keeps all |
 | `max_peaks` | no | `[2][1]` | Modal peaks reported per range |
 | `group` | no | `QS5` | Group for controls, timecourses and plots |
@@ -155,13 +155,13 @@ The default is one tract: `rpt_pattern` (CAG) in `path_ref`. To measure more, gi
 
 **Composite measures.** A combined length per read, set with `composites` (`--composites "CAG_CCG_sum=CAG+CCG:sum,CAG_CCG_span=CAG+CCG:span"`) or a `composites` sheet in the tracts workbook (`name`, `tracts`, `mode`):
 
-- `sum` – the tracts' counts added (pure repeat content only);
+- `sum` – the tracts' counts added (pure repeat content only; in bp when the motifs differ in length);
 - `span` – from the start of the first tract to the end of the last, divided by the motif length, so any sequence between the tracts is included (in bp when the motifs differ in length). For HTT, span = CAG + CCG + 4 for the standard allele.
 
 **What you get for every tract and composite (each a "measure"):**
 
 - Module 3: detection rate, counts by every method, modal by method, and the per-read export (`CAG_full`, `CAG_match`, `CAG_pure`, `CCG_full`, ..., `CAG_CCG_sum`, `CAG_CCG_span`).
-- Module 6: distributions and the full set of instability metrics, per measure. A measure without its own `analysis_ranges_<measure>` column uses the primary tract's ranges: the reads are chosen by their CAG length (e.g. the expanded allele) and the metrics are calculated on that measure. With its own column the ranges are on its own scale.
+- Module 6: distributions and the full set of instability metrics, per measure. A measure without its own `analysis_ranges_<measure>` column uses the primary tract's ranges: the reads are chosen by their CAG length (e.g. the expanded allele) and the metrics are calculated on that measure. With its own column the ranges are on its own scale. The primary range selects reads only; it does not cut the other measure, so in a CAG range of 40–50 a read with CAG 48 and CCG 10 has a sum of 58 and is kept. All lengths are in units of the measure's own motif, so with a CAG primary and a pentanucleotide tract, `analysis_ranges` is in CAG units and `analysis_ranges_<pentanucleotide tract>` in 5 bp units.
 - Module 6, comparing tracts: for each pair (`measure_pairs`, default every pair of tracts), the mean change in tract B against the change in tract A from the sample median, per group, plus a per-read scatter and a Spearman correlation per sample. This shows whether CAG instability carries CCG with it.
 - Module 7: a heatmap per measure, and a row per measure on each sample card.
 
@@ -181,7 +181,9 @@ The first tract is the primary measure: it is used for the read selection above,
 
 Set these to match your own oligos. Reads are oriented to the reference first, so the flanks are searched on the forward strand.
 
-**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is one molecule. Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: the median of the longest window of reads of half-width `w` + `wfrac` × length that holds at least `umi_top_cluster_k` reads and at least `umi_top_cluster_min_share` (default 20%) of the molecule's reads, so a few stray long reads cannot set the length of a large molecule. PCR slippage mostly shortens reads, so the longest well-supported length is the best estimate of the template. A length halfway between two whole units goes to the one more of the molecule's reads sit on.
+**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is one molecule. Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: the median of the longest window of reads of half-width `w` + `wfrac` × length that holds at least `umi_top_cluster_k` reads and at least `umi_top_cluster_min_share` (default 20%) of the molecule's reads, so a few stray long reads cannot set the length of a large molecule. PCR slippage mostly shortens reads, so the longest well-supported length is the best estimate of the template. A length halfway between two whole units goes to the one more of the molecule's reads sit on. Finally, a molecule where at least `umi_long_read_share` (20%) of the reads are at least `umi_long_read_units` (20) units longer than the molecule itself is flagged and, with `umi_long_read_filter` (on by default), dropped: such a molecule most likely came from a longer template whose first copies were shortened in PCR, so its length is too short. This is judged from the molecule's own reads, with no alleles involved.
+
+**Why the long-read filter.** In the 2026 jasmine run (66 samples, a 14-CAG and a ~130-CAG allele), 64% of the molecules called between the two alleles held at least 20% of their reads 20 or more units longer than the molecule, against about 4% of molecules at either allele; 65% of those long reads sat within 15 units of the sample's expanded peak. Almost all of these molecules had only 3–5 reads (79% flagged at 3–5 reads, 1–2% at 11 or more), so they are expanded templates sampled too few times for the full-length reads to be found. The filter cut the share of molecules above 30 CAG that sat between the alleles from a median of 14.7% to 5.7% per sample, close to the 3.9–4.0% seen when `umi_min_reads` was raised to 6 or 11 instead, while keeping the shallow molecules that show no long reads. Its cost is that about 11% of genuine 3–5-read molecules are also flagged, because one stray read is already 20% of them; this is similar at every length, so it does not bias the distribution. Set `umi_long_read_filter = FALSE` to keep these molecules; Module 4 always shows what the filter removes.
 
 **Why repeat length is not used to form molecules.** Molecules are formed from the UMI sequences alone, and nothing about alleles is assumed. PCR slippage and deletion can make reads of one molecule differ by tens of units (a 125-CAG molecule can give reads of 10 CAG or fewer), which is exactly the error collapsing is meant to remove, so length cannot say which reads belong together. Two molecules sharing a UMI by chance is rare (Module 4 reports the expected rate), and PCR chimeras are a minority of a family's reads. Earlier v3 versions split a UMI family whose reads fell on both sides of an allele boundary; this was removed in v3.0.4 because it turned slipped copies of one molecule into a second, artificial molecule and assumed every sample has one short and one long allele.
 
@@ -209,6 +211,9 @@ Set these to match your own oligos. Reads are oriented to the reference first, s
 | `umi_top_cluster_w` | `3` | number | top_cluster: constant part of the window half-width (repeats) |
 | `umi_top_cluster_wfrac` | `0.1` | number | top_cluster: length-proportional part of the window half-width |
 | `umi_top_cluster_min_share` | `0.2` | number | top_cluster: share of the molecule's reads the window must also hold, so a few stray long reads cannot set the length (0 = only umi_top_cluster_k reads needed) |
+| `umi_long_read_filter` | `TRUE` | TRUE / FALSE | Drop molecules where many reads are much longer than the molecule (most likely a longer template whose reads were shortened in PCR) |
+| `umi_long_read_units` | `20` | number | Long-read filter: how many units longer than its molecule a read must be to count as long |
+| `umi_long_read_share` | `0.2` | number | Long-read filter: share of the reads of a molecule that must be long for it to be flagged |
 
 <!-- params:UMI:end -->
 
@@ -576,6 +581,20 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - Module 3 report: the counting-method disagreement plot adds the curve expected from a single error chance per base, fitted to the data, and gives that chance; the flank-length plot splits reads into exact, 1, 2–5, 6–10, 11–50 and more than 50 bases off the commonest flank length.
 - Module 6 report: the metric definitions are a full-width table; *Group controls* explains how the setpoints are calculated (separately for reads and molecules, from the chosen control samples); *Length by counting method* is removed, as Module 3 covers it read by read (and the `count_methods` sheet with it); *Measures against each other* is renamed *Comparing tracts*, with a description.
 - Every Module 3 and 4 plot now opens with *How to read this* (what the axes are, in plain terms) and *What it shows*.
+
+**v3.0.6**
+- A worker process that is killed during a parallel step (usually for running out of memory) now stops the run with a message. Before, the samples that worker held were dropped from that module without any error.
+- Report text works for any data: no wording assumes two alleles, a normal and an expanded allele, or a particular length. Module 3's *Counts against each other* explains the **pure** wedge with a worked example, draws the half-way line on the **pure** panel, and adds a sentence calculated from the run; *Where the tract is broken* explains the dips at the tract ends from `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats`; the modal-by-method note no longer points to the Module 6 section removed in v3.0.5.
+- Module 4: the second **top_cluster** rule in *Choosing a molecule's length* uses the run's `umi_top_cluster_min_share` (20% when that is 0) instead of a fixed 20%, and is marked "(used)" for any share.
+- Module 4 report: *Reads per molecule* uses a log axis with even bins and marks the median and mean of kept molecules (with the middle 50% and 80% in the subtitle); new per-sample box plots of molecules kept, median reads per kept molecule and share of reads used (`molecules_per_sample.png`). *Error distribution* now shows, for each distance *k*, the share of reads at least *k* units shorter or longer than their molecule, which reads more easily than the histogram. *How well each rule behaves* says for each test whether lower or closer to 0 is better, draws the rule used in orange, and marks the best rule in each test; its table names each column's direction and has a "used" column. *Where the rules differ* names the rule used as the reference (it has no line of its own), gives each rule a fixed, distinct colour, and its table marks the reference row.
+
+**v3.0.7**
+- HTT reference: `www/HTTset20_cagcaa.fasta` (N block over the CAG tract and the CAA CAG after it) is added and is now the recommended CAG reference; `www/HTTset20.fasta` is kept for comparison with earlier runs.
+- A `sum` composite of tracts whose motifs differ in length is now in bp, as `span` already was; before, units of different sizes were added.
+- Module 6 explains that a primary range selects reads but does not cut other measures, and that lengths are in each measure's own motif units.
+- New long-read filter for UMI molecules (`umi_long_read_filter`, on by default; `umi_long_read_units` = 20, `umi_long_read_share` = 0.2): a molecule where at least 20% of the reads are at least 20 units longer than the molecule is dropped, as it most likely came from a longer template whose reads were shortened in PCR. Judged from the molecule's own reads; no alleles involved. See [Why the long-read filter](#umis) for the jasmine evidence.
+- Module 4 report: *Molecules built from a longer template* replaces *Molecules holding much longer reads*: the share of molecules flagged at each length, by reads per molecule; the molecule length distribution with and without the filter, and with `umi_min_reads` raised to 6 and 11 for comparison; the share flagged per sample. *Reads per molecule* colours molecules kept, dropped for too few reads and dropped by the filter. `umi.xlsx` sheets `long_read_flag_by_length` and `long_read_flag_per_sample`; the molecule table carries each molecule's primary length, long reads, their share and the flags.
+- Module 5 fixes, found on a run with CAG and CCG tracts: the tract consensus is now built from reads at the cluster's modal length, and terminal gaps count in every consensus, so a consensus stops where most reads stop (before, it ran to the end of the longest sampled read, e.g. ~590 bp for a 136-unit allele). Flank variants are called with free end gaps on both sequences, so sequence between the primary tract and the reference flank (the rest of an N block that covers several tracts) is no longer forced onto the flank; on that run this removed ~2,350 false calls (~19 per cluster), leaving 20. Reads with no primary tract are left out of the clusters (they formed 1–2 read clusters) and counted in the text. *Clusters per sample* is a bar chart.
 
 **Removed**
 - Per-sample × per-range histogram, scatter and density PNGs (replaced by the sample cards and heatmaps). Parameters for them are ignored with a message.

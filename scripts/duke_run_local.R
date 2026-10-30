@@ -29,7 +29,7 @@ params <- list(
   dir_out = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2026.03.16-dev-yas/result_duke",
   # Reference FASTA with NNNNN marking the repeat region (required unless every
   # tract in path_tracts names its own reference)
-  path_ref = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/www/HTTset20.fasta",
+  path_ref = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/www/HTTset20_cagcaa.fasta",
   # Settings .xlsx/.csv (ranges, groups, controls, time). Needed for Module 6
   path_settings = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2026.03.16-dev-yas/settings/settings_duke.xlsx",
   # Optional tracts table (.csv or .xlsx sheet 'tracts'; optional sheet
@@ -134,7 +134,7 @@ params <- list(
   umi_cluster_max_dist = 1L,
   # Minimum reads for a molecule to be kept
   umi_min_reads = 3L,
-  # Per-molecule length: 'top_cluster', 'median', 'mode' or 'mean'
+  # Per-molecule length: 'top_cluster', 'max_supported', 'mode', 'median' or 'mean'
   umi_collapse_stat = "top_cluster",
   # top_cluster: reads required in the window
   umi_top_cluster_k = 2L,
@@ -145,6 +145,11 @@ params <- list(
   # top_cluster: share of the molecule's reads the window must also hold (0 = only
   # umi_top_cluster_k reads needed)
   umi_top_cluster_min_share = 0.2,
+  # Drop molecules where at least umi_long_read_share of the reads are at least
+  # umi_long_read_units longer than the molecule (a longer template shortened in PCR)
+  umi_long_read_filter = TRUE,
+  umi_long_read_units = 20,
+  umi_long_read_share = 0.2,
 
   # --- Allele structure --------------------------------------------------------
   # Cluster reads into alleles, build consensus sequences and call variants

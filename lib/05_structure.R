@@ -178,6 +178,8 @@ cluster_sample <- function(d, p) {
 # ------------------------------------------------------------------------------
 # Consensus (DECIPHER)
 # ------------------------------------------------------------------------------
+# Terminal gaps count as gaps, so the consensus stops where most reads stop
+# rather than running on to the end of the longest read in the sample.
 consensus_function <- function(seqs, threshold = 0.5, sample_size = 50L) {
   seqs <- seqs[!is.na(seqs) & nchar(seqs) > 0]
   if (length(seqs) == 0) return(list(consensus = NA_character_, n = 0L))
@@ -186,7 +188,7 @@ consensus_function <- function(seqs, threshold = 0.5, sample_size = 50L) {
   dss <- Biostrings::DNAStringSet(seqs)
   aln <- suppressMessages(DECIPHER::AlignSeqs(dss, processors = 1, verbose = FALSE))
   cons <- suppressMessages(DECIPHER::ConsensusSequence(aln, threshold = threshold, ambiguity = FALSE,
-                                                       noConsensusChar = "N", includeTerminalGaps = FALSE))
+                                                       noConsensusChar = "N", includeTerminalGaps = TRUE))
   cons <- gsub("-", "", as.character(cons))
   list(consensus = gsub("[^ACGT]", "N", cons), n = length(seqs))
 }
@@ -194,9 +196,12 @@ consensus_function <- function(seqs, threshold = 0.5, sample_size = 50L) {
 # ------------------------------------------------------------------------------
 # Variants in flank consensus sequences, in coordinates of the full reference
 # ------------------------------------------------------------------------------
-# Each flank consensus is aligned to its own reference flank (the consensus
-# globally, the flank locally), so the repeat never enters the alignment and
-# positions map directly onto the reference. Runs of adjacent inserted or
+# Each flank consensus is aligned to its own reference flank with free end gaps
+# on both (overlap), so the repeat never enters the alignment, and any sequence
+# between the primary tract and the flank (the rest of an N block that spans
+# several tracts, e.g. CAA CAG CCG ... CCT after CAG) is left unaligned rather
+# than forced onto the flank as a run of false variants.
+# Positions map directly onto the reference. Runs of adjacent inserted or
 # deleted bases are merged into single events. Positions are 1-based on the
 # full reference including its N block, ready for IGV alongside that FASTA.
 call_flank_variants <- function(consensus, ref_flank, offset, edge = 3L) {
@@ -205,7 +210,7 @@ call_flank_variants <- function(consensus, ref_flank, offset, edge = 3L) {
   pw <- lapply(setNames(nm = c("pairwiseAlignment", "alignedPattern", "alignedSubject", "subject")),
                function(f) getExportedValue(ns, f))
   aln <- pw$pairwiseAlignment(Biostrings::DNAString(consensus), Biostrings::DNAString(ref_flank),
-                              type = "global-local", gapOpening = 5, gapExtension = 2)
+                              type = "overlap", gapOpening = 5, gapExtension = 2)
   q <- strsplit(as.character(pw$alignedPattern(aln)), "")[[1]]
   r <- strsplit(as.character(pw$alignedSubject(aln)), "")[[1]]
   rpos <- BiocGenerics::start(pw$subject(aln)) - 1L + cumsum(r != "-")

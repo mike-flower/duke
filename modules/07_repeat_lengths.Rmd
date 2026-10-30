@@ -147,7 +147,7 @@ timings["Ridges"] <- proc.time()["elapsed"] - .t
 
 # Sample cards
 
-One figure per sample, one row per measure. The first panel shows all reads on a square-root scale, so a small expanded allele stays visible beside a large normal one; the next panels zoom into ranges `r paste(plot_ranges, collapse = ", ")` with the range's modal (red), median (purple) and mean (orange) marked`r if (!is.null(mol)) ". Molecules are the teal line, scaled to the same total as the reads" else ""`. The subtitle gives the sample's read accounting. One card from each of up to four groups is shown; every card is in `plots/sample_cards/`.
+One figure per sample, one row per measure. The first panel shows all reads on a square-root scale, so a minor allele stays visible beside a dominant one; the next panels zoom into ranges `r paste(plot_ranges, collapse = ", ")` with the range's modal (red), median (purple) and mean (orange) marked`r if (!is.null(mol)) ". Molecules are the teal line, scaled to the same total as the reads" else ""`. The subtitle gives the sample's read accounting. One card from each of up to four groups is shown; every card is in `plots/sample_cards/`.
 
 ```{r sample_cards, eval=params$sample_cards, results='asis', fig.height=4.5, fig.width=13.5}
 .t <- proc.time()["elapsed"]

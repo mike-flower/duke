@@ -19,6 +19,10 @@
 #   4. Molecules with fewer than umi_min_reads reads are dropped, and each
 #      measure is collapsed to one value per molecule (default top_cluster,
 #      needing at least 2 reads and 20% of the molecule's reads).
+#   5. Molecules where at least umi_long_read_share of the reads are at least
+#      umi_long_read_units longer than the molecule itself are flagged, and
+#      dropped when umi_long_read_filter is TRUE (the default): they most likely
+#      came from a longer template whose reads were mostly shortened in PCR.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -188,9 +192,12 @@ collapse_fun <- function(stat, k = 2L, w = 3, wfrac = 0.10, min_share = 0) {
 # Every length rule the report compares, whatever umi_collapse_stat is set to
 collapse_rules <- function(p) {
   k <- p$umi_top_cluster_k; w <- p$umi_top_cluster_w; wf <- p$umi_top_cluster_wfrac
+  # The share version uses the run's umi_top_cluster_min_share, or 20% when that is 0
+  sh <- if (isTRUE(p$umi_top_cluster_min_share > 0)) p$umi_top_cluster_min_share else 0.2
   list(
     top_cluster_k = list(label = sprintf("top_cluster, %d reads", k), f = function(v) .top_cluster(v, k, w, wf, 0)),
-    top_cluster_share20 = list(label = sprintf("top_cluster, %d reads and 20%%", k), f = function(v) .top_cluster(v, k, w, wf, 0.2)),
+    top_cluster_share = list(label = sprintf("top_cluster, %d reads and %s", k, paste0(signif(100 * sh, 3), "%")),
+                             share = sh, f = function(v) .top_cluster(v, k, w, wf, sh)),
     max_supported = list(label = sprintf("longest length on %d reads", k), f = function(v) .max_supported(v, k)),
     mode = list(label = "mode", f = function(v) .mode_num(v[is.finite(v)])),
     median = list(label = "median", f = function(v) as.numeric(stats::median(v, na.rm = TRUE))),
@@ -248,18 +255,37 @@ form_molecules <- function(sample, reads, lengths, p, primary) {
   # together.
   r[, molecule_id := paste(sample, umi_group, sep = "|")]
   mol <- r[, .(umi = umi_group[1], n_reads = .N), by = molecule_id]
-  mol[, kept := n_reads >= p$umi_min_reads]
+  mol[, kept_depth := n_reads >= p$umi_min_reads]
   mol[, file_stem := sample]
 
   f <- collapse_fun(p$umi_collapse_stat, p$umi_top_cluster_k, p$umi_top_cluster_w, p$umi_top_cluster_wfrac,
                     p$umi_top_cluster_min_share)
-  keep_ids <- mol$molecule_id[mol$kept]
+  keep_ids <- mol$molecule_id[mol$kept_depth]
   lk <- lengths[r[molecule_id %in% keep_ids, .(qname, molecule_id)], on = "qname", nomatch = NULL]
   set.seed(sum(utf8ToInt(sample)))   # reproducible tie-breaks in .whole_unit()
   ml <- lk[, .(length = .whole_unit(f(length), length), n_reads = .N, read_sd = stats::sd(length)), by = .(molecule_id, measure)]
   ml[, file_stem := sample]
 
+  # Long-read check, on the primary measure: reads at least umi_long_read_units longer than
+  # their own molecule. A molecule where they make up at least umi_long_read_share of its
+  # reads most likely came from a longer template whose reads were mostly shortened in PCR
+  # (an early-cycle deletion), so its length is too short. Judged from the molecule's own
+  # reads only; no alleles are involved.
+  pl <- ml[measure == primary, .(molecule_id, primary_length = length)]
+  lr <- lk[measure == primary][pl, on = "molecule_id", nomatch = NULL][
+    , .(reads_measured = .N, long_reads = sum(length - primary_length >= p$umi_long_read_units)), by = molecule_id]
+  mol <- pl[mol, on = "molecule_id"]
+  mol <- lr[mol, on = "molecule_id"]
+  mol[is.na(long_reads), `:=`(long_reads = 0L, reads_measured = 0L)]
+  mol[, long_share := ifelse(reads_measured > 0, long_reads / reads_measured, 0)]
+  mol[, long_flag := kept_depth & long_share >= p$umi_long_read_share]
+  mol[, kept := kept_depth & !(isTRUE(p$umi_long_read_filter) & long_flag)]
+  setcolorder(mol, c("molecule_id", "file_stem", "umi", "n_reads", "primary_length", "reads_measured", "long_reads", "long_share",
+                     "kept_depth", "long_flag", "kept"))
+  ml <- ml[molecule_id %in% mol$molecule_id[mol$kept]]
+
   # The primary measure's molecule length by other collapse rules, for the report's comparison
+  # (every molecule with enough reads, before the long-read filter)
   prim <- lk[measure == primary]
   rules <- collapse_rules(p)
   cmp <- prim[, c(list(n_reads = .N), lapply(rules, function(g) .whole_unit(g$f(length), length))), by = molecule_id]
@@ -270,7 +296,8 @@ form_molecules <- function(sample, reads, lengths, p, primary) {
                            distinct_umis = length(cl$u), umi_groups = data.table::uniqueN(r$umi_group),
                            umis_with_neighbour = if (is.null(pairs) || nrow(pairs) == 0) 0L else data.table::uniqueN(c(pairs$a, pairs$b)),
                            expected_by_chance = expected_chance_neighbours(length(cl$u), stats::median(nchar(cl$u)), max(1, p$umi_cluster_max_dist)) * length(cl$u),
-                           molecules = nrow(mol), molecules_kept = sum(mol$kept), stringsAsFactors = FALSE)
+                           molecules = nrow(mol), molecules_enough_reads = sum(mol$kept_depth),
+                           molecules_long_read_flag = sum(mol$long_flag), molecules_kept = sum(mol$kept), stringsAsFactors = FALSE)
   list(reads = r[, .(file_stem = sample, qname, umi, umi_group, molecule_id)],
        molecules = mol, molecule_lengths = ml, clustering = clustering, collapse_compare = cmp)
 }

@@ -223,9 +223,13 @@ compute_composites <- function(rt, composites, tracts) {
     comps <- composites$components[[k]]
     nm <- composites$name[k]
     if (composites$mode[k] == "sum") {
+      # units when the motifs share a length; bp when they differ (a CAG unit
+      # and a pentanucleotide unit cannot be added), as for span
+      L <- unique(nchar(tracts$motif[tracts$tract %in% comps]))
       vals <- lapply(comps, function(t) {
         cm <- tracts$count_method[tracts$tract == t]
-        rt[[paste0(t, "_", cm)]]
+        v <- rt[[paste0(t, "_", cm)]]
+        if (length(L) > 1) v * nchar(tracts$motif[tracts$tract == t]) else v
       })
       rt[, (nm) := Reduce(`+`, vals)]
     } else {

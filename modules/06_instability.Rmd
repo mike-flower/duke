@@ -96,7 +96,7 @@ timings["Load"] <- proc.time()["elapsed"] - .t
 
 `r nrow(settings)` samples have settings and are analysed. `r if (length(st$missing)) sprintf("%d samples in the data have no settings row and are left out: %s.", length(st$missing), paste(head(st$missing, 5), collapse = ", ")) else "Every sample in the data has a settings row."` `r if (nrow(st$excluded)) sprintf("%d samples are marked exclude and are left out of every analysis.", nrow(st$excluded)) else ""` Units analysed: **`r paste(names(units), collapse = " and ")`**.
 
-How each measure's ranges are defined: a measure with its own `analysis_ranges_<measure>` column uses ranges on its own scale; otherwise reads are selected by their **`r primary`** length using the primary ranges, and the metrics are calculated on that measure.
+How each measure's ranges are defined: a measure with its own `analysis_ranges_<measure>` column uses ranges on its own scale; otherwise reads are selected by their **`r primary`** length using the primary ranges, and the metrics are calculated on that measure. The selection is not applied to the other measure's own length: in a `r primary` range of 40–50, a combined measure such as a sum can run above 50. Every length is in units of that measure's motif (a pentanucleotide tract in 5 bp units), and a combined measure whose tracts have motifs of different lengths is in bp.
 
 ```{r range_overview}
 ro <- as.data.table(range_table)[, .(samples = uniqueN(file_stem), ranges = paste(unique(range_label), collapse = "; ")),
