@@ -43,10 +43,10 @@ primary <- tracts$tract[1]
 This module handles:
 
 1. Finding each repeat tract in every read, between the two flank alignments and up to `rpt_flank_pad` bases into each flank (so a tract is measured in full even where the aligner placed a flank boundary inside it)
-2. Counting each tract three ways: **full** (tract length / motif length, including any interruption inside the tract), **match** (exact motif units) and **pure** (longest uninterrupted run)
-3. Recording the sequence between consecutive tracts (e.g. the CAACAGCCGCCA interruption between CAG and CCG)
-4. Combined measures defined from two or more tracts (sum of units, or span from first tract start to last tract end)
-5. Optional removal of reads with outlying combined flank length
+2. Checking the combined flank length of each read, with optional removal of reads whose flank length is an outlier
+3. Counting each tract three ways: **full** (tract length / motif length, including any interruption inside the tract), **match** (exact motif units) and **pure** (longest uninterrupted run)
+4. Recording the sequence between consecutive tracts (e.g. the CAACAGCCGCCA interruption between CAG and CCG)
+5. Combined measures defined from two or more tracts (sum of units, or span from first tract start to last tract end)
 
 **Tracts in this run:**
 
@@ -57,7 +57,7 @@ dt_compact(tracts %>% dplyr::transmute(tract, motif, reference = basename(path_r
 if (nrow(composites)) dt_compact(composites %>% dplyr::transmute(measure = name, tracts, mode), caption = "Combined measures")
 ```
 
-The first tract (**`r primary`**) is the primary measure: it is used for allele clustering, waterfalls and UMI allele assignment, and its ranges in the settings file apply to every other measure that has no ranges of its own.
+The first tract (**`r primary`**) is the primary measure: it is used for allele clustering, waterfalls and the UMI shortened-molecule filter, and its ranges in the settings file apply to every other measure that has no ranges of its own.
 
 **Outputs:**
 
@@ -152,6 +152,34 @@ print(p_det); save_plot(p_det, file.path(plots_dir, "detection_rate.png"), 7, 5)
 paired <- read_tracts[, .(reads = .N, all_tracts = sum(Reduce(`&`, lapply(tracts$tract, function(t) !is.na(get(paste0(t, "_found"))))))), by = file_stem]
 cat(sprintf("\n\nTracts come from %d references. %s of %s reads (%.1f%%) aligned to every reference and so carry every tract.\n\n",
             n_groups, comma(sum(paired$all_tracts)), comma(sum(paired$reads)), 100 * sum(paired$all_tracts) / sum(paired$reads)))
+```
+
+---
+
+# Flank length
+
+**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the tract. Every read in a sample comes from the same amplicon, so this should be almost the same in every read, and the *modal* combined flank length is the commonest value in that sample. Each point is one sample: the share of its reads whose combined flank length is exactly the modal value, or 1, 2–5, 6–10, 11–50 or more than 50 bases away from it.
+
+This check comes straight after tract detection because the optional flank filter (`rm_flank_length_outliers`, `r if (isTRUE(params$rm_flank_length_outliers)) "on in this run" else "off in this run"`) acts here: `r if (isTRUE(params$rm_flank_length_outliers)) "reads it removes are left out of every later section and module" else "with it off, every read is kept"`.
+
+**What it shows.** Reads 1–2 bases off are normal: single-base insertions or deletions are the commonest PacBio error, and a flank of a few hundred bases often carries one. Reads more than 10 bases off are truncated reads, chimeras or a shifted tract boundary. When nearly all reads are within a few bases, differences in read length come from the repeat itself, not from the flanks. At HTT a sample can legitimately carry two flank lengths when its alleles differ in the CCG tract, which is why the optional flank filter is off by default.
+
+```{r flank_qc, fig.height=5}
+fq <- read_tracts[!is.na(left), .(file_stem, qname, flank_total = nchar(left) + nchar(right))]
+fq[, modal := { tb <- table(flank_total); as.numeric(names(tb)[which.max(tb)]) }, by = file_stem]
+fq[, dev := abs(flank_total - modal)]
+fq[, band := cut(dev, c(-1, 0, 1, 5, 10, 50, Inf), labels = c("exactly modal", "1 bp off", "2-5 bp off", "6-10 bp off", "11-50 bp off", ">50 bp off"))]
+fband <- fq[, .N, by = .(file_stem, band)][, prop := N / sum(N), by = file_stem]
+p_flank <- ggplot(fband, aes(band, prop)) + box_points_mean(digits = 1, percent = TRUE) + scale_y_continuous(labels = pct_axis()) +
+  labs(x = "Combined flank length compared with the sample's commonest value", y = "Reads in the sample", title = "Combined flank length, per sample") + theme_bw()
+print(p_flank); save_plot(p_flank, file.path(plots_dir, "flank_length.png"), 9, 5)
+if (isTRUE(params$rm_flank_length_outliers)) {
+  fe <- fq[, .(q1 = quantile(flank_total, 0.25), q3 = quantile(flank_total, 0.75)), by = file_stem][, iqr := q3 - q1]
+  fq <- fe[fq, on = "file_stem"]
+  drop <- fq[iqr > 0 & (flank_total < q1 - params$flank_iqr_multiplier * iqr | flank_total > q3 + params$flank_iqr_multiplier * iqr), .(file_stem, qname)]
+  read_tracts <- read_tracts[!drop, on = .(file_stem, qname)]
+  cat(sprintf("Flank length filter (%.1f x IQR) removed %s reads.\n", params$flank_iqr_multiplier, comma(nrow(drop))))
+}
 ```
 
 ---
@@ -338,32 +366,6 @@ print(p_between); save_plot(p_between, file.path(plots_dir, "between_tract_seque
 ```
 
 The sequence between the CAG and CCG tracts identifies the interruption structure of each read: `CAACAGCCGCCA` is the canonical allele, a duplicated `CAACAG` gives DOI, and an allele with no CAA or CCA interruption has the tracts adjacent. Per-sample proportions are in `repeat_detection.xlsx`.
-
----
-
-# Flank length
-
-**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the tract. Every read in a sample comes from the same amplicon, so this should be almost the same in every read, and the *modal* combined flank length is the commonest value in that sample. Each point is one sample: the share of its reads whose combined flank length is exactly the modal value, or 1, 2–5, 6–10, 11–50 or more than 50 bases away from it.
-
-**What it shows.** Reads 1–2 bases off are normal: single-base insertions or deletions are the commonest PacBio error, and a flank of a few hundred bases often carries one. Reads more than 10 bases off are truncated reads, chimeras or a shifted tract boundary. When nearly all reads are within a few bases, differences in read length come from the repeat itself, not from the flanks. At HTT a sample can legitimately carry two flank lengths when its alleles differ in the CCG tract, which is why the optional flank filter is off by default.
-
-```{r flank_qc, fig.height=5}
-fq <- read_tracts[!is.na(left), .(file_stem, qname, flank_total = nchar(left) + nchar(right))]
-fq[, modal := { tb <- table(flank_total); as.numeric(names(tb)[which.max(tb)]) }, by = file_stem]
-fq[, dev := abs(flank_total - modal)]
-fq[, band := cut(dev, c(-1, 0, 1, 5, 10, 50, Inf), labels = c("exactly modal", "1 bp off", "2-5 bp off", "6-10 bp off", "11-50 bp off", ">50 bp off"))]
-fband <- fq[, .N, by = .(file_stem, band)][, prop := N / sum(N), by = file_stem]
-p_flank <- ggplot(fband, aes(band, prop)) + box_points_mean(digits = 1, percent = TRUE) + scale_y_continuous(labels = pct_axis()) +
-  labs(x = "Combined flank length compared with the sample's commonest value", y = "Reads in the sample", title = "Combined flank length, per sample") + theme_bw()
-print(p_flank); save_plot(p_flank, file.path(plots_dir, "flank_length.png"), 9, 5)
-if (isTRUE(params$rm_flank_length_outliers)) {
-  fe <- fq[, .(q1 = quantile(flank_total, 0.25), q3 = quantile(flank_total, 0.75)), by = file_stem][, iqr := q3 - q1]
-  fq <- fe[fq, on = "file_stem"]
-  drop <- fq[iqr > 0 & (flank_total < q1 - params$flank_iqr_multiplier * iqr | flank_total > q3 + params$flank_iqr_multiplier * iqr), .(file_stem, qname)]
-  read_tracts <- read_tracts[!drop, on = .(file_stem, qname)]
-  cat(sprintf("Flank length filter (%.1f x IQR) removed %s reads.\n", params$flank_iqr_multiplier, comma(nrow(drop))))
-}
-```
 
 ---
 

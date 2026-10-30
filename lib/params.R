@@ -87,7 +87,7 @@ duke_param_spec <- function() {
     .p("umi_top_cluster_w", 3, "num", "UMI", "top_cluster: constant part of the window half-width (repeats)"),
     .p("umi_top_cluster_wfrac", 0.10, "num", "UMI", "top_cluster: length-proportional part of the window half-width"),
     .p("umi_top_cluster_min_share", 0.2, "num", "UMI", "top_cluster: share of the molecule's reads the window must also hold, so a few stray long reads cannot set the length (0 = only umi_top_cluster_k reads needed)"),
-    .p("umi_long_read_filter", TRUE, "lgl", "UMI", "Drop molecules where many reads are much longer than the molecule (most likely a longer template whose reads were shortened in PCR)"),
+    .p("umi_long_read_filter", TRUE, "lgl", "UMI", "Drop molecules where many reads are much longer than the molecule (most likely a longer template whose reads were shortened in PCR): the shortened-molecule filter"),
     .p("umi_long_read_units", 20, "num", "UMI", "Long-read filter: how many units longer than its molecule a read must be to count as long"),
     .p("umi_long_read_share", 0.2, "num", "UMI", "Long-read filter: share of the reads of a molecule that must be long for it to be flagged"),
 
