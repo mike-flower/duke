@@ -82,11 +82,11 @@ duke_param_spec <- function() {
     .p("umi_len_max", 16L, "int", "UMI", "Longest UMI accepted"),
     .p("umi_cluster_max_dist", 1L, "int", "UMI", "Edit distance for directional UMI clustering (0 = exact match; 1 or 2)"),
     .p("umi_min_reads", 3L, "int", "UMI", "Minimum reads for a molecule to be kept"),
-    .p("umi_collapse_stat", "top_cluster", "chr", "UMI", "Per-molecule length: 'top_cluster', 'median', 'mode' or 'mean'"),
+    .p("umi_collapse_stat", "top_cluster", "chr", "UMI", "Rule that turns the reads of a molecule into its one length: 'top_cluster', 'max_supported', 'mode', 'median' or 'mean' (all are compared in the Module 4 report)"),
     .p("umi_top_cluster_k", 2L, "int", "UMI", "top_cluster: reads required in the window"),
     .p("umi_top_cluster_w", 3, "num", "UMI", "top_cluster: constant part of the window half-width (repeats)"),
     .p("umi_top_cluster_wfrac", 0.10, "num", "UMI", "top_cluster: length-proportional part of the window half-width"),
-    .p("umi_top_cluster_min_share", 0, "num", "UMI", "top_cluster: share of the molecule's reads the window must also hold (0 = only umi_top_cluster_k reads needed)"),
+    .p("umi_top_cluster_min_share", 0.2, "num", "UMI", "top_cluster: share of the molecule's reads the window must also hold, so a few stray long reads cannot set the length (0 = only umi_top_cluster_k reads needed)"),
 
     # --- Module 5: allele structure ---------------------------------------------------------
     .p("cluster", FALSE, "lgl", "Allele structure", "Cluster reads into alleles, build consensus sequences and call variants"),
@@ -191,6 +191,10 @@ resolve_params <- function(user = list()) {
     stop("umi_min_reads (", p$umi_min_reads, ") must exceed umi_top_cluster_k (", p$umi_top_cluster_k,
          "): with exactly k reads top_cluster returns their median, which at k = 2 is their mean")
   if (!p$umi_cluster_max_dist %in% 0:2) stop("umi_cluster_max_dist must be 0, 1 or 2")
+  if (!p$umi_collapse_stat %in% c("top_cluster", "max_supported", "mode", "median", "mean"))
+    stop("umi_collapse_stat must be 'top_cluster', 'max_supported', 'mode', 'median' or 'mean'")
+  if (!is.finite(p$umi_top_cluster_min_share) || p$umi_top_cluster_min_share < 0 || p$umi_top_cluster_min_share > 1)
+    stop("umi_top_cluster_min_share must be between 0 and 1")
   p$dir_out <- normalizePath(p$dir_out, mustWork = FALSE)
   p
 }

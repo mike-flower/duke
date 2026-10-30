@@ -43,7 +43,7 @@ Every read in a UMI family descends from one original DNA molecule with one true
 1. The UMI is the sequence between `r params$umi_flank_5` (5') and `r params$umi_flank_3` (3'), located on the strand-corrected read with up to `r params$umi_flank_max_mismatch` edits (an exact match is used where there is one), and must be `r params$umi_len_min`–`r params$umi_len_max` bases long
 2. UMIs are clustered per sample with the directional rule at edit distance `r params$umi_cluster_max_dist`: a UMI joins a neighbour that has at least twice its reads (minus one)
 3. Each UMI family (all reads whose UMIs clustered together) is one molecule. Repeat length plays no part in forming molecules: PCR slippage and deletion can make reads of one molecule differ by tens of units, which is the error collapsing is meant to remove, so length cannot be used to decide which reads belong together. Nothing is assumed about how many alleles or clones a sample has
-4. Molecules with fewer than `r params$umi_min_reads` reads are dropped, and every measure is collapsed to one length per molecule with **`r params$umi_collapse_stat`**`r if (params$umi_collapse_stat == "top_cluster") sprintf(" (the median of the highest window of half-width %g + %g × length holding at least %d reads%s)", params$umi_top_cluster_w, params$umi_top_cluster_wfrac, params$umi_top_cluster_k, if (params$umi_top_cluster_min_share > 0) sprintf(" and at least %s of the molecule's reads", percent(params$umi_top_cluster_min_share)) else "") else ""`. A length halfway between two whole units goes to the one more of the molecule's reads sit on
+4. Molecules with fewer than `r params$umi_min_reads` reads are dropped, and every measure is collapsed to one length per molecule with **`r params$umi_collapse_stat`**`r if (params$umi_collapse_stat == "top_cluster") sprintf(" (the median of the highest window of half-width %g + %g × length holding at least %d reads%s)", params$umi_top_cluster_w, params$umi_top_cluster_wfrac, params$umi_top_cluster_k, if (params$umi_top_cluster_min_share > 0) sprintf(" and at least %s of the molecule's reads", percent(params$umi_top_cluster_min_share)) else "") else ""`. A length halfway between two whole units goes to the one more of the molecule's reads sit on. Other length rules are compared in *Choosing a molecule's length*
 
 Modules 6 and 7 then report every result twice: per read and per molecule.
 
@@ -131,6 +131,10 @@ collapse_compare <- rbindlist(lapply(mols, `[[`, "collapse_compare"))
 rm(mols, by_s, len_s)
 umi_reads <- read_map[, .(file_stem, qname, umi_group, molecule_id)][umi_reads, on = .(file_stem, qname)]
 timings["Clustering and collapse"] <- proc.time()["elapsed"] - .t
+used_rule_text <- switch(params$umi_collapse_stat,
+  top_cluster = sprintf("top_cluster, %d reads%s", params$umi_top_cluster_k,
+                        if (params$umi_top_cluster_min_share > 0) sprintf(" and %s", percent(params$umi_top_cluster_min_share)) else ""),
+  max_supported = sprintf("longest length on %d reads", params$umi_top_cluster_k), params$umi_collapse_stat)
 summary_tab <- molecules[, .(molecules = .N, kept = sum(kept),
                              reads_in_kept = sum(n_reads[kept]), median_reads_per_kept = as.numeric(median(n_reads[kept]))), by = file_stem]
 summary_tab <- clustering[, .(file_stem, n_reads_with_umi, distinct_umis, umi_groups, umis_with_neighbour, expected_by_chance)][summary_tab, on = "file_stem"]
@@ -139,7 +143,9 @@ dt_full(summary_tab, caption = "UMI clustering and molecules per sample", digits
 
 ## Reads per molecule
 
-How many reads each molecule (a UMI family after clustering) received, pooled across samples. Each bar is one number of reads from 1 to 10, then a band of sizes (11–15, 16–20, 21–30, 31–50, 51–100, 101–200, 201–500, more than 500), so that both small and very large molecules are readable. The top panel counts molecules and the bottom panel the reads those molecules hold; teal molecules are kept (at least `umi_min_reads` = `r params$umi_min_reads` reads) and grey ones dropped. Single-read molecules are usually the most numerous but hold few of the reads; many of them mean the run was too shallow for the number of tagged molecules, or that UMIs carrying errors were not merged.
+**How to read this.** A *molecule* is one UMI family: all the reads whose UMIs clustered together, which came from one original DNA molecule. The x-axis is how many reads a molecule received (1 to 10 singly, then in bands). **Top panel:** how many molecules received that many reads. **Bottom panel:** how many reads those molecules hold in total (number of molecules × reads each). The percentage on each bar is its share of all molecules (top) or of all reads (bottom). Teal molecules have at least `umi_min_reads` = `r params$umi_min_reads` reads and are kept; grey ones are dropped.
+
+**What it shows.** Most molecules are seen only once or twice, but they hold few of the reads; most reads sit in the kept molecules, which are what Modules 5–7 use. Many single-read molecules mean the run was shallow for the number of tagged molecules (each was sampled only once), or that UMIs carrying errors were not merged into their parent.
 
 ```{r family_size, fig.height=5.5}
 size_breaks <- c(0:10, 15, 20, 30, 50, 100, 200, 500, Inf)
@@ -149,9 +155,13 @@ fs <- melt(fs, id.vars = c("size_lab", "kept"), measure.vars = c("molecules", "r
 fs[, what := factor(what, levels = c("molecules", "reads"), labels = c("Molecules", "Reads in those molecules"))]
 km <- molecules[kept == TRUE, n_reads]
 mode_k <- if (length(km)) as.integer(names(which.max(table(km)))) else NA_integer_
-p_fam <- ggplot(fs, aes(size_lab, n, fill = kept)) + geom_col(width = 0.85) + facet_wrap(~ what, ncol = 1, scales = "free_y") +
+fs[, share := n / sum(n), by = what]
+fs_lab <- fs[, .(n = sum(n), share = sum(share)), by = .(what, size_lab)]
+p_fam <- ggplot(fs, aes(size_lab, n, fill = kept)) + geom_col(width = 0.85) +
+  geom_text(data = fs_lab, aes(size_lab, n, label = ifelse(share >= 0.001, percent(share, 0.1), "")), inherit.aes = FALSE, vjust = -0.3, size = 2.6) +
+  facet_wrap(~ what, ncol = 1, scales = "free_y") +
   scale_fill_manual(values = c(`TRUE` = "#00838f", `FALSE` = "grey65"), labels = c(`TRUE` = "kept", `FALSE` = "dropped"), name = NULL) +
-  scale_x_discrete(drop = FALSE) + scale_y_continuous(labels = comma) +
+  scale_x_discrete(drop = FALSE) + scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.15))) +
   labs(x = "Reads in the molecule", y = "Count", title = "Reads per molecule, all samples",
        subtitle = sprintf("%s molecules; %s kept (%.1f%%), holding %.1f%% of the reads. Kept molecules: median %s reads, commonest %s, middle 50%% %s-%s",
                           comma(nrow(molecules)), comma(length(km)), 100 * length(km) / nrow(molecules),
@@ -217,31 +227,41 @@ dt_compact(we_sum, caption = "Within-molecule read error per measure: share of r
 
 ### Error by repeat length
 
-Each panel is one measure. **Top:** the spread of read error at each molecule length (pooled across samples): the line is the median, the dark band the middle 50% of reads and the light band the middle 80%. **Bottom:** the share of reads exactly at their molecule's length. Lengths with fewer than 50 reads are left out. PCR slippage grows with tract length and favours contraction, so for a CAG tract the bands are expected to widen and to sit below zero as length increases.
+**How to read this.** The x-axis is the molecule's length (its collapsed `r primary` length, in repeat units, e.g. CAG repeats). The y-axis is each read's length **minus** its own molecule's length, in the same units: 0 means the read has the molecule's length; –10 means the read is 10 units shorter than the molecule it came from; +3 means 3 units longer. **Top:** the line is the median read, the dark band holds the middle 50% of reads and the light band the middle 80%. **Bottom:** the share of reads that have exactly their molecule's length. All samples are pooled; lengths with fewer than 50 reads are left out. Each panel is one measure (tract or combined measure).
+
+**What it shows.** How much PCR and sequencing change a read from the molecule it came from, at each length. PCR slippage grows with tract length and mostly loses repeats, so for a CAG tract the bands widen and sit below zero as length increases, and fewer reads are exactly right. Above the expanded allele, a median well below zero means most of a molecule's reads are much shorter than the length it was given: the length is then being set by a minority of long reads (see *Choosing a molecule's length*).
 
 ```{r within_error_length, fig.height=7}
 p_wb <- ggplot(we_len, aes(length_bin)) + geom_ribbon(aes(ymin = q10, ymax = q90), fill = "#00838f", alpha = 0.2) +
   geom_ribbon(aes(ymin = q25, ymax = q75), fill = "#00838f", alpha = 0.45) + geom_line(aes(y = median), colour = "#00838f") +
   geom_hline(yintercept = 0, linetype = "dashed") + facet_wrap(~ measure, scales = "free", nrow = 1) +
-  labs(x = NULL, y = "Read minus molecule (units)", title = "Within-molecule read error by molecule length") + theme_bw()
+  labs(x = NULL, y = "Read length minus its molecule's length\n(repeat units; below 0 = read shorter)", title = "Within-molecule read error by molecule length") + theme_bw()
 p_wx <- ggplot(we_len, aes(length_bin, exact)) + geom_line(colour = "#00838f") + geom_point(colour = "#00838f", size = 0.8) +
   facet_wrap(~ measure, scales = "free_x", nrow = 1) + scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
-  labs(x = "Molecule length (units)", y = "Reads exactly at the\nmolecule's length") + theme_bw() + theme(strip.text = element_blank(), strip.background = element_blank())
+  labs(x = "Molecule length (repeat units)", y = "Reads exactly at the\nmolecule's length") + theme_bw() + theme(strip.text = element_blank(), strip.background = element_blank())
 p_we <- patchwork::wrap_plots(p_wb, p_wx, ncol = 1, heights = c(2, 1))
 print(p_we); save_plot(p_we, file.path(plots_dir, "within_molecule_error.png"), max(8, 4 * nrow(measures)), 7)
 ```
 
 ### Error distribution
 
-All reads in kept molecules, pooled across samples and lengths, one panel per measure (errors beyond ±30 units are not drawn). The height of the bar at zero is the share of reads that already had the molecule's length; the left tail is contraction, the right tail expansion.
+**How to read this.** Every read in a kept molecule, all samples and lengths pooled, one panel per measure. The x-axis is the read's length minus its molecule's length (repeat units; below 0 = shorter than its molecule); the y-axis counts reads on a log scale, so that the rare large errors are visible beside the many exact reads. The subtitle gives the share of reads shorter than, equal to and longer than their molecule. The x-axis stops at the 0.1st and 99.9th percentiles.
+
+**What it shows.** Whether PCR and sequencing errors favour losing or gaining repeats. A tail longer on the left than on the right means contraction bias: large deletions in PCR are commoner than large insertions.
 
 ```{r within_error_hist, fig.height=4.5}
-p_wh <- ggplot(wl[abs(dev) <= 30], aes(dev)) + geom_histogram(binwidth = 1, fill = "#00838f") +
-  geom_vline(xintercept = 0, linetype = "dashed") + facet_wrap(~ measure, scales = "free_y", nrow = 1) +
-  scale_y_continuous(trans = "sqrt", labels = comma) +
-  labs(x = "Read length minus its molecule's length (units)", y = "Reads (square-root axis)", title = "Within-molecule read error, all lengths") + theme_bw()
+wh_lim <- wl[, .(lo = stats::quantile(dev, 0.001), hi = stats::quantile(dev, 0.999)), by = measure]
+wh <- wh_lim[wl, on = "measure"][dev >= lo & dev <= hi, .N, by = .(measure, dev = floor(dev + 0.5))]
+wh_lab <- we_sum[, .(measure, label = sprintf("Shorter %s, exact %s, longer %s", percent(below, 0.1), percent(exact, 0.1), percent(above, 0.1)))]
+p_wh <- ggplot(wh, aes(dev, N)) + geom_col(width = 1, fill = "#00838f") +
+  geom_vline(xintercept = 0, linetype = "dashed") + facet_wrap(~ measure, scales = "free", nrow = 1) +
+  geom_text(data = wh_lab, aes(x = -Inf, y = Inf, label = label), inherit.aes = FALSE, hjust = -0.05, vjust = 1.5, size = 3.2) +
+  scale_y_log10(labels = comma) +
+  labs(x = "Read length minus its molecule's length (repeat units; below 0 = read shorter)", y = "Reads (log scale)", title = "Within-molecule read error, all lengths") + theme_bw()
 print(p_wh); save_plot(p_wh, file.path(plots_dir, "within_molecule_error_hist.png"), max(8, 4 * nrow(measures)), 4.5)
 far <- wl[measure == primary, .(reads = .N, far_below = mean(dev < -10), far_above = mean(dev > 10)), by = file_stem]
+# Per molecule: how many of its reads are at least 20 units longer than the molecule
+lng <- wl[measure == primary, .(n = .N, n_long = sum(dev >= 20), length_bin = length_bin[1], bin_width = bin_width[1]), by = .(file_stem, molecule_id)]
 rm(wl, rm_map)
 timings["Within-molecule error"] <- proc.time()["elapsed"] - .t
 ```
@@ -259,30 +279,114 @@ p_far <- ggplot(far_l, aes(what, share)) + box_points_mean(digits = 1, percent =
 print(p_far); save_plot(p_far, file.path(plots_dir, "reads_far_from_molecule.png"), 8, 5)
 ```
 
-## How the length rule changes molecules
+### Molecules holding much longer reads
 
-Each molecule's `r primary` length calculated by four rules, all from the same reads: **top_cluster** with only `umi_top_cluster_k` = `r params$umi_top_cluster_k` reads needed (the current default), **top_cluster** that also needs 20% of the molecule's reads, the **mode** (the commonest length) and the **median**. top_cluster takes the longest length well supported by the molecule's reads, because PCR slippage mostly shortens reads; with only 2 reads needed, 2 stray long reads (for example PCR chimeras) can set the length of a large molecule. The 20% rule stops that. The mode and median follow the majority of reads and so are pulled down by slippage. The plot shows the length distribution of molecules (whole run, each sample weighted equally) under each rule; the table gives, for each rule, how many molecules differ from the current default by more than 2 units.
+**How to read this.** For each molecule, its reads that are at least 20 units **longer** than the molecule itself. The x-axis is the molecule's `r primary` length (repeat units); the y-axis is the share of molecules at that length that hold at least one such read (light) or where such reads make up at least 20% of the molecule's reads (dark). All samples are pooled; lengths with fewer than 20 molecules are left out.
+
+**What it shows.** PCR mostly shortens reads, so a molecule should rarely hold reads much longer than itself. Where it does, two explanations are possible: the molecule really is that length and the long reads are PCR chimeras from another molecule, or the template was long and an early-cycle PCR deletion produced most of the family's reads, so the molecule was called at the deleted length. The second would create artificial short molecules, for example between a normal and an expanded allele. A high share where several reads are long (dark line) points to the second. With only a few reads a molecule cannot show which is true: a 3-read molecule with one read at the expanded length and two between the alleles could be either. Molecules with many reads can: an early-cycle deletion leaves a large share of full-length reads, so well-sampled molecules with no long reads are likely to be real. These molecules are kept and counted as they are; if a conclusion rests on molecules between the alleles (contraction), check that it holds when `umi_min_reads` is raised.
+
+```{r long_reads_in_molecules, fig.height=4.5}
+lng_bin <- lng[, .(molecules = .N, any_long = mean(n_long >= 1), many_long = mean(n_long / n >= 0.2)), by = .(length_bin, bin_width)][molecules >= 20][order(length_bin)]
+# Lengths with too few molecules are drawn as gaps, so lines do not join distant lengths
+if (nrow(lng_bin)) lng_bin <- lng_bin[lng_bin[, .(length_bin = seq(min(length_bin), max(length_bin), by = bin_width[1]), bin_width = bin_width[1])], on = .(length_bin, bin_width)]
+lng_bin[, x := length_bin + (bin_width - 1) / 2]
+lng_l <- melt(lng_bin, id.vars = c("length_bin", "x", "molecules"), measure.vars = c("any_long", "many_long"), variable.name = "what", value.name = "share")
+lng_l[, what := factor(what, levels = c("any_long", "many_long"), labels = c("At least one read 20+ units longer", "At least 20% of reads 20+ units longer"))]
+p_lng <- ggplot(lng_l, aes(x, share, colour = what)) + geom_line() + geom_point(size = 0.9) +
+  scale_colour_manual(values = c("#80cbc4", "#00695c"), name = NULL) +
+  scale_y_continuous(labels = pct_axis(), limits = c(0, NA)) +
+  labs(x = paste("Molecule", primary, "length (repeat units)"), y = "Molecules at that length", title = "Molecules holding reads much longer than themselves",
+       subtitle = sprintf("All samples: %s of molecules hold at least one such read; in %s they are at least 20%% of the reads",
+                          percent(mean(lng$n_long >= 1), 0.1), percent(mean(lng$n_long / lng$n >= 0.2), 0.1))) +
+  theme_bw() + theme(legend.position = "bottom")
+print(p_lng); save_plot(p_lng, file.path(plots_dir, "molecules_with_long_reads.png"), 10, 4.5)
+long_tab <- lng_bin[!is.na(molecules), .(length_bin, bin_width, molecules, any_long, many_long)]
+```
+
+## Choosing a molecule's length
+
+Every molecule (UMI family) is given one `r primary` length, made from its own reads by a *length rule* (`umi_collapse_stat`). The rule used in this run is **`r used_rule_text`**. Duke calculates every rule below for every molecule, so their effect can be compared; none of them uses alleles or any other molecule.
+
+- **top_cluster, `r params$umi_top_cluster_k` reads**: the longest length that at least `r params$umi_top_cluster_k` reads agree on, within a window that widens with length (± `r params$umi_top_cluster_w` + `r params$umi_top_cluster_wfrac` × length). PCR slippage mostly shortens reads, so the longest well-supported length is the best guess at the template.
+- **top_cluster, `r params$umi_top_cluster_k` reads and 20%**: the same, but the agreeing reads must also be at least 20% of the molecule's reads, so a few stray long reads (PCR chimeras) cannot set the length of a large molecule. The default.
+- **longest length on `r params$umi_top_cluster_k` reads**: the longest exact length held by at least `r params$umi_top_cluster_k` reads (no window).
+- **mode**, **median**, **mean**: the commonest, middle and average read length. They follow the majority of reads, so slipped reads pull them down.
+
+### How well each rule behaves
+
+**How to read this.** Three tests of each rule, made on the molecules' own reads (a random subset of up to 3,000 molecules), with no assumption about alleles. Closer to zero is better in every panel. The rule used in this run is marked "(used)".
+
+- **Agreement between halves:** each molecule's reads are split at random into two halves and each half is collapsed; the bar is the average difference between the two lengths (molecules with at least 6 reads). A rule that a few reads can move gives two different answers.
+- **Dependence on depth:** the length from 20 of a molecule's reads minus the length from 3 of them, averaged over molecules with at least 20 reads. Closer to zero is better; above zero means the rule gives longer lengths when a molecule has more reads. A rule whose answer changes with depth makes deeply and shallowly sequenced samples incomparable.
+- **Moved by stray reads:** stray reads (10% of the molecule's reads, at least one) are borrowed from a random other molecule of the same sample, as a PCR chimera would add them, and the molecule is collapsed again; the bar is the share of molecules whose length moves by more than 2 units.
+
+**What it shows.** Which rule gives the most stable length. A rule can do well on one test and badly on another: the median is hard to move with stray reads but is pulled down by slippage and drifts with depth; the plain top_cluster resists slippage but can be moved by a few stray long reads.
+
+```{r collapse_scorecard, fig.height=4.5}
+.t <- proc.time()["elapsed"]
+rules <- collapse_rules(params)
+rule_labels <- vapply(rules, `[[`, "", "label")
+used_key <- if (params$umi_collapse_stat == "top_cluster") {
+  if (params$umi_top_cluster_min_share == 0) "top_cluster_k" else if (isTRUE(all.equal(params$umi_top_cluster_min_share, 0.2))) "top_cluster_share20" else NA
+} else params$umi_collapse_stat
+rd_sc <- umi_reads[!is.na(molecule_id) & !is.na(primary) & molecule_id %in% molecules[kept == TRUE, molecule_id], .(file_stem, molecule_id, length = primary)]
+scorecard <- collapse_scorecard(rd_sc, rules)
+rm(rd_sc)
+scorecard[, shown := ifelse(!is.na(used_key) & rule == used_key, paste(label, "(used)"), label)]
+sc_l <- melt(scorecard, id.vars = c("rule", "shown"), measure.vars = c("split_half", "depth_drift", "chimera_shift"), variable.name = "test", value.name = "value")
+sc_l[, test := factor(test, levels = c("split_half", "depth_drift", "chimera_shift"),
+                      labels = c("Agreement between halves\n(mean difference, units)", "Dependence on depth\n(20 reads minus 3, mean, units)", "Moved by stray reads\n(% of molecules moved > 2 units)"))]
+sc_l[, shown := factor(shown, levels = rev(scorecard$shown))]
+# The stray-read test is a share: drawn in percent, so its axis can carry the % sign
+sc_l[grepl("stray", test), value := 100 * value]
+sc_l[, lab := ifelse(grepl("stray", test), paste0(formatC(value, format = "f", digits = 1), "%"), formatC(value, format = "f", digits = 2))]
+p_sc <- ggplot(sc_l, aes(value, shown)) + geom_col(fill = "#00838f", width = 0.6) + geom_vline(xintercept = 0, colour = "grey30") +
+  geom_text(aes(label = lab, hjust = ifelse(value < 0, 1.15, -0.15)), size = 3) +
+  facet_wrap(~ test, nrow = 1, scales = "free_x") +
+  scale_x_continuous(expand = expansion(mult = c(0.3, 0.3))) +
+  labs(x = "Closer to zero is better", y = NULL, title = "How each length rule behaves",
+       subtitle = sprintf("%s molecules tested for halves and stray reads, %s for depth", comma(scorecard$n_split_half[1]), comma(scorecard$n_depth_drift[1]))) +
+  theme_bw() + theme(strip.text = element_text(size = 9))
+print(p_sc); save_plot(p_sc, file.path(plots_dir, "length_rule_scorecard.png"), 12, 4.5)
+dt_compact(scorecard[, .(rule = shown, split_half, depth_drift, chimera_shift, n_split_half, n_depth_drift)],
+           caption = "Length rule tests (closer to zero is better); depth_drift above 0 means more reads give a longer length", digits = 3)
+```
+
+### Where the rules differ
+
+**How to read this.** The x-axis is each molecule's length under the rule used in this run; the y-axis is the share of molecules at that length that another rule would make more than 2 units **shorter** (left) or **longer** (right). A line near zero means that rule agrees with the one used. The table gives the totals over all molecules.
+
+**What it shows.** Most molecules get the same length whichever rule is used; the differences sit at particular lengths, typically above an expanded allele (where a few stray long reads can set a molecule's length) and below it (where slipped reads pull the mode, median and mean down).
 
 ```{r collapse_compare, fig.height=5}
-rule_names <- c(top_cluster_k2 = "top_cluster, 2 reads", top_cluster_share20 = "top_cluster, 20% of reads", mode = "mode", median = "median")
-cc <- melt(collapse_compare, id.vars = c("file_stem", "molecule_id", "n_reads"), measure.vars = names(rule_names), variable.name = "rule", value.name = "length")
-cc[, rule := factor(rule_names[as.character(rule)], levels = rule_names)]
-ccd <- cc[, .N, by = .(file_stem, rule, length = floor(length + 0.5))][, prop := N / sum(N), by = .(file_stem, rule)]
-xmax_cc <- stats::quantile(collapse_compare$top_cluster_k2, 0.999, na.rm = TRUE) + 10
-ccg <- CJ(file_stem = unique(ccd$file_stem), rule = factor(rule_names, levels = rule_names), length = seq(0, ceiling(xmax_cc)))
-ccc <- ccd[ccg, on = .(file_stem, rule, length)][is.na(prop), prop := 0][, .(prop = mean(prop)), by = .(rule, length)]
-p_cc <- ggplot(ccc, aes(length, prop, colour = rule)) + geom_step(direction = "mid") +
-  scale_colour_manual(values = c("#00838f", "#d95f02", "#7570b3", "grey45"), name = NULL) +
-  scale_y_continuous(trans = "sqrt", labels = pct_axis()) +
-  labs(x = paste(primary, "length of the molecule"), y = "Share of molecules (square-root axis)",
-       title = "Molecule length by length rule: whole run", subtitle = "Each sample weighted equally") + theme_bw() + theme(legend.position = "bottom")
-print(p_cc); save_plot(p_cc, file.path(plots_dir, "length_rule_comparison.png"), 10, 5)
-rule_tab <- rbindlist(lapply(names(rule_names)[-1], function(r) {
-  d <- collapse_compare[[r]] - collapse_compare$top_cluster_k2
-  data.table(rule = rule_names[[r]], molecules = sum(is.finite(d)), shorter_by_more_than_2 = mean(d < -2, na.rm = TRUE),
+used <- molecule_lengths[measure == primary, .(molecule_id, used = length)]
+cmp <- used[collapse_compare, on = "molecule_id", nomatch = NULL]
+bw_cc <- if (diff(stats::quantile(cmp$used, c(0.001, 0.999), na.rm = TRUE)) > 40) 5 else 1
+cmp[, length_bin := floor(used / bw_cc) * bw_cc]
+rules_shown <- setdiff(names(rules), used_key)
+cl <- rbindlist(lapply(rules_shown, function(r) {
+  cmp[, .(rule = rule_labels[[r]], molecules = .N, shorter = mean(get(r) - used < -2, na.rm = TRUE), longer = mean(get(r) - used > 2, na.rm = TRUE)), by = length_bin]
+}))[molecules >= 20]
+# Lengths with too few molecules are drawn as gaps, so lines do not join distant lengths
+cl <- cl[cl[, .(length_bin = seq(min(length_bin), max(length_bin), by = bw_cc)), by = rule], on = .(rule, length_bin)]
+cl_l <- melt(cl, id.vars = c("rule", "length_bin", "molecules"), measure.vars = c("shorter", "longer"), variable.name = "direction", value.name = "share")
+cl_l[, direction := factor(direction, levels = c("shorter", "longer"), labels = c("More than 2 units shorter than the rule used", "More than 2 units longer than the rule used"))]
+cl_l[, rule := factor(rule, levels = rule_labels)]
+rule_cols <- setNames(c("#00838f", "#d95f02", "#1b9e77", "#7570b3", "grey45", "#e7298a"), rule_labels)
+p_cc <- ggplot(cl_l, aes(length_bin + (bw_cc - 1) / 2, share, colour = rule)) + geom_line() + geom_point(size = 0.8) +
+  facet_wrap(~ direction, nrow = 1) +
+  scale_colour_manual(values = rule_cols, name = NULL, drop = TRUE) +
+  scale_y_continuous(labels = pct_axis(), limits = c(0, NA)) +
+  labs(x = paste("Molecule", primary, "length under the rule used (repeat units)"), y = "Molecules at that length",
+       title = "Where each length rule would change molecules") + theme_bw() + theme(legend.position = "bottom")
+print(p_cc); save_plot(p_cc, file.path(plots_dir, "length_rule_comparison.png"), 11, 5)
+rule_tab <- rbindlist(lapply(names(rules), function(r) {
+  d <- cmp[[r]] - cmp$used
+  data.table(rule = rule_labels[[r]], molecules = sum(is.finite(d)), shorter_by_more_than_2 = mean(d < -2, na.rm = TRUE),
              longer_by_more_than_2 = mean(d > 2, na.rm = TRUE), median_difference = stats::median(d, na.rm = TRUE))
 }))
-dt_compact(rule_tab, caption = "Molecule length by each rule compared with top_cluster (2 reads), all samples", digits = 3)
+dt_compact(rule_tab, caption = "Molecule length by each rule compared with the rule used in this run, all molecules", digits = 3)
+timings["Length rules"] <- proc.time()["elapsed"] - .t
 ```
 
 ## Read and molecule distributions
@@ -334,7 +438,7 @@ output_path <- file.path(params$dir_out, "module_data", "04_umi.RData")
 save(module4_output, file = output_path)
 write_excel_function(list(summary = summary_tab, extraction = dcast(outcome, file_stem ~ umi_outcome, value.var = "N", fill = 0),
                           within_molecule_error = we_sum, within_error_by_length = we_len, reads_far_from_molecule = far,
-                          length_rule_comparison = rule_tab), xlsx_path)
+                          molecules_with_long_reads = long_tab, length_rule_scorecard = scorecard, length_rule_comparison = rule_tab), xlsx_path)
 ```
 
 **`r comma(sum(molecules$kept))`** molecules kept across **`r uniqueN(molecules$file_stem)`** samples.

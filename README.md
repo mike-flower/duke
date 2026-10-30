@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.0.4** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.0.5** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -162,7 +162,7 @@ The default is one tract: `rpt_pattern` (CAG) in `path_ref`. To measure more, gi
 
 - Module 3: detection rate, counts by every method, modal by method, and the per-read export (`CAG_full`, `CAG_match`, `CAG_pure`, `CCG_full`, ..., `CAG_CCG_sum`, `CAG_CCG_span`).
 - Module 6: distributions and the full set of instability metrics, per measure. A measure without its own `analysis_ranges_<measure>` column uses the primary tract's ranges: the reads are chosen by their CAG length (e.g. the expanded allele) and the metrics are calculated on that measure. With its own column the ranges are on its own scale.
-- Module 6, tract against tract: for each pair (`measure_pairs`, default every pair of tracts), the mean change in tract B against the change in tract A from the sample median, per group, plus a per-read scatter and a Spearman correlation per sample. This shows whether CAG instability carries CCG with it.
+- Module 6, comparing tracts: for each pair (`measure_pairs`, default every pair of tracts), the mean change in tract B against the change in tract A from the sample median, per group, plus a per-read scatter and a Spearman correlation per sample. This shows whether CAG instability carries CCG with it.
 - Module 7: a heatmap per measure, and a row per measure on each sample card.
 
 The first tract is the primary measure: it is used for the read selection above, the legacy `repeat_count_*` columns, clustering and waterfalls. Example tables: `www/tracts_example.csv`, `www/tracts_example.xlsx`.
@@ -181,11 +181,11 @@ The first tract is the primary measure: it is used for the read selection above,
 
 Set these to match your own oligos. Reads are oriented to the reference first, so the flanks are searched on the forward strand.
 
-**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is one molecule. Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: the median of the longest window of reads of half-width `w` + `wfrac` × length that holds at least `umi_top_cluster_k` reads (and, if `umi_top_cluster_min_share` is above 0, at least that share of the molecule's reads). PCR slippage mostly shortens reads, so the longest well-supported length is the best estimate of the template. A length halfway between two whole units goes to the one more of the molecule's reads sit on.
+**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is one molecule. Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: the median of the longest window of reads of half-width `w` + `wfrac` × length that holds at least `umi_top_cluster_k` reads and at least `umi_top_cluster_min_share` (default 20%) of the molecule's reads, so a few stray long reads cannot set the length of a large molecule. PCR slippage mostly shortens reads, so the longest well-supported length is the best estimate of the template. A length halfway between two whole units goes to the one more of the molecule's reads sit on.
 
 **Why repeat length is not used to form molecules.** Molecules are formed from the UMI sequences alone, and nothing about alleles is assumed. PCR slippage and deletion can make reads of one molecule differ by tens of units (a 125-CAG molecule can give reads of 10 CAG or fewer), which is exactly the error collapsing is meant to remove, so length cannot say which reads belong together. Two molecules sharing a UMI by chance is rare (Module 4 reports the expected rate), and PCR chimeras are a minority of a family's reads. Earlier v3 versions split a UMI family whose reads fell on both sides of an allele boundary; this was removed in v3.0.4 because it turned slipped copies of one molecule into a second, artificial molecule and assumed every sample has one short and one long allele.
 
-**Report.** Extraction outcome per sample (found, no 5' flank, no 3' flank, wrong length), UMI length, reads per molecule, UMI neighbours against the number expected by chance (a check that clustering merges errors, not distinct UMIs), within-molecule read error against molecule length for every measure, the share of each sample's reads more than 10 units from their molecule (a measure of PCR damage), molecule lengths under four length rules (`top_cluster` with 2 reads, `top_cluster` needing 20% of reads, mode and median), and reads against molecules.
+**Report.** Extraction outcome per sample (found, no 5' flank, no 3' flank, wrong length), UMI length, reads per molecule, UMI neighbours against the number expected by chance (a check that clustering merges errors, not distinct UMIs), within-molecule read error against molecule length for every measure, the share of each sample's reads more than 10 units from their molecule (a measure of PCR damage), molecules holding reads much longer than themselves, a comparison of the six length rules (tests of each, and where they differ), and reads against molecules.
 
 **Downstream.** Modules 6 and 7 report every distribution and metric for reads and for molecules (`unit` column). Each measure is collapsed separately, so a molecule's `CAG_CCG_sum` is the collapsed sum, not the sum of the collapsed CAG and CCG. `04_umi/molecules/{sample}.tsv.gz` lists every molecule.
 
@@ -204,11 +204,11 @@ Set these to match your own oligos. Reads are oriented to the reference first, s
 | `umi_len_max` | `16` | whole number | Longest UMI accepted |
 | `umi_cluster_max_dist` | `1` | whole number | Edit distance for directional UMI clustering (0 = exact match; 1 or 2) |
 | `umi_min_reads` | `3` | whole number | Minimum reads for a molecule to be kept |
-| `umi_collapse_stat` | `top_cluster` | text | Per-molecule length: `top_cluster`, `median`, `mode` or `mean` |
+| `umi_collapse_stat` | `top_cluster` | text | Rule that turns the reads of a molecule into its one length: `top_cluster`, `max_supported`, `mode`, `median` or `mean` (all are compared in the Module 4 report) |
 | `umi_top_cluster_k` | `2` | whole number | top_cluster: reads required in the window |
 | `umi_top_cluster_w` | `3` | number | top_cluster: constant part of the window half-width (repeats) |
 | `umi_top_cluster_wfrac` | `0.1` | number | top_cluster: length-proportional part of the window half-width |
-| `umi_top_cluster_min_share` | `0` | number | top_cluster: share of the molecule's reads the window must also hold (0 = only umi_top_cluster_k reads needed) |
+| `umi_top_cluster_min_share` | `0.2` | number | top_cluster: share of the molecule's reads the window must also hold, so a few stray long reads cannot set the length (0 = only umi_top_cluster_k reads needed) |
 
 <!-- params:UMI:end -->
 
@@ -326,7 +326,7 @@ result_duke/
 
 Key tables:
 
-- `06_instability/instability.xlsx`: `instability_metrics` (one row per sample × unit × measure × range × setpoint type; the column names used by v2 scripts are kept), `distribution_summary`, `modal_peaks`, `group_controls`, `count_methods`, `pair_stats`, `range_table`.
+- `06_instability/instability.xlsx`: `instability_metrics` (one row per sample × unit × measure × range × setpoint type; the column names used by v2 scripts are kept), `distribution_summary`, `modal_peaks`, `group_controls`, `pair_stats`, `range_table`.
 - `03_repeat_detection/read_repeat_counts/{sample}.tsv.gz`: one row per read with every tract's counts and structure, the composites, and the v2 columns `repeat_count_full`, `repeat_count_match`, `repeat_count_tracts`.
 - `02_alignment/alignment.xlsx`, sheet `read_accounting`: reads per sample at every step from input to analysed.
 
@@ -524,7 +524,7 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 **New**
 - Several tracts in one run (any number), on one shared reference or separate references, with the sequence between adjacent tracts reported per read, `sum` and `span` composite measures, per-tract metrics, and tract-against-tract plots and correlations.
 - Optional UMI module (Module 4): flank-based extraction with user-set flanks (default M13-F / ciosiF+1), directional clustering, `top_cluster` collapse; every Module 6 and 7 result for reads and for molecules.
-- Modal, median and mean length by every counting method (Module 3 and `count_methods` in Module 6).
+- Modal, median and mean length by every counting method (Module 3).
 - Read accounting from input to analysed reads (Module 2), carried onto every sample card.
 - Sample cards: one figure per sample with every measure; cohort heatmaps; timecourses by group for the headline metrics.
 - `--dry_run`; `./duke --help` grouped by module; logs per run with the resolved parameters and tracts.
@@ -568,6 +568,14 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - Module 4 report: reads per molecule shows 1–10 reads singly, then bands up to more than 500; the UMI neighbour plot's lines now join the points they belong to; the UMI length axis stops at 100%.
 - Module 3: break positions are placed at random within their unit, so short tracts no longer give a comb of spikes that looks like interruptions; the reads-without-a-tract plot gives enough decimal places for very small rates and states the count; the disagreement plot draws each length bin at its centre; the *Sequence between tracts* section failed with more than one tract and is fixed.
 - Module 6: timecourse titles give the range as written (`<=35`) rather than `NA-35`. Module 7: sample-card panels stop at the 99.9th percentile of the reads; molecule heatmaps say "molecules", not "reads", for the lengths not drawn.
+
+**v3.0.5**
+- `umi_top_cluster_min_share` is now 0.2 by default: the `top_cluster` window must hold at least 2 reads **and** 20% of the molecule's reads. In the 2026 jasmine run this changed 0.5% of molecules (3,502 of 675,633): 1,329 molecules with a median of 40 reads, most of them at 14 CAG, had been called at the expanded allele because of a few long reads (PCR chimeras) and are now called short; 572 molecules called above the expanded allele were brought down to it; and 837 molecules called at the expanded allele by 2–3 reads, whose other reads sat between the alleles, are now called between. Set it to 0 for the v3.0.4 behaviour.
+- `umi_collapse_stat` can be `top_cluster`, `max_supported` (the longest exact length held by `umi_top_cluster_k` reads), `mode`, `median` or `mean`. Whatever is chosen, Module 4 calculates every rule for every molecule and reports them side by side in *Choosing a molecule's length*: three tests of each rule made on the molecules' own reads with no assumption about alleles (agreement between random halves of a molecule's reads, dependence on read depth, and how many molecules move when stray reads from another molecule are added, as a PCR chimera would), and, at each molecule length, how many molecules each other rule would make shorter or longer (`length_rule_scorecard` and `length_rule_comparison` in `umi.xlsx`). The tests follow the scorecard of the July 2026 development script, without its allele labels.
+- Module 4 report: a new section, *Molecules holding much longer reads*, gives the share of molecules at each length that hold reads at least 20 units longer than the molecule itself (`molecules_with_long_reads` in `umi.xlsx`), as a check for early-cycle PCR deletions creating artificial short molecules. The within-molecule error distribution shows the full range on a log axis with the shares of reads shorter than, equal to and longer than their molecule. Reads per molecule gives each bar's share.
+- Module 3 report: the counting-method disagreement plot adds the curve expected from a single error chance per base, fitted to the data, and gives that chance; the flank-length plot splits reads into exact, 1, 2–5, 6–10, 11–50 and more than 50 bases off the commonest flank length.
+- Module 6 report: the metric definitions are a full-width table; *Group controls* explains how the setpoints are calculated (separately for reads and molecules, from the chosen control samples); *Length by counting method* is removed, as Module 3 covers it read by read (and the `count_methods` sheet with it); *Measures against each other* is renamed *Comparing tracts*, with a description.
+- Every Module 3 and 4 plot now opens with *How to read this* (what the axes are, in plain terms) and *What it shows*.
 
 **Removed**
 - Per-sample × per-range histogram, scatter and density PNGs (replaced by the sample cards and heatmaps). Parameters for them are ignored with a message.

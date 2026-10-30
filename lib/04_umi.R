@@ -14,12 +14,11 @@
 #      count(a) >= 2 * count(b) - 1, followed transitively from the most
 #      abundant UMI. Neighbours are found with a deletion-key index, so the
 #      cost grows with the number of UMIs rather than its square.
-#   3. Each read is labelled with an allele by splitting the primary measure's
-#      read distribution at the valley between the two alleles. A family with
-#      at least 2 reads on each allele is two molecules sharing a barcode and is
-#      split (umi_split_mixed); otherwise its allele is its reads' majority.
+#   3. Each UMI family is one molecule. Repeat length plays no part in forming
+#      molecules, so nothing is assumed about how many alleles a sample has.
 #   4. Molecules with fewer than umi_min_reads reads are dropped, and each
-#      measure is collapsed to one value per molecule (default top_cluster).
+#      measure is collapsed to one value per molecule (default top_cluster,
+#      needing at least 2 reads and 20% of the molecule's reads).
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -168,13 +167,68 @@ expected_chance_neighbours <- function(n, L, d = 1L) {
   if (n_lo > n_hi) lo else if (n_hi > n_lo) hi else if (stats::runif(1) < 0.5) lo else hi
 }
 
+# The longest whole-unit length held by at least k reads
+.max_supported <- function(v, k = 2L) {
+  v <- v[is.finite(v)]
+  if (!length(v)) return(NA_real_)
+  tb <- table(floor(v + 0.5)); s <- as.numeric(names(tb))[tb >= k]
+  if (length(s)) max(s) else as.numeric(stats::median(v))
+}
+
 collapse_fun <- function(stat, k = 2L, w = 3, wfrac = 0.10, min_share = 0) {
   switch(stat,
     top_cluster = function(v) .top_cluster(v, k, w, wfrac, min_share),
+    max_supported = function(v) .max_supported(v, k),
     median = function(v) as.numeric(stats::median(v, na.rm = TRUE)),
     mean = function(v) mean(v, na.rm = TRUE),
     mode = function(v) .mode_num(v[is.finite(v)]),
-    stop("Unknown umi_collapse_stat: ", stat))
+    stop("Unknown umi_collapse_stat: ", stat, " (use top_cluster, max_supported, mode, median or mean)"))
+}
+
+# Every length rule the report compares, whatever umi_collapse_stat is set to
+collapse_rules <- function(p) {
+  k <- p$umi_top_cluster_k; w <- p$umi_top_cluster_w; wf <- p$umi_top_cluster_wfrac
+  list(
+    top_cluster_k = list(label = sprintf("top_cluster, %d reads", k), f = function(v) .top_cluster(v, k, w, wf, 0)),
+    top_cluster_share20 = list(label = sprintf("top_cluster, %d reads and 20%%", k), f = function(v) .top_cluster(v, k, w, wf, 0.2)),
+    max_supported = list(label = sprintf("longest length on %d reads", k), f = function(v) .max_supported(v, k)),
+    mode = list(label = "mode", f = function(v) .mode_num(v[is.finite(v)])),
+    median = list(label = "median", f = function(v) as.numeric(stats::median(v, na.rm = TRUE))),
+    mean = list(label = "mean", f = function(v) mean(v, na.rm = TRUE)))
+}
+
+# How well each length rule behaves, judged from the molecules' own reads and needing no
+# assumption about alleles. On a random subset of molecules (lower is better for all three):
+#   split_half: give a molecule's reads at random to two halves and collapse each; the mean
+#     difference between the halves (molecules with >= 6 reads). A rule that a few reads can
+#     move gives two different answers.
+#   depth_drift: collapse 20 reads and 3 reads of the same molecule; the mean difference
+#     (molecules with >= 20 reads), signed: above 0 means more reads give a longer length. A rule whose answer depends on depth makes deep and shallow
+#     samples incomparable.
+#   chimera_shift: add stray reads (10% of the molecule's reads, at least 1) taken from a random
+#     other molecule of the same sample, as a PCR chimera would, and collapse again; the share
+#     of molecules that move by more than 2 units (molecules with >= 6 reads).
+collapse_scorecard <- function(rd, rules, n_max = 3000L, seed = 1L) {
+  set.seed(seed)
+  rd <- rd[is.finite(length)]
+  by_mol <- split(rd$length, rd$molecule_id)
+  smp <- rd[, .(file_stem = file_stem[1], n = .N), by = molecule_id]
+  pick <- function(min_n) { ids <- smp[n >= min_n, molecule_id]; if (length(ids) > n_max) sample(ids, n_max) else ids }
+  ids6 <- pick(6L); ids20 <- pick(20L)
+  # a random donor molecule from the same sample for each molecule tested for chimeras
+  donor <- smp[, .(molecule_id, donor = if (.N > 1) molecule_id[(seq_len(.N) + sample.int(.N - 1, 1) - 1) %% .N + 1] else NA_character_), by = file_stem]
+  donor <- setNames(donor$donor, donor$molecule_id)
+  rbindlist(lapply(names(rules), function(r) {
+    f <- rules[[r]]$f
+    sh <- if (length(ids6)) mean(vapply(ids6, function(m) { v <- by_mol[[m]]; i <- sample.int(length(v)); h <- length(v) %/% 2
+      abs(f(v[i[seq_len(h)]]) - f(v[i[(h + 1):(2 * h)]])) }, numeric(1)), na.rm = TRUE) else NA_real_
+    dd <- if (length(ids20)) mean(vapply(ids20, function(m) { v <- by_mol[[m]]; f(sample(v, 20L)) - f(sample(v, 3L)) }, numeric(1)), na.rm = TRUE) else NA_real_
+    cs <- if (length(ids6)) mean(vapply(ids6, function(m) { v <- by_mol[[m]]; d <- donor[[m]]
+      if (is.na(d)) return(NA_real_); dv <- by_mol[[d]]; extra <- dv[sample.int(length(dv), max(1L, ceiling(0.1 * length(v))), replace = TRUE)]
+      abs(f(c(v, extra)) - f(v)) > 2 }, numeric(1)), na.rm = TRUE) else NA_real_
+    data.table::data.table(rule = r, label = rules[[r]]$label, split_half = sh, depth_drift = dd, chimera_shift = cs,
+                           n_split_half = length(ids6), n_depth_drift = length(ids20))
+  }))
 }
 
 # ------------------------------------------------------------------------------
@@ -207,11 +261,8 @@ form_molecules <- function(sample, reads, lengths, p, primary) {
 
   # The primary measure's molecule length by other collapse rules, for the report's comparison
   prim <- lk[measure == primary]
-  rules <- list(top_cluster_k2 = function(v) .top_cluster(v, p$umi_top_cluster_k, p$umi_top_cluster_w, p$umi_top_cluster_wfrac, 0),
-                top_cluster_share20 = function(v) .top_cluster(v, p$umi_top_cluster_k, p$umi_top_cluster_w, p$umi_top_cluster_wfrac, 0.2),
-                mode = function(v) .mode_num(v[is.finite(v)]),
-                median = function(v) as.numeric(stats::median(v, na.rm = TRUE)))
-  cmp <- prim[, c(list(n_reads = .N), lapply(rules, function(g) .whole_unit(g(length), length))), by = molecule_id]
+  rules <- collapse_rules(p)
+  cmp <- prim[, c(list(n_reads = .N), lapply(rules, function(g) .whole_unit(g$f(length), length))), by = molecule_id]
   cmp[, file_stem := sample]
 
   pairs <- cl$pairs

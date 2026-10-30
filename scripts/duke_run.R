@@ -144,7 +144,7 @@ params <- list(
   umi_top_cluster_wfrac = 0.1,
   # top_cluster: share of the molecule's reads the window must also hold (0 = only
   # umi_top_cluster_k reads needed)
-  umi_top_cluster_min_share = 0,
+  umi_top_cluster_min_share = 0.2,
 
   # --- Allele structure --------------------------------------------------------
   # Cluster reads into alleles, build consensus sequences and call variants
