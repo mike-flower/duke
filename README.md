@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.0.8** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.0.10** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -605,6 +605,14 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - *Testing the length rules* (was *How well each rule behaves*): the three tests are named for what they do (two halves of the reads, 3 reads against 20, stray reads added) and introduced with why they are consistency tests.
 - *Error by repeat length*: the y-axis is the read's length relative to its molecule, explained with a worked example in repeat units.
 - *Effect on the molecule length distribution*: log axis with lengths without molecules drawn at a floor, and the unfiltered line dashed and on top, so the region between peaks where the filter acts is visible.
+
+**v3.0.9**
+- Excel outputs open in every reader: a module that writes its workbook in two steps used to re-save it through `openxlsx::loadWorkbook`, which left links to drawing parts that were not in the file; Excel ignored them, but Python (openpyxl/pandas) refused to open the file. The workbook is now rebuilt from its sheets instead.
+- Module 7 sample cards: the y-axis says that the molecule line is scaled to the same total as the reads, so its height can exceed the read count.
+
+**v3.0.10**
+- Module 5 haplotype clustering: the left and right flanks are no longer joined into one sequence for k-mer counting, so no k-mer spans the junction. Junction k-mers combined the bases either side of the tract, so jitter where the tract ends changed ~15 k-mers in the same reads at once, which looks like a real variant; on the jasmine CAG + CCG run this split ~10% of the expanded allele into a second "haplotype" (H2) in 45 of 66 samples, with the same length distribution and a consensus that differed only in the bases next to the tract. On simulated reads the old code split off 9% of reads on boundary jitter alone and missed a real SNP carried by 30% of reads; the new code keeps one cluster for jitter and splits on the SNP. A real variant within ~7 bp of the tract is no longer used for haplotypes.
+- Module 5 report: the variants section says how much flank sequence the consensuses cover (on a UMI amplicon this is ~50 bp left and ~80 bp right of the tract, not the whole reference flank), and says plainly when no consensus differs from the reference, rather than introducing a table that is not there.
 
 **Removed**
 - Per-sample × per-range histogram, scatter and density PNGs (replaced by the sample cards and heatmaps). Parameters for them are ignored with a message.

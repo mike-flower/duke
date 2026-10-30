@@ -70,6 +70,8 @@ length_panel <- function(reads, molecules = NULL, marks = NULL, title = NULL, xl
   p + ggplot2::coord_cartesian(xlim = xr) +
     (if (sqrt_y) ggplot2::scale_y_sqrt(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05)))
        else ggplot2::scale_y_continuous(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05)))) +
-    ggplot2::labs(x = xlab, y = if (sqrt_y) "Reads (square-root scale)" else "Reads", title = title) +
+    ggplot2::labs(x = xlab, y = paste0("Reads", if (sqrt_y) " (square-root scale)" else "",
+                                       if (!is.null(molecules) && length(molecules)) "\nmolecules scaled to the same total" else ""),
+                  title = title) +
     ggplot2::theme_bw() + ggplot2::theme(plot.title = ggplot2::element_text(size = 10))
 }

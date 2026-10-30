@@ -13,7 +13,22 @@
 write_excel_function <- function(named_list, path, overwrite_sheet = TRUE) {
   named_list <- Filter(function(x) !is.null(x) && is.data.frame(x), named_list)
   if (length(named_list) == 0) return(invisible(NULL))
-  if (file.exists(path)) { wb <- openxlsx::loadWorkbook(path) } else { wb <- openxlsx::createWorkbook() }
+  # Re-saving a workbook opened with openxlsx::loadWorkbook leaves links to drawing parts
+  # that are not in the file, which other readers (Python openpyxl/pandas) refuse to open.
+  # So the existing sheets are read back as plain tables and the workbook is rebuilt.
+  wb <- openxlsx::createWorkbook()
+  if (file.exists(path)) {
+    for (sh in openxlsx::getSheetNames(path)) {
+      if (overwrite_sheet && sh %in% vapply(names(named_list), function(n) if (nchar(n) > 31) paste0(substr(n, 1, 29), "..") else n, "")) next
+      old <- tryCatch(openxlsx::read.xlsx(path, sheet = sh, colNames = TRUE, check.names = FALSE, sep.names = " "),
+                      error = function(e) NULL)
+      # A sheet with headers but no rows comes back empty: keep its header row
+      if (is.null(old) || !ncol(old)) old <- tryCatch(openxlsx::read.xlsx(path, sheet = sh, colNames = FALSE, rows = 1),
+                                                      error = function(e) NULL)
+      openxlsx::addWorksheet(wb, sh)
+      if (!is.null(old)) openxlsx::writeData(wb, sh, old, colNames = !is.null(names(old)) && !all(grepl("^X\\d+$", names(old))))
+    }
+  }
   truncate_name <- function(name, max_length = 31) {
     if (nchar(name) > max_length) paste0(substr(name, 1, max_length - 2), "..") else name
   }

@@ -72,7 +72,7 @@ samples <- unique(d_all$file_stem)
 .t <- proc.time()["elapsed"]
 per_sample <- split(d_all, by = "file_stem")
 clusters <- rbindlist(apply_fn(names(per_sample), function(s) {
-  cache <- file.path(temp_dir, paste0("cluster_", s, ".RData"))
+  cache <- file.path(temp_dir, paste0("cluster_v3010_", s, ".RData"))
   if (safe_load_cache(cache, environment())) return(res)
   d <- per_sample[[s]]
   res <- cbind(d[, .(file_stem, qname)], cluster_sample(as.data.frame(d), params))
@@ -116,7 +116,7 @@ dt_full(cluster_summary, caption = "Clusters per sample (cluster 1 = most reads)
 keys <- unique(d_all[, .(file_stem, cluster_number)])
 cons <- rbindlist(apply_fn(seq_len(nrow(keys)), function(i) {
   s <- keys$file_stem[i]; k <- keys$cluster_number[i]
-  cache <- file.path(temp_dir, paste0("consensus_v307_", s, "_", k, ".RData"))
+  cache <- file.path(temp_dir, paste0("consensus_v3010_", s, "_", k, ".RData"))
   if (safe_load_cache(cache, environment())) return(res)
   d <- d_all[file_stem == s & cluster_number == k]
   cl <- consensus_function(d$left, params$consensus_threshold, params$consensus_downsample)
@@ -166,10 +166,15 @@ if (nrow(variants)) {
 }
 var_summary <- if (nrow(variants)) variants[, .N, by = .(pos, ref, alt, type)][, clusters := N][order(-N)] else data.table()
 timings["Variants"] <- proc.time()["elapsed"] - .t
-cat(sprintf("%d variant calls across %d clusters; %d distinct variants.", nrow(variants), nrow(cons), nrow(var_summary)))
+cov <- sprintf("Variants can only be called where the reads give flank sequence: the cluster consensuses cover a median of %d bp of left flank and %d bp of right flank next to the tract (counting any sequence between the tract and the reference flank, such as the rest of an N block), out of %s and %s bp in the reference (%s, N block at %d–%d).",
+                 as.integer(stats::median(cons$left_bp, na.rm = TRUE)), as.integer(stats::median(cons$right_bp, na.rm = TRUE)),
+                 format(ref$n_start - 1, big.mark = ","), format(nchar(ref$full) - ref$n_end, big.mark = ","), ref$ref_id, ref$n_start, ref$n_end)
+var_text <- if (nrow(variants)) sprintf("%s There are %s variant calls across %d cluster consensuses (%d distinct variants); the table lists them by how many consensuses carry each, with positions on the full reference. A variant present in nearly every cluster is a difference between the reference and these lines rather than a somatic change.",
+                              cov, format(nrow(variants), big.mark = ","), nrow(cons), nrow(var_summary)) else
+  sprintf("%s No cluster consensus differs from the reference within that sequence, across %d clusters, so no VCFs were written.", cov, nrow(cons))
 ```
 
-`r if (params$cluster && params$call_variants) sprintf("The most frequent variants across all cluster consensuses, with positions on the full reference (%s, N block at %d–%d). A variant present in nearly every cluster is a difference between the reference and these lines rather than a somatic change.", ref$ref_id, ref$n_start, ref$n_end) else ""`
+`r if (params$cluster && params$call_variants) var_text else ""`
 
 ```{r variant_table, eval=params$cluster && params$call_variants}
 if (nrow(var_summary)) dt_full(var_summary[, .(pos, ref, alt, type, clusters)], caption = "Variants by number of cluster consensuses carrying them")

@@ -53,7 +53,13 @@ haplotype_sequences <- function(left, right, region = "both", trim = "auto") {
   keep_start <- function(x, n) ifelse(!is.na(n) & nchar(x) > n, substr(x, 1, n), x)
   left <- keep_end(ifelse(is.na(left), "", left), tl)
   right <- keep_start(ifelse(is.na(right), "", right), tr)
-  switch(region, left = left, right = right, both = paste0(left, right))
+  # The two flanks are joined with an N so that no k-mer spans the junction. A k-mer
+  # across the junction would hold the last bases of one flank and the first of the
+  # other, so any jitter where the tract starts or ends would change ~k k-mers in the
+  # same reads at once – the signature of a real variant – and split one allele into
+  # spurious haplotypes (seen as a ~10% minor "haplotype" of the expanded allele that
+  # differed only in the bases next to the tract).
+  switch(region, left = left, right = right, both = paste0(left, "N", right))
 }
 
 # Haplotypes are found from k-mers rather than all-pairs edit distance, which
@@ -72,7 +78,8 @@ haplotype_sequences <- function(left, right, region = "both", trim = "auto") {
   w <- pmax(nchar(s) - k + 1L, 0L)
   r <- rep.int(seq_along(s), w)
   st <- sequence(w)
-  unique(data.table::data.table(r = r, kmer = substring(s[r], st, st + k - 1L)))
+  kt <- unique(data.table::data.table(r = r, kmer = substring(s[r], st, st + k - 1L)))
+  kt[!grepl("N", kmer, fixed = TRUE)]  # k-mers across the flank junction or an N base
 }
 
 .kmer_profile <- function(s, kmers, pd) {
@@ -86,7 +93,9 @@ haplotype_sequences <- function(left, right, region = "both", trim = "auto") {
 cluster_by_haplotype <- function(seqs, cluster_max = 6L, downsample = 3000L, k = 15L,
                                  min_frac = 0.1, min_prop = 0.05, discover_n = 1000L, max_kmers = 2000L) {
   out <- rep(NA_integer_, length(seqs))
-  ok <- which(!is.na(seqs) & nchar(seqs) >= k & !grepl("[^ACGT]", seqs))
+  # N marks the junction between the flanks (and any uncalled base); k-mers containing
+  # it are not used, so it does not exclude the read
+  ok <- which(!is.na(seqs) & nchar(seqs) >= k & !grepl("[^ACGTN]", seqs))
   if (length(ok) < 10) { out[ok] <- 1L; return(out) }
   s <- seqs[ok]
   set.seed(123)
