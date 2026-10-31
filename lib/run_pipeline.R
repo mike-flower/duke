@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.0.10"
+duke_version <- "3.2.0"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -143,9 +143,16 @@ run_duke <- function(user_params, duke_root = getwd()) {
     }
     p$module_hash <- hashes[[m]]
     t0 <- Sys.time()
+    # Each run renders in its own working folder. By default rmarkdown writes its working
+    # files (the .knit.md and the figure folder) next to the Rmd, i.e. in the shared repo,
+    # so two runs rendering the same module at once could delete each other's figures.
+    work_dir <- file.path(p$dir_out, "temp", paste0("render_", m))
+    dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
     rmarkdown::render(file.path(duke_root, "modules", .module_files[[m]]), output_dir = p$dir_out,
+                      intermediates_dir = work_dir,
                       envir = list2env(list(params = p), parent = globalenv()),
                       knit_root_dir = duke_root, quiet = TRUE)
+    unlink(c(work_dir, file.path(p$dir_out, paste0(tools::file_path_sans_ext(.module_files[[m]]), "_files"))), recursive = TRUE)
     if (file.exists(out_path)) writeLines(hashes[[m]], paste0(out_path, ".hash"))
     cat("Done in", format_elapsed(as.numeric(difftime(Sys.time(), t0, units = "secs"))), "\n")
   }

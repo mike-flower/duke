@@ -189,17 +189,35 @@ cluster_sample <- function(d, p) {
 # ------------------------------------------------------------------------------
 # Terminal gaps count as gaps, so the consensus stops where most reads stop
 # rather than running on to the end of the longest read in the sample.
-consensus_function <- function(seqs, threshold = 0.5, sample_size = 50L) {
+consensus_function <- function(seqs, threshold = 0.5, sample_size = 50L, minor_share = NA) {
   seqs <- seqs[!is.na(seqs) & nchar(seqs) > 0]
-  if (length(seqs) == 0) return(list(consensus = NA_character_, n = 0L))
+  if (length(seqs) == 0) return(list(consensus = NA_character_, n = 0L, minor = NULL))
   if (!is.na(sample_size) && length(seqs) > sample_size) { set.seed(123); seqs <- sample(seqs, sample_size) }
-  if (length(seqs) == 1) return(list(consensus = seqs, n = 1L))
+  if (length(seqs) == 1) return(list(consensus = seqs, n = 1L, minor = NULL))
   dss <- Biostrings::DNAStringSet(seqs)
   aln <- suppressMessages(DECIPHER::AlignSeqs(dss, processors = 1, verbose = FALSE))
-  cons <- suppressMessages(DECIPHER::ConsensusSequence(aln, threshold = threshold, ambiguity = FALSE,
-                                                       noConsensusChar = "N", includeTerminalGaps = TRUE))
-  cons <- gsub("-", "", as.character(cons))
-  list(consensus = gsub("[^ACGT]", "N", cons), n = length(seqs))
+  cons_g <- as.character(suppressMessages(DECIPHER::ConsensusSequence(aln, threshold = threshold, ambiguity = FALSE,
+                                                                      noConsensusChar = "N", includeTerminalGaps = TRUE)))
+  cons_g <- gsub("[^ACGT-]", "N", cons_g)
+  # Substitutions carried by a minority of the reads (at least minor_share): returned as
+  # the position in the (gapless) consensus and the base, at most the 20 strongest. Only
+  # bases are considered, not gaps: a gap column near a read end is mostly where reads
+  # stop, not a deletion.
+  minor <- NULL
+  if (!is.na(minor_share) && length(seqs) >= 5) {
+    cm <- Biostrings::consensusMatrix(aln, as.prob = FALSE)
+    acgt <- cm[intersect(c("A", "C", "G", "T"), rownames(cm)), , drop = FALSE]
+    n_col <- colSums(cm)
+    cg <- strsplit(cons_g, "")[[1]]
+    cons_pos <- cumsum(cg != "-")
+    alts <- list()
+    for (b in rownames(acgt)) {
+      cols <- which(acgt[b, ] / n_col >= minor_share & acgt[b, ] >= 3 & cg != b & cg != "-" & cg != "N")
+      if (length(cols)) alts[[b]] <- data.frame(cons_pos = cons_pos[cols], base = b, sample_share = acgt[b, cols] / n_col[cols], stringsAsFactors = FALSE)
+    }
+    if (length(alts)) { minor <- do.call(rbind, alts); minor <- utils::head(minor[order(-minor$sample_share), , drop = FALSE], 20) }
+  }
+  list(consensus = gsub("-", "", cons_g), n = length(seqs), minor = minor)
 }
 
 # ------------------------------------------------------------------------------
@@ -223,21 +241,31 @@ call_flank_variants <- function(consensus, ref_flank, offset, edge = 3L) {
   q <- strsplit(as.character(pw$alignedPattern(aln)), "")[[1]]
   r <- strsplit(as.character(pw$alignedSubject(aln)), "")[[1]]
   rpos <- BiocGenerics::start(pw$subject(aln)) - 1L + cumsum(r != "-")
+  # Read contexts for each event: `flank_bp` bases of consensus either side, joined to the
+  # alternative bases (alt_context) or to the reference bases (ref_context). Counting reads
+  # that contain each gives the variant's read support.
+  qn <- which(q != "-")
+  ctx <- function(i, j, flank_bp = 8L) {
+    before <- q[qn[qn < i]]; after <- q[qn[qn > j]]
+    left <- paste(utils::tail(before, flank_bp), collapse = ""); right <- paste(utils::head(after, flank_bp), collapse = "")
+    data.frame(alt_context = paste0(left, paste(q[i:j][q[i:j] != "-"], collapse = ""), right),
+               ref_context = paste0(left, paste(r[i:j][r[i:j] != "-"], collapse = ""), right), stringsAsFactors = FALSE)
+  }
   ev <- list(); k <- 1L; i <- 1L; n <- length(q)
   while (i <= n) {
     if (r[i] != "-" && q[i] != "-" && r[i] != q[i] && q[i] != "N" && r[i] != "N") {
-      ev[[k]] <- data.frame(pos = rpos[i], ref = r[i], alt = q[i], type = "SNV"); k <- k + 1L; i <- i + 1L
+      ev[[k]] <- data.frame(pos = rpos[i], ref = r[i], alt = q[i], type = "SNV", ctx(i, i)); k <- k + 1L; i <- i + 1L
     } else if (q[i] == "-") {
       j <- i; while (j < n && q[j + 1] == "-") j <- j + 1L
       anchor_pos <- rpos[i] - 1L
       anchor <- if (anchor_pos >= 1) substr(ref_flank, anchor_pos, anchor_pos) else ""
-      ev[[k]] <- data.frame(pos = anchor_pos, ref = paste0(anchor, paste(r[i:j], collapse = "")), alt = anchor, type = "DEL"); k <- k + 1L
+      ev[[k]] <- data.frame(pos = anchor_pos, ref = paste0(anchor, paste(r[i:j], collapse = "")), alt = anchor, type = "DEL", ctx(i, j)); k <- k + 1L
       i <- j + 1L
     } else if (r[i] == "-") {
       j <- i; while (j < n && r[j + 1] == "-") j <- j + 1L
       anchor_pos <- if (i > 1) rpos[i - 1] else 0L
       anchor <- if (anchor_pos >= 1) substr(ref_flank, anchor_pos, anchor_pos) else ""
-      ev[[k]] <- data.frame(pos = anchor_pos, ref = anchor, alt = paste0(anchor, paste(q[i:j], collapse = "")), type = "INS"); k <- k + 1L
+      ev[[k]] <- data.frame(pos = anchor_pos, ref = anchor, alt = paste0(anchor, paste(q[i:j], collapse = "")), type = "INS", ctx(i, j)); k <- k + 1L
       i <- j + 1L
     } else i <- i + 1L
   }
@@ -249,6 +277,234 @@ call_flank_variants <- function(consensus, ref_flank, offset, edge = 3L) {
   v$pos <- v$pos + offset
   v
 }
+
+# Reference position (on the full reference, i.e. plus `offset`) of every base of a
+# flank consensus, from the same overlap alignment the variants use; NA for bases
+# outside the flank or inserted relative to it.
+consensus_ref_map <- function(consensus, ref_flank, offset) {
+  if (is.na(consensus) || nchar(consensus) < 10) return(integer(0))
+  ns <- if (requireNamespace("pwalign", quietly = TRUE)) "pwalign" else "Biostrings"
+  pa <- getExportedValue(ns, "pairwiseAlignment")
+  a <- pa(Biostrings::DNAString(consensus), Biostrings::DNAString(ref_flank), type = "overlap", gapOpening = 5, gapExtension = 2)
+  q <- strsplit(as.character(getExportedValue(ns, "alignedPattern")(a)), "")[[1]]
+  r <- strsplit(as.character(getExportedValue(ns, "alignedSubject")(a)), "")[[1]]
+  qs <- BiocGenerics::start(getExportedValue(ns, "pattern")(a)); rs <- BiocGenerics::start(getExportedValue(ns, "subject")(a))
+  out <- rep(NA_integer_, nchar(consensus))
+  qi <- qs - 1L + cumsum(q != "-"); ri <- rs - 1L + cumsum(r != "-")
+  ok <- q != "-" & r != "-"
+  out[qi[ok]] <- ri[ok] + offset
+  out
+}
+
+# Minority substitutions of one allele flank as variant rows (pos, ref, alt, type and
+# read contexts), from the positions consensus_function found.
+minor_variants <- function(consensus, minor, ref_flank, offset, edge = 3L, flank_bp = 8L) {
+  if (is.null(minor) || !nrow(minor) || is.na(consensus)) return(NULL)
+  map <- consensus_ref_map(consensus, ref_flank, offset)
+  if (!length(map)) return(NULL)
+  out <- lapply(seq_len(nrow(minor)), function(j) {
+    cp <- minor$cons_pos[j]; rp <- map[cp]
+    if (is.na(rp) || rp - offset <= edge || rp - offset >= nchar(ref_flank) - edge) return(NULL)
+    rb <- substr(ref_flank, rp - offset, rp - offset)
+    if (rb == minor$base[j]) return(NULL)   # the minority base is the reference: not a variant
+    left <- substr(consensus, max(1, cp - flank_bp), cp - 1); right <- substr(consensus, cp + 1, cp + flank_bp)
+    data.frame(pos = rp, ref = rb, alt = minor$base[j], type = "SNV",
+               alt_context = paste0(left, minor$base[j], right), ref_context = paste0(left, substr(consensus, cp, cp), right), stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, out)
+  if (is.null(out) || !nrow(out)) NULL else unique(out)
+}
+
+# ------------------------------------------------------------------------------
+# Alleles: the sequence between the reference flanks, repeat notation, read support
+# ------------------------------------------------------------------------------
+# The part of an allele between the two reference flanks: the end of the left consensus
+# after the left flank, the tract, and the start of the right consensus before the right
+# flank (for a reference whose N block spans several tracts, e.g. CAG CAA CAG CCG ... CCT,
+# that is everything in the block). Positions come from the same overlap alignments used
+# for the variants.
+between_flanks <- function(cons_left, cons_mid, cons_right, left_ref, right_ref, n_end) {
+  ns <- if (requireNamespace("pwalign", quietly = TRUE)) "pwalign" else "Biostrings"
+  pa <- getExportedValue(ns, "pairwiseAlignment"); pat <- getExportedValue(ns, "pattern"); sbj <- getExportedValue(ns, "subject")
+  tail_l <- ""; head_r <- ""; left_from <- NA_integer_; right_to <- NA_integer_
+  if (!is.na(cons_left) && nchar(cons_left) >= 10) {
+    a <- pa(Biostrings::DNAString(cons_left), Biostrings::DNAString(left_ref), type = "overlap", gapOpening = 5, gapExtension = 2)
+    e <- BiocGenerics::end(pat(a)); if (e < nchar(cons_left)) tail_l <- substring(cons_left, e + 1)
+    left_from <- BiocGenerics::start(sbj(a))
+  }
+  if (!is.na(cons_right) && nchar(cons_right) >= 10) {
+    a <- pa(Biostrings::DNAString(cons_right), Biostrings::DNAString(right_ref), type = "overlap", gapOpening = 5, gapExtension = 2)
+    b <- BiocGenerics::start(pat(a)); if (b > 1) head_r <- substr(cons_right, 1, b - 1)
+    right_to <- n_end + BiocGenerics::end(sbj(a))
+  }
+  list(sequence = paste0(tail_l, ifelse(is.na(cons_mid), "", cons_mid), head_r), left_from = left_from, right_to = right_to)
+}
+
+# Repeat notation, e.g. "(CAG)17 CAACAG CCGCCA (CCG)7 CCTCCT": runs of at least two copies
+# of any tract motif are written as (motif)n, everything else as plain sequence.
+repeat_notation <- function(x, motifs) {
+  if (is.na(x) || !nzchar(x)) return(NA_character_)
+  motifs <- unique(motifs[!is.na(motifs) & nzchar(motifs)])
+  hits <- do.call(rbind, lapply(motifs, function(m) {
+    g <- gregexpr(paste0("(", m, "){2,}"), x)[[1]]
+    if (g[1] == -1) return(NULL)
+    data.frame(start = as.integer(g), len = attr(g, "match.length"), motif = m, stringsAsFactors = FALSE)
+  }))
+  if (is.null(hits)) return(x)
+  hits <- hits[order(hits$start, -hits$len), ]
+  out <- character(0); pos <- 1L
+  for (k in seq_len(nrow(hits))) {
+    h <- hits[k, ]; if (h$start < pos) next
+    if (h$start > pos) out <- c(out, substr(x, pos, h$start - 1))
+    out <- c(out, sprintf("(%s)%d", h$motif, h$len %/% nchar(h$motif)))
+    pos <- h$start + h$len
+  }
+  if (pos <= nchar(x)) out <- c(out, substring(x, pos))
+  paste(out, collapse = " ")
+}
+
+# Read support for a variant in one allele's reads: reads containing the alternative
+# context against reads containing the reference context (reads with neither, e.g. an
+# error nearby or a read that stops short, are not counted).
+variant_support <- function(reads, alt_context, ref_context) {
+  reads <- reads[!is.na(reads)]
+  n_alt <- sum(grepl(alt_context, reads, fixed = TRUE)); n_ref <- sum(grepl(ref_context, reads, fixed = TRUE))
+  c(alt_reads = n_alt, ref_reads = n_ref, support = if (n_alt + n_ref > 0) n_alt / (n_alt + n_ref) else NA_real_)
+}
+
+# Phased VCF, one column per sample. Each sample's alleles 1 and 2 are the two haplotypes
+# (GT a|b); the region between the reference flanks is one record whose ALT alleles are
+# the allele sequences found in the cohort, with MC (motif count of each tract) and AL
+# (length in bp) per haplotype. Flank variants carry HAF (share of each haplotype's
+# reads with the variant) and HDP (reads counted per haplotype).
+write_allele_vcf <- function(alleles, variants, ref, motifs_txt, path) {
+  samples <- unique(alleles$file_stem)
+  hdr <- c("##fileformat=VCFv4.2", paste0("##fileDate=", format(Sys.Date(), "%Y%m%d")), "##source=Duke",
+           paste0("##reference=", basename(ref$path)), paste0("##contig=<ID=", ref$ref_id, ",length=", nchar(ref$full), ">"),
+           "##INFO=<ID=TYPE,Number=1,Type=String,Description=\"SNV, INS, DEL or REPEAT (the region between the reference flanks)\">",
+           "##INFO=<ID=MINOR,Number=0,Type=Flag,Description=\"Not in any allele's consensus; carried by a minority of an allele's reads only\">",
+           "##FILTER=<ID=LowSupport,Description=\"No allele's reads confirm the variant (consensus variant carried by under half of the allele's counted reads)\">",
+           "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Phased genotype: allele 1 (shorter) | allele 2 (longer); 1 = the allele's consensus carries the ALT\">",
+           "##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Phase set\">",
+           paste0("##FORMAT=<ID=MC,Number=.,Type=String,Description=\"Repeat record: motif counts of each tract (", motifs_txt, ") per haplotype, tracts joined by _\">"),
+           "##FORMAT=<ID=AL,Number=.,Type=Integer,Description=\"Repeat record: length in bp of each haplotype's sequence between the flanks\">",
+           "##FORMAT=<ID=HDP,Number=.,Type=Integer,Description=\"Reads per haplotype (repeat record) or reads counted at the variant per haplotype\">",
+           "##FORMAT=<ID=HAF,Number=.,Type=Float,Description=\"Share of each haplotype's counted reads that carry the ALT\">",
+           paste(c("#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", samples), collapse = "\t"))
+  a12 <- alleles[alleles$allele %in% 1:2, ]
+  body <- character(0)
+  # the repeat record
+  anchor_pos <- ref$n_start - 1L; anchor <- substr(ref$full, anchor_pos, anchor_pos)
+  ref_block <- substr(ref$full, ref$n_start, ref$n_end)
+  alt_seqs <- unique(a12$repeat_sequence[!is.na(a12$repeat_sequence)])
+  if (length(alt_seqs)) {
+    cells <- vapply(samples, function(sm) {
+      x <- a12[a12$file_stem == sm, ]; x <- x[order(x$allele), ]
+      if (!nrow(x)) return(".|.:.:.:.:.")
+      if (nrow(x) == 1) x <- x[c(1, 1), ]
+      gt <- paste(match(x$repeat_sequence, alt_seqs), collapse = "|")
+      sprintf("%s:%d:%s:%s:%s", gt, anchor_pos, paste(x$motif_counts, collapse = ","), paste(nchar(x$repeat_sequence), collapse = ","), paste(x$reads, collapse = ","))
+    }, "")
+    body <- c(body, paste(c(ref$ref_id, anchor_pos, ".", paste0(anchor, ref_block), paste(paste0(anchor, alt_seqs), collapse = ","), ".", "PASS",
+                            "TYPE=REPEAT", "GT:PS:MC:AL:HDP", cells), collapse = "\t"))
+  }
+  # flank variants (alleles 1 and 2; `variants` has a row for each sample, allele 1 and 2 and
+  # variant found in either, with the read support measured in both)
+  if (!is.null(variants) && nrow(variants)) variants <- variants[variants$allele %in% 1:2, , drop = FALSE]
+  if (!is.null(variants) && nrow(variants)) {
+    ev <- unique(variants[, c("pos", "ref", "alt", "type")]); ev <- ev[order(ev$pos), ]
+    for (i in seq_len(nrow(ev))) {
+      v <- variants[variants$pos == ev$pos[i] & variants$ref == ev$ref[i] & variants$alt == ev$alt[i], ]
+      v$in_consensus[is.na(v$in_consensus)] <- FALSE
+      minor_only <- !any(v$in_consensus)
+      v$carried[is.na(v$carried)] <- FALSE; v$confirmed[is.na(v$confirmed)] <- FALSE
+      cells <- vapply(samples, function(sm) {
+        x <- a12[a12$file_stem == sm, ]; x <- x[order(x$allele), ]
+        if (!nrow(x)) return(".|.:.:.:.")
+        if (nrow(x) == 1) x <- x[c(1, 1), ]
+        vv <- v[v$file_stem == sm, ]
+        g <- vapply(x$allele, function(k) { r <- vv[vv$allele == k, ]; if (nrow(r) && r$in_consensus[1]) "1" else "0" }, "")
+        dp <- vapply(x$allele, function(k) { r <- vv[vv$allele == k, ]; if (nrow(r)) as.character(r$alt_reads[1] + r$ref_reads[1]) else "." }, "")
+        af <- vapply(x$allele, function(k) { r <- vv[vv$allele == k, ]; if (nrow(r) && !is.na(r$support[1])) sprintf("%.3f", r$support[1]) else "." }, "")
+        sprintf("%s:%d:%s:%s", paste(g, collapse = "|"), anchor_pos, paste(dp, collapse = ","), paste(af, collapse = ","))
+      }, "")
+      filt <- if (any(v$carried & v$confirmed, na.rm = TRUE)) "PASS" else "LowSupport"
+      body <- c(body, paste(c(ref$ref_id, ev$pos[i], ".", ev$ref[i], ev$alt[i], ".", filt,
+                              paste0("TYPE=", ev$type[i], if (minor_only) ";MINOR" else ""), "GT:PS:HDP:HAF", cells), collapse = "\t"))
+    }
+  }
+  # sort by position (the repeat record sits between the two flanks)
+  if (length(body)) body <- body[order(as.integer(vapply(strsplit(body, "\t"), `[`, "", 2)))]
+  writeLines(c(hdr, body), path)
+  if (nzchar(Sys.which("bgzip")) && nzchar(Sys.which("tabix"))) {
+    system2("bgzip", c("-f", "-k", path), stdout = FALSE, stderr = FALSE)
+    system2("tabix", c("-f", "-p", "vcf", paste0(path, ".gz")), stdout = FALSE, stderr = FALSE)
+  }
+  invisible(path)
+}
+
+# Reads of one sample aligned to the whole reference (minimap2), with HP = allele
+# (1 shorter, 2 longer, 3+ other clusters), XR = primary repeat length and, with UMIs,
+# MI = molecule. In IGV, group or colour reads by the HP tag to see each allele's reads.
+write_allele_bam <- function(d, ref, path, preset = "-x map-hifi", threads = 1L, work_dir = tempdir()) {
+  if (!nrow(d)) return(invisible(NULL))
+  stem <- file.path(work_dir, basename(sub("\\.bam$", "", path)))
+  ref_fa <- paste0(stem, "-ref.fa"); reads_fa <- paste0(stem, "-reads.fa"); sam <- paste0(stem, ".sam")
+  Biostrings::writeXStringSet(Biostrings::DNAStringSet(stats::setNames(ref$full, ref$ref_id)), ref_fa)
+  Biostrings::writeXStringSet(Biostrings::DNAStringSet(stats::setNames(paste0(d$left, d$mid, d$right), d$qname)), reads_fa)
+  args <- c("-a", strsplit(preset, "\\s+")[[1]], "-t", threads, ref_fa, reads_fa)
+  system2("minimap2", args, stdout = sam, stderr = FALSE)
+  x <- readLines(sam); is_h <- startsWith(x, "@")
+  rec <- x[!is_h]; q <- sub("\t.*$", "", rec)
+  tag <- paste0("\tHP:i:", d$hp, "\tXR:i:", round(d$length), ifelse(is.na(d$molecule_id), "", paste0("\tMI:Z:", d$molecule_id)))
+  rec <- paste0(rec, tag[match(q, d$qname)])
+  writeLines(c(x[is_h], rec), sam)
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  system2("samtools", c("sort", "-o", path, sam), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("index", path), stdout = FALSE, stderr = FALSE)
+  unlink(c(ref_fa, reads_fa, sam))
+  invisible(path)
+}
+
+# One sample's alleles for review: one row per allele. Left and right panels: the stretch
+# of each flank the allele's consensus covers (reference coordinates), with each variant
+# marked (filled = in the consensus, open = carried by a minority of the reads) and
+# labelled with the share of the allele's reads that carry it. Middle panel: the allele's
+# repeat region written out in repeat notation.
+allele_map_plot <- function(al, vars, ref, title) {
+  al <- data.table::as.data.table(al)[order(allele)]
+  al[, row := factor(sprintf("Allele %s\n%s reads (%s)", allele, format(reads, big.mark = ","), scales::percent(proportion, 1)),
+                     levels = rev(sprintf("Allele %s\n%s reads (%s)", allele, format(reads, big.mark = ","), scales::percent(proportion, 1))))]
+  v <- data.table::as.data.table(vars)
+  if (nrow(v)) v <- al[, .(file_stem, allele, row)][v, on = .(file_stem, allele), nomatch = NULL]
+  side_plot <- function(side) {
+    ns1 <- ref$n_start; ne1 <- ref$n_end
+    seg <- if (side == "left") al[, .(row, from = left_from, to = ns1 - 1)] else al[, .(row, from = ne1 + 1, to = right_to)]
+    seg <- seg[!is.na(from) & !is.na(to) & to >= from]
+    ns0 <- ref$n_start; ne0 <- ref$n_end   # `ref` is also a column of the variants table
+    vv <- if (nrow(v)) v[if (side == "left") pos < ns0 else pos > ne0] else v
+    p <- ggplot2::ggplot(seg, ggplot2::aes(y = row)) + ggplot2::geom_segment(ggplot2::aes(x = from, xend = to, yend = row), linewidth = 3, colour = "grey80")
+    # labels alternate above and below the line, so neighbouring variants do not overlap
+    if (nrow(vv)) { vv <- vv[order(row, pos)][, lab_v := ifelse(seq_len(.N) %% 2 == 1, -0.7, 1.7), by = row]
+                    vv[, alt_lab := ifelse(nchar(alt) > 8, paste0(substr(alt, 1, 6), "..."), alt)][, ref_lab := ifelse(nchar(ref) > 8, paste0(substr(ref, 1, 6), "..."), ref)] }
+    if (nrow(vv)) p <- p + ggplot2::geom_point(data = vv, ggplot2::aes(pos, row, shape = in_consensus), size = 3, colour = "#d95f02", fill = "#d95f02") +
+      ggplot2::geom_text(data = vv, ggplot2::aes(pos, row, vjust = lab_v, label = sprintf("%d %s>%s\n%s", pos, ref_lab, alt_lab, ifelse(is.na(support), "support n/a", scales::percent(support, 1)))),
+                         size = 2.4, lineheight = 0.85) +
+      ggplot2::scale_shape_manual(values = c(`TRUE` = 21, `FALSE` = 1), labels = c(`TRUE` = "in the consensus", `FALSE` = "minority of reads"), name = NULL, drop = FALSE)
+    p + ggplot2::scale_x_continuous(labels = scales::comma, breaks = scales::pretty_breaks(4)) +
+      ggplot2::labs(x = sprintf("%s flank (reference position)", if (side == "left") "Left" else "Right"), y = NULL) +
+      ggplot2::theme_bw() + ggplot2::theme(legend.position = "bottom", panel.grid.minor = ggplot2::element_blank())
+  }
+  mid <- ggplot2::ggplot(al, ggplot2::aes(0, row)) +
+    ggplot2::geom_label(ggplot2::aes(label = stringr_wrap(repeat_notation, 34)), size = 2.8, label.size = 0, fill = "grey95", lineheight = 0.9) +
+    ggplot2::scale_x_continuous(limits = c(-1, 1)) + ggplot2::labs(x = "Between the flanks", y = NULL) +
+    ggplot2::theme_bw() + ggplot2::theme(axis.text = ggplot2::element_blank(), axis.ticks = ggplot2::element_blank(), panel.grid = ggplot2::element_blank())
+  patchwork::wrap_plots(side_plot("left"), mid + ggplot2::theme(axis.text.y = ggplot2::element_blank()), side_plot("right") + ggplot2::theme(axis.text.y = ggplot2::element_blank()),
+                        nrow = 1, widths = c(2, 1.6, 2), guides = "collect") +
+    patchwork::plot_annotation(title = title, subtitle = "Grey = flank sequence each allele's consensus covers; orange = variants against the reference, labelled with the share of the allele's reads carrying them") &
+    ggplot2::theme(legend.position = "bottom")
+}
+stringr_wrap <- function(x, width) vapply(x, function(s) if (is.na(s)) "" else paste(strwrap(s, width), collapse = "\n"), "")
 
 write_vcf <- function(variants, columns, ref_name, ref_length, ref_file, path) {
   hdr <- c("##fileformat=VCFv4.2", paste0("##fileDate=", format(Sys.Date(), "%Y%m%d")),
@@ -267,6 +523,48 @@ write_vcf <- function(variants, columns, ref_name, ref_length, ref_file, path) {
   }, "")
   writeLines(c(hdr, body), path)
   invisible(path)
+}
+
+# Y-axis labels for a waterfall. Rows are reads, so a common length takes up many
+# rows and a rare one few. Labels are placed at the first read reaching a length,
+# kept at least 1/30 of the plot apart, choosing multiples of 10 first, then of 5,
+# then any whole length, so the axis is labelled evenly up the plot (including
+# inside a large allele) rather than only at a few lengths.
+waterfall_breaks <- function(len, n_target = 30) {
+  n <- length(len); if (!n) return(integer(0))
+  gap <- n / n_target
+  cand <- sort(unique(floor(len)))
+  row_of <- function(v) which(len >= v)[1]
+  chosen <- c(1L, n)
+  for (step in c(10, 5, 1)) {
+    for (v in cand[cand %% step == 0]) {
+      r <- row_of(v); if (is.na(r)) next
+      if (all(abs(chosen - r) >= gap)) chosen <- c(chosen, r)
+    }
+  }
+  sort(unique(chosen))
+}
+
+# One sample's clusters: histogram of the primary length, stacked by cluster, with
+# each cluster's modal length and share of reads written above it.
+cluster_length_plot <- function(d, cs, title, xlab = "Repeat length") {
+  d <- data.table::as.data.table(d)[is.finite(length)]
+  d[, cluster := factor(cluster_number, levels = sort(unique(cluster_number)))]
+  cs <- data.table::as.data.table(cs)[, cluster := factor(cluster_number, levels = levels(d$cluster))]
+  h <- d[, .N, by = .(cluster, length = floor(length + 0.5))]
+  top <- h[, .(top = sum(N)), by = length][, max(top)]
+  cs[, label := sprintf("C%s: mode %s, %s of reads%s", cluster, round(modal_length), scales::percent(proportion, 0.1),
+                        ifelse(!is.na(haplotype_cluster) & haplotype_cluster != "H1", paste0(", ", haplotype_cluster), ""))]
+  xr <- c(min(d$length), stats::quantile(d$length, 0.999)) + c(-3, 3)
+  ggplot2::ggplot(h, ggplot2::aes(length, N, fill = cluster)) + ggplot2::geom_col(width = 1) +
+    ggplot2::geom_vline(data = cs, ggplot2::aes(xintercept = modal_length, colour = cluster), linetype = "dashed", linewidth = 0.4, show.legend = FALSE) +
+    ggplot2::scale_fill_brewer(palette = "Set1", name = "Cluster", labels = stats::setNames(cs$label, cs$cluster)) +
+    ggplot2::scale_colour_brewer(palette = "Set1") +
+    ggplot2::scale_y_sqrt(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05))) +
+    ggplot2::coord_cartesian(xlim = xr) +
+    ggplot2::labs(x = xlab, y = "Reads (square-root scale)", title = title,
+                  subtitle = "Bars stacked by cluster; dashed line = each cluster's modal length") +
+    ggplot2::theme_bw() + ggplot2::theme(legend.position = "right")
 }
 
 # ------------------------------------------------------------------------------
@@ -296,10 +594,7 @@ create_waterfall_plot <- function(d, title, flank_bp = 60L, max_reads = 1000L, l
   # Mark the first read at or above each of a set of evenly spaced lengths, so the
   # labels are distinct lengths rather than read quantiles (which repeat the
   # length of a dominant allele many times)
-  vals <- unique(c(min(d$length), pretty(d$length, n = 10), max(d$length)))
-  brk <- unique(vapply(vals, function(v) { i <- which(d$length >= v)[1]; if (is.na(i)) NA_integer_ else i }, integer(1)))
-  brk <- brk[!is.na(brk)]
-  brk <- brk[c(TRUE, diff(brk) > nrow(d) / 40)]
+  brk <- waterfall_breaks(d$length)
   ggplot2::ggplot(pd, ggplot2::aes(pos, read_order, fill = base)) +
     ggplot2::geom_raster() +
     ggplot2::geom_vline(xintercept = -0.5, linetype = "dashed", linewidth = 0.3) +

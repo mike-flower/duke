@@ -2,20 +2,25 @@
 # Duke - range analysis and instability metrics
 # ==============================================================================
 # Definitions (x = repeat lengths of the reads or molecules in a range,
-# s = setpoint, d = x - s, n = number of reads or molecules):
+# s = setpoint, d = x - s, n = number of reads or molecules; all in repeat units):
 #
 #   instability_index  mean(d)                         (Lee et al. 2010; signed)
 #   expansion_index    sum(d[d > 0]) / n               (shares the n denominator,
 #   contraction_index  sum(d[d < 0]) / n                 so II = EI + CI)
-#   mean_expansion_size    mean(d[d > 0])  - how large a typical expansion is
-#   mean_contraction_size  mean(d[d < 0])  - (these were Duke's EI/CI before v3)
-#   prop_at / prop_above / prop_below   |d| <= 0.5, d > 0.5, d < -0.5
-#   prop_above_k / prop_below_k        d >= k, d <= -k   (k = expansion_thresholds)
+#   mean_change_above_setpoint  mean(d[d > 0])  - how large a typical expansion is
+#   mean_change_below_setpoint  mean(d[d < 0])  - (Duke's EI/CI before v3; v3.0 called
+#                                                  these mean_expansion_size / _contraction_size)
+#   share_at_setpoint / share_above_setpoint / share_below_setpoint
+#                                     |d| <= 0.5, d > 0.5, d < -0.5   (v3.0: prop_at/above/below)
+#   n_at_setpoint / n_above_setpoint / n_below_setpoint   the same as counts
+#   share_kplus_above_setpoint / share_kplus_below_setpoint
+#                                     d >= k, d <= -k  (k = expansion_thresholds; v3.0: prop_above_k)
 #   expansion_ratio / contraction_ratio  reads above (below) / reads at the setpoint
 #       Kept for continuity. Its denominator is a single bin, typically ~6% of
-#       reads in an expanded allele, so it is noisy; prop_above_k is the stable
-#       alternative.
-#   modal_diff / median_diff / mean_diff  sample statistic - s
+#       reads in an expanded allele, so it is noisy; share_kplus_above_setpoint is
+#       the stable alternative.
+#   modal_minus_setpoint / median_minus_setpoint / mean_minus_setpoint
+#                                     sample statistic - s     (v3.0: modal_diff, ...)
 #
 # Setpoints: sample_relative uses the sample's own control_setpoint_metric;
 # control_relative uses the group control (or a manual control length from the
@@ -131,7 +136,7 @@ distribution_stats <- function(x) {
   if (n == 0) return(data.frame(n_used = 0L, modal_length = NA_real_, modal_frequency = NA_real_, mean_length = NA_real_,
                                 median_length = NA_real_, sd = NA_real_, iqr = NA_real_, p05 = NA_real_, p95 = NA_real_,
                                 min_length = NA_real_, max_length = NA_real_, cv = NA_real_, skewness = NA_real_,
-                                kurtosis = NA_real_, prop_below_modal = NA_real_, prop_above_modal = NA_real_))
+                                kurtosis = NA_real_, share_below_modal = NA_real_, share_above_modal = NA_real_))
   mo <- .mode(x)
   data.frame(n_used = n, modal_length = mo, modal_frequency = sum(x == mo), mean_length = mean(x),
              median_length = stats::median(x), sd = if (n > 1) stats::sd(x) else NA_real_,
@@ -139,31 +144,91 @@ distribution_stats <- function(x) {
              min_length = min(x), max_length = max(x),
              cv = if (mean(x) != 0 && n > 1) stats::sd(x) / mean(x) else NA_real_,
              skewness = if (n > 2) .skew(x) else NA_real_, kurtosis = if (n > 3) .kurt(x) else NA_real_,
-             prop_below_modal = mean(x < mo), prop_above_modal = mean(x > mo))
+             share_below_modal = mean(x < mo), share_above_modal = mean(x > mo))
 }
 
 instability_stats <- function(x, s, thresholds = c(5, 10)) {
   n <- length(x)
   base <- data.frame(setpoint = s, n_used = n, instability_index = NA_real_, expansion_index = NA_real_,
-                     contraction_index = NA_real_, mean_expansion_size = NA_real_, mean_contraction_size = NA_real_,
-                     prop_at = NA_real_, prop_above = NA_real_, prop_below = NA_real_,
-                     reads_at = NA_integer_, reads_above = NA_integer_, reads_below = NA_integer_,
+                     contraction_index = NA_real_, mean_change_above_setpoint = NA_real_, mean_change_below_setpoint = NA_real_,
+                     share_at_setpoint = NA_real_, share_above_setpoint = NA_real_, share_below_setpoint = NA_real_,
+                     n_at_setpoint = NA_integer_, n_above_setpoint = NA_integer_, n_below_setpoint = NA_integer_,
                      expansion_ratio = NA_real_, contraction_ratio = NA_real_)
-  for (k in thresholds) { base[[paste0("prop_above_", k)]] <- NA_real_; base[[paste0("prop_below_", k)]] <- NA_real_ }
+  for (k in thresholds) { base[[threshold_col(k, "above")]] <- NA_real_; base[[threshold_col(k, "below")]] <- NA_real_ }
   if (n == 0 || is.na(s)) return(base)
   d <- x - s
   at <- abs(d) <= 0.5; up <- d > 0.5; dn <- d < -0.5
   base$instability_index <- mean(d)
   base$expansion_index <- sum(d[d > 0]) / n
   base$contraction_index <- sum(d[d < 0]) / n
-  base$mean_expansion_size <- if (any(d > 0)) mean(d[d > 0]) else NA_real_
-  base$mean_contraction_size <- if (any(d < 0)) mean(d[d < 0]) else NA_real_
-  base$prop_at <- mean(at); base$prop_above <- mean(up); base$prop_below <- mean(dn)
-  base$reads_at <- sum(at); base$reads_above <- sum(up); base$reads_below <- sum(dn)
+  base$mean_change_above_setpoint <- if (any(d > 0)) mean(d[d > 0]) else NA_real_
+  base$mean_change_below_setpoint <- if (any(d < 0)) mean(d[d < 0]) else NA_real_
+  base$share_at_setpoint <- mean(at); base$share_above_setpoint <- mean(up); base$share_below_setpoint <- mean(dn)
+  base$n_at_setpoint <- sum(at); base$n_above_setpoint <- sum(up); base$n_below_setpoint <- sum(dn)
   base$expansion_ratio <- if (sum(at) > 0) sum(up) / sum(at) else NA_real_
   base$contraction_ratio <- if (sum(at) > 0) sum(dn) / sum(at) else NA_real_
-  for (k in thresholds) { base[[paste0("prop_above_", k)]] <- mean(d >= k); base[[paste0("prop_below_", k)]] <- mean(d <= -k) }
+  for (k in thresholds) { base[[threshold_col(k, "above")]] <- mean(d >= k); base[[threshold_col(k, "below")]] <- mean(d <= -k) }
   base
+}
+
+# Column name for the share at least k units above (below) the setpoint
+threshold_col <- function(k, dir) paste0("share_", k, "plus_", dir, "_setpoint")
+
+# Metric names used before v3.1, so headline_metrics written with the old names still work
+.old_metric_names <- c(mean_expansion_size = "mean_change_above_setpoint", mean_contraction_size = "mean_change_below_setpoint",
+                       prop_at = "share_at_setpoint", prop_above = "share_above_setpoint", prop_below = "share_below_setpoint",
+                       reads_at = "n_at_setpoint", reads_above = "n_above_setpoint", reads_below = "n_below_setpoint",
+                       modal_diff = "modal_minus_setpoint", median_diff = "median_minus_setpoint", mean_diff = "mean_minus_setpoint",
+                       setpoint_repeat_length = "setpoint_length", prop_below_modal = "share_below_modal", prop_above_modal = "share_above_modal")
+update_metric_names <- function(x) {
+  x <- ifelse(x %in% names(.old_metric_names), .old_metric_names[x], x)
+  k <- grepl("^prop_(above|below)_[0-9]+$", x)
+  x[k] <- sub("^prop_(above|below)_([0-9]+)$", "share_\\2plus_\\1_setpoint", x[k])
+  unname(x)
+}
+
+# One row per column of the instability tables: what it holds and its units. Written
+# to instability.xlsx as the "definitions" sheet.
+metric_definitions <- function(thresholds) {
+  k <- paste(thresholds, collapse = " and ")
+  d <- data.frame(stringsAsFactors = FALSE, column = c(
+    "unit", "measure", "analysis_range_name", "range_label", "range_measure", "n_total", "n_used",
+    "modal_length", "modal_frequency", "median_length", "mean_length", "sd", "iqr", "p05", "p95", "min_length", "max_length", "cv",
+    "skewness", "kurtosis", "share_below_modal", "share_above_modal",
+    "setpoint_type", "setpoint_metric", "setpoint_source", "setpoint_length",
+    "instability_index", "expansion_index", "contraction_index", "mean_change_above_setpoint", "mean_change_below_setpoint",
+    "share_at_setpoint", "share_above_setpoint", "share_below_setpoint", "n_at_setpoint", "n_above_setpoint", "n_below_setpoint",
+    paste0("share_Kplus_above_setpoint (K = ", k, ")"), paste0("share_Kplus_below_setpoint (K = ", k, ")"),
+    "expansion_ratio", "contraction_ratio", "modal_minus_setpoint", "median_minus_setpoint", "mean_minus_setpoint", "z_score",
+    "control_setpoint", "control_sd", "control_n"),
+  meaning = c(
+    "reads or molecules (UMI runs report both)", "the tract or combined measure", "the range from the settings file",
+    "the range's bounds as written (min-max)", "the measure whose length selects the reads for the range (the primary tract unless the measure has its own ranges)",
+    "reads or molecules in the range", "reads or molecules used (after the floor)",
+    "commonest length", "how many reads or molecules have the modal length", "median length", "mean length", "standard deviation of the length",
+    "interquartile range of the length", "5th percentile of the length", "95th percentile of the length", "shortest length", "longest length",
+    "coefficient of variation (sd / mean)", "skewness of the length distribution (0 = symmetric; negative = longer tail of short lengths)",
+    "kurtosis of the length distribution (3 = normal; higher = heavier tails)", "share shorter than the modal length", "share longer than the modal length",
+    "sample_relative: compared with the sample's own setpoint; control_relative: compared with its group's control samples",
+    "the statistic used as the setpoint (control_setpoint_metric)", "sample, group control or manual",
+    "the setpoint (the reference length each read or molecule is compared with)",
+    "mean of d, where d = length minus the setpoint (Lee et al. 2010); positive = longer than the setpoint on average",
+    "sum of the positive d divided by the number of reads or molecules (so instability_index = expansion_index + contraction_index)",
+    "sum of the negative d divided by the number of reads or molecules (negative)",
+    "mean d among the reads or molecules longer than the setpoint: how large a typical expansion is",
+    "mean d among those shorter than the setpoint (negative): how large a typical contraction is",
+    "share within half a unit of the setpoint (at it)", "share more than half a unit above the setpoint", "share more than half a unit below the setpoint",
+    "number at the setpoint", "number above the setpoint", "number below the setpoint",
+    "share at least K units above the setpoint", "share at least K units below the setpoint",
+    "number above the setpoint divided by the number at it; noisy, because its denominator is a single length", "number below the setpoint divided by the number at it",
+    "modal length minus the setpoint", "median length minus the setpoint", "mean length minus the setpoint",
+    "how many control standard deviations the sample's own setpoint lies from its group control (control_relative rows only)",
+    "the group control setpoint: the controls' setpoint statistic combined by control_aggregation_method", "spread of that statistic across the control samples", "number of control samples"),
+  units = c("", "", "", "", "", "count", "count", "units", "count", "units", "units", "units", "units", "units", "units", "units", "units", "ratio",
+            "", "", "share", "share", "", "", "", "units", "units", "units", "units", "units", "units", "share", "share", "share",
+            "count", "count", "count", "share", "share", "ratio", "ratio", "units", "units", "units", "SD", "units", "units", "count"))
+  d$units[d$units == "units"] <- "repeat units of the measure (bp for a combined measure whose tracts have motifs of different lengths)"
+  d
 }
 
 # Modal peaks inside one range (local maxima of the frequency table)

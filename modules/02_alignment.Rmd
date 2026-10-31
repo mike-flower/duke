@@ -51,7 +51,7 @@ This module handles:
 
 **Outputs:**
 
-- `02_alignment/alignment.xlsx` – read accounting per sample, flank alignment quality
+- `02_alignment/alignment.xlsx` – read accounting per sample; flank alignment quality, boundaries and strand
 - `02_alignment/plots/` – the figures in this report (per-sample alignment plots in `alignment_by_sample/`)
 - `module_data/02_alignment.RData` – strand-corrected reads with flank coordinates, for Module 3
 
@@ -89,6 +89,7 @@ results <- lapply(refs, function(ref) {
 })
 alignments <- lapply(results, function(r) rbindlist(lapply(r, `[[`, "table")))
 funnel <- dplyr::bind_rows(lapply(results, function(r) dplyr::bind_rows(lapply(r, `[[`, "funnel"))))
+strand_steps <- dplyr::bind_rows(lapply(results, function(r) dplyr::bind_rows(lapply(r, `[[`, "strand"))))
 rm(results); if (params$remove_intermediate) { rm(sequences); invisible(gc()) }
 timings["Alignment and filtering"] <- proc.time()["elapsed"] - .t
 cat(sprintf("%s of %s reads (%.1f%%) span both flanks in the correct order.",
@@ -122,7 +123,9 @@ dt_full(funnel, caption = "Reads per sample after each alignment step")
 
 ## Where the flank alignments end
 
-The repeat-adjacent end of each flank should align to its last (left) or first (right) reference base. Each point is one sample: the percentage of its reads whose flank alignment stops at least one base short of the N block. Reads with a shortfall are not lost – Module 3 searches `r params$rpt_flank_pad` bases into each flank so the tract is still measured in full – but a sample with a high rate has sequence next to the repeat that differs from the reference, for example an interruption variant. Compare samples with each other rather than with zero: at HTT the right flank starts with `CAACAG`, which resembles the repeat, so the aligner often starts that flank a few bases in (the median shortfall is in the table) and a high right-flank rate in every sample is expected.
+**What is measured.** The reference is split at its N block into a left flank (everything before the repeat) and a right flank (everything after). Ideally each flank aligns right up to the repeat: the left flank to its last base, the right flank from its first. A flank alignment **stops short** when the aligner leaves a few bases next to the repeat unaligned, because they differ from the reference there. Each point is one sample: the percentage of its reads in which the left or right flank alignment stops at least one base short of the repeat.
+
+**Does it matter?** No reads are lost: Module 3 searches `r params$rpt_flank_pad` bases into each flank, so the tract is still found and measured in full. What the plot tells you is whether the sequence right next to the repeat matches the reference. A rate that is the same in every sample comes from the reference itself, for example a flank that begins with a second repeat (such as a CCG tract after a CAG tract) whose length differs between alleles, so the aligner starts that flank a few bases in; the typical number of bases is in the table below. A sample with a much higher rate than the others has a sequence next to the repeat that the others lack, for example an interruption variant.
 
 ```{r shortfall, fig.height=5}
 sf <- dplyr::bind_rows(lapply(names(alignments), function(r) {
@@ -135,32 +138,52 @@ p_sf <- sf %>% pivot_longer(c(prop_left_short, prop_right_short), names_to = "fl
   dplyr::mutate(flank = ifelse(flank == "prop_left_short", "Left flank", "Right flank")) %>%
   ggplot(aes(flank, pct)) + box_points_mean(digits = 1, percent = TRUE) + facet_wrap(~ ref_id) +
   scale_y_continuous(labels = pct_axis()) +
-  labs(x = NULL, y = "Reads whose flank alignment stops short of the N block", title = "Flank alignment boundaries, per sample") + theme_bw()
+  labs(x = NULL, y = "Reads whose flank alignment stops\nshort of the repeat", title = "Flank alignments that stop short of the repeat, per sample") + theme_bw()
 print(p_sf); save_plot(p_sf, file.path(plots_dir, "flank_boundary_shortfall.png"), 8, 5)
 ```
 
-## Alignment quality and strand
+## Mapping quality
 
-Per-sample mean mapping quality for each flank, and the proportion of reads that aligned to the reverse strand and were reverse-complemented (`+c`). Amplicons sequenced from both ends give about half on each strand.
+Per-sample mean mapping quality (MAPQ) for each flank. MAPQ is minimap2's confidence that the read aligns to this flank and nowhere else in the reference; 60 is the maximum. A flank much shorter than the other, or one containing low-complexity sequence, gives lower values without anything being wrong.
 
-```{r quality_plot, fig.height=5}
+```{r quality_plot, fig.height=4.5}
 qual <- dplyr::bind_rows(lapply(names(alignments), function(r) {
   a <- alignments[[r]]; if (!nrow(a)) return(NULL)
   a[, .(left_mapq = mean(left_mapq), right_mapq = mean(right_mapq), left_mismatch = mean(left_nm, na.rm = TRUE),
         right_mismatch = mean(right_nm, na.rm = TRUE), reverse_strand = mean(strand == "+c"), reads = .N), by = file_stem][, ref_id := r]
 }))
-p_q1 <- qual %>% pivot_longer(c(left_mapq, right_mapq), names_to = "flank", values_to = "mapq") %>%
+p_quality <- qual %>% pivot_longer(c(left_mapq, right_mapq), names_to = "flank", values_to = "mapq") %>%
   dplyr::mutate(flank = ifelse(flank == "left_mapq", "Left flank", "Right flank")) %>%
   ggplot(aes(flank, mapq)) + box_points_mean() + facet_wrap(~ ref_id) +
   labs(x = NULL, y = "Mean MAPQ", title = "Mapping quality per sample") + theme_bw()
-p_q2 <- ggplot(qual, aes(ref_id, reverse_strand)) + box_points_mean(digits = 1, percent = TRUE) + scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
-  labs(x = NULL, y = "Reads on the reverse strand", title = "Strand per sample") + theme_bw()
-p_quality <- patchwork::wrap_plots(p_q1, p_q2, widths = c(2, 1))
-print(p_quality); save_plot(p_quality, file.path(plots_dir, "alignment_quality_strand.png"), 11, 5)
+print(p_quality); save_plot(p_quality, file.path(plots_dir, "mapping_quality.png"), 8, 4.5)
+```
+
+## Strand
+
+**What is measured.** PacBio and nanopore sequence each molecule from one strand or the other, effectively at random, so about half the reads of an amplicon should align to the reverse strand (these are reverse-complemented, so that every read reads 5' to 3' along the reference). Each point is one sample: the percentage of its reads on the reverse strand at each step of the alignment, from reads aligning to each flank on its own, through reads aligning to both, to the reads kept.
+
+**What it shows.** If the share is already away from 50% among reads aligning to a single flank, the imbalance was there in the reads as they came off the sequencer (library preparation or the sequencing chemistry), and is not caused by Duke. If it moves between steps, reads from one strand are failing that step more often than the other, for example because one strand more often gives truncated or chimeric reads. Whether the two strands give the same repeat lengths is shown in Module 3 (*Strand and tract length*), and that is what matters for the results.
+
+```{r strand_plot, fig.height=4.5}
+st_long <- as.data.table(strand_steps)[, .(file_stem, ref_id, `Left flank` = reverse_left, `Right flank` = reverse_right,
+                                           `Both flanks` = reverse_both, Final = reverse_final)]
+st_long <- melt(st_long, id.vars = c("file_stem", "ref_id"), variable.name = "step", value.name = "reverse")[!is.na(reverse)]
+if (nrow(st_long)) {
+  p_strand <- ggplot(st_long, aes(step, reverse)) +
+    geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey40") +
+    geom_line(aes(group = interaction(file_stem, ref_id)), colour = "grey75", alpha = 0.5) +
+    box_points_mean(digits = 1, percent = TRUE) + facet_wrap(~ ref_id) +
+    scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
+    labs(x = "Alignment step", y = "Reads on the reverse strand", title = "Reads on the reverse strand at each alignment step, per sample",
+         subtitle = "Grey lines join one sample's steps; dashed = 50%") + theme_bw()
+  print(p_strand); save_plot(p_strand, file.path(plots_dir, "strand_by_step.png"), 9, 4.5)
+}
 ```
 
 ```{r quality_table}
-dt_full(dplyr::left_join(qual, sf, by = c("file_stem", "ref_id")), caption = "Alignment quality per sample", digits = 3)
+quality_table <- dplyr::left_join(dplyr::left_join(qual, sf, by = c("file_stem", "ref_id")), strand_steps, by = c("file_stem", "ref_id"))
+dt_full(quality_table, caption = "Alignment quality, flank boundaries and strand per sample", digits = 3)
 ```
 
 ```{r per_sample_alignment, eval=params$visualise_alignment && params$plot_per_sample}
@@ -191,8 +214,8 @@ cat("Per-sample alignment plots written to", by_sample_dir)
 # Save output
 
 ```{r save}
-write_excel_function(list(references = ref_table, read_accounting = funnel, alignment_quality = dplyr::left_join(qual, sf, by = c("file_stem", "ref_id"))), xlsx_path)
-module2_output <- list(alignments = alignments, refs = refs, funnel = funnel, quality = qual, hash = params$module_hash)
+write_excel_function(list(references = ref_table, read_accounting = funnel, alignment_quality = quality_table), xlsx_path)
+module2_output <- list(alignments = alignments, refs = refs, funnel = funnel, quality = qual, strand = strand_steps, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "02_alignment.RData")
 save(module2_output, file = output_path)
 ```
@@ -208,7 +231,7 @@ timing_df <- build_timing_table(timings)
 manifest <- build_manifest(module2_output, c(
   alignments = "Per reference: one row per read with the strand-corrected sequence and flank coordinates",
   refs = "Parsed references (flanks, N block position)", funnel = "Reads per sample after each alignment step",
-  quality = "Mean MAPQ, mismatches and strand per sample", hash = "Parameter hash used for resume"))
+  quality = "Mean MAPQ, mismatches and strand per sample", strand = "Share of reads on the reverse strand at each alignment step, per sample", hash = "Parameter hash used for resume"))
 write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)
 dt_compact(timing_df, caption = "Section timing")
 dt_compact(manifest, caption = sprintf("module2_output – %s on disk", format_size(file.size(output_path))))

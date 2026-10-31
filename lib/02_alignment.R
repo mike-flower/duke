@@ -91,13 +91,15 @@ parse_reference_sequence <- function(ref_path) {
 # Full alignment step for one sample and one reference
 process_sample_alignment <- function(sample, reads, ref, out_dir, minimap2_args,
                                      keep_bam = FALSE, bam_dir = NULL, exclusions = NULL) {
-  cache <- file.path(out_dir, paste0("align_", ref$ref_id, "_", sample, ".RData"))
+  cache <- file.path(out_dir, paste0("align_v31_", ref$ref_id, "_", sample, ".RData"))
   if (file.exists(cache) && safe_load_cache(cache, environment())) return(result)
 
   n_input <- length(reads)
   empty <- list(table = NULL, funnel = data.frame(file_stem = sample, ref_id = ref$ref_id, input = n_input,
                 aligned_left = 0L, aligned_right = 0L, both_flanks = 0L, same_strand = 0L,
-                correct_order = 0L, manually_excluded = 0L, final = 0L))
+                correct_order = 0L, manually_excluded = 0L, final = 0L),
+                strand = data.frame(file_stem = sample, ref_id = ref$ref_id, reverse_left = NA_real_, reverse_right = NA_real_,
+                                    reverse_both = NA_real_, reverse_final = NA_real_))
   if (n_input == 0) return(empty)
 
   stem <- file.path(out_dir, paste0(sample, "-", ref$ref_id))
@@ -129,6 +131,10 @@ process_sample_alignment <- function(sample, reads, ref, out_dir, minimap2_args,
 
   both <- merge(best$left, best$right, by = "qname", suffixes = c("_l", "_r"))
   n_both <- nrow(both)
+  # Share of reads on the reverse strand at each step, so a strand imbalance in the
+  # final reads can be traced to the step that introduced it
+  rev_left <- mean(best$left$strand == "-"); rev_right <- mean(best$right$strand == "-")
+  rev_both <- if (n_both) mean(both$strand_l == "-") else NA_real_
   both <- both[strand_l == strand_r]
   n_strand <- nrow(both)
   both <- both[qstart_l < qstart_r]
@@ -164,7 +170,9 @@ process_sample_alignment <- function(sample, reads, ref, out_dir, minimap2_args,
   result <- list(table = tab, funnel = data.frame(
     file_stem = sample, ref_id = ref$ref_id, input = n_input, aligned_left = n_left, aligned_right = n_right,
     both_flanks = n_both, same_strand = n_strand, correct_order = n_order,
-    manually_excluded = n_excl, final = nrow(tab)))
+    manually_excluded = n_excl, final = nrow(tab)),
+    strand = data.frame(file_stem = sample, ref_id = ref$ref_id, reverse_left = rev_left, reverse_right = rev_right,
+                        reverse_both = rev_both, reverse_final = if (nrow(tab)) mean(rev) else NA_real_))
   save(result, file = cache)
   result
 }

@@ -177,6 +177,16 @@ params <- list(
   consensus_downsample = 50L,
   # Call variants in each cluster consensus against the reference
   call_variants = TRUE,
+  # Also report a substitution carried by at least this share of an allele's reads when not in its consensus (NA = off)
+  allele_minor_share = 0.2,
+  # Maximum reads per allele used to count each variant's read support
+  allele_support_reads = 5000L,
+  # Write a BAM per sample of reads aligned to the whole reference, tagged by allele (HP)
+  allele_bam = TRUE,
+  # Maximum reads per allele in the allele BAMs
+  allele_bam_reads = 2000L,
+  # minimap2 options for the allele BAMs (e.g. -x map-ont for nanopore reads)
+  allele_bam_minimap2 = "-x map-hifi",
   # Write per-sample waterfall plots
   waterfall = TRUE,
   # Maximum reads per waterfall
@@ -205,7 +215,7 @@ params <- list(
   # Dimensions for cohort plots: group, time
   cohort_plot_by = c("group", "time"),
   # Metrics drawn as timecourses by group
-  headline_metrics = c("modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "prop_above_5"),
+  headline_metrics = c("modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "share_5plus_above_setpoint"),
   # Setpoint type for headline plots: 'control_relative' or 'sample_relative'
   headline_setpoint_type = "control_relative",
   # Ranges drawn inline (default: the first two ranges of the primary measure)
@@ -221,6 +231,12 @@ params <- list(
   sample_cards = TRUE,
   # Histogram bin width in repeat units
   repeat_histogram_binwidth = 1L,
+  # Draw the by-group distribution figures for every range of the primary measure, not only plot_ranges
+  plot_every_range = FALSE,
+  # Also draw density and histogram figures for every sample and range (many figures on a large run)
+  plot_sample_ranges = FALSE,
+  # Reads drawn as dots per sample in the density (ridge) figures
+  plot_dots_max = 2000L,
 
   # --- Runtime -----------------------------------------------------------------
   # Resolution of saved plots

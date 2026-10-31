@@ -34,6 +34,11 @@ dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 xlsx_path <- file.path(rep_dir, "repeat_detection.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
 tracts <- params$tracts_table; composites <- params$composites_table
 primary <- tracts$tract[1]
+# Fill in empty lengths as NA so that lines break across gaps instead of joining distant lengths
+fill_gaps <- function(d, keys) {
+  grid <- d[, .(length_bin = seq(min(length_bin), max(length_bin), by = bin_width[1])), by = keys]
+  d[grid, on = c(keys, "length_bin")]
+}
 ```
 
 # Overview
@@ -44,9 +49,10 @@ This module handles:
 
 1. Finding each repeat tract in every read, between the two flank alignments and up to `rpt_flank_pad` bases into each flank (so a tract is measured in full even where the aligner placed a flank boundary inside it)
 2. Checking the combined flank length of each read, with optional removal of reads whose flank length is an outlier
-3. Counting each tract three ways: **full** (tract length / motif length, including any interruption inside the tract), **match** (exact motif units) and **pure** (longest uninterrupted run)
-4. Recording the sequence between consecutive tracts (e.g. the CAACAGCCGCCA interruption between CAG and CCG)
-5. Combined measures defined from two or more tracts (sum of units, or span from first tract start to last tract end)
+3. Comparing the tract lengths measured from the two strands
+4. Counting each tract three ways: **full** (tract length / motif length, including any interruption inside the tract), **match** (exact motif units) and **pure** (longest uninterrupted run)
+5. Recording the sequence between consecutive tracts (e.g. the CAACAGCCGCCA interruption between CAG and CCG)
+6. Combined measures defined from two or more tracts (sum of units, or span from first tract start to last tract end)
 
 **Tracts in this run:**
 
@@ -184,6 +190,47 @@ if (isTRUE(params$rm_flank_length_outliers)) {
 
 ---
 
+# Strand and tract length
+
+**How to read this.** Each read was sequenced from one of the two strands of its molecule (Module 2, *Strand*). Left: the share of reads on the reverse strand at each tract length; each grey line is one sample (lengths with at least 20 reads), the coloured line is all reads pooled and the dashed line is 50%. Right: the length distribution of the reads on each strand, all samples pooled, each strand scaled to its own total so the shapes can be compared; the y-axis is logarithmic so that the tails are visible.
+
+**What it shows.** Whether the strand a read came from affects the length measured. If both strands give the same distribution, a strand imbalance does not bias the results. If one strand runs shorter or longer, or its share changes with tract length, slippage or errors depend on the strand being copied, and samples with different strand balances are not directly comparable.
+
+```{r strand_length, fig.height=5}
+sl <- rbindlist(lapply(seq_len(nrow(tracts)), function(k) {
+  t <- tracts$tract[k]; sc <- paste0("strand_", tracts$ref_group[k])
+  if (!sc %in% names(read_tracts)) return(NULL)
+  read_tracts[get(paste0(t, "_found")) %in% TRUE & !is.na(get(sc)), .(file_stem, tract = t, length = get(value_col(t)), reverse = get(sc) == "+c")]
+}))
+if (nrow(sl)) {
+  sl[, w := { span <- diff(stats::quantile(length, c(0.001, 0.999), na.rm = TRUE)); if (span > 40) 5 else 1 }, by = tract]
+  sl[, length_bin := floor(length / w) * w]
+  s_samp <- sl[, .(reads = .N, reverse = mean(reverse)), by = .(file_stem, tract, length_bin, w)][reads >= 20]
+  s_pool <- sl[, .(reads = .N, reverse = mean(reverse)), by = .(tract, length_bin, w)][reads >= 50]
+  s_samp <- fill_gaps(s_samp[, bin_width := w], c("tract", "file_stem")); s_pool <- fill_gaps(s_pool[, bin_width := w], "tract")
+  s_samp[, x := length_bin + (bin_width - 1) / 2]; s_pool[, x := length_bin + (bin_width - 1) / 2]
+  p_sl1 <- ggplot(s_samp, aes(x, reverse)) + geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey40") +
+    geom_line(aes(group = file_stem), colour = "grey70", alpha = 0.6) +
+    geom_line(data = s_pool, colour = "#377eb8", linewidth = 1) + facet_wrap(~ tract, scales = "free_x", ncol = 1) +
+    scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
+    labs(x = "Tract length (units)", y = "Reads on the reverse strand", title = "Reverse-strand share by tract length") + theme_bw()
+  dist_s <- sl[, .(reads = .N), by = .(tract, length, strand = ifelse(reverse, "reverse", "forward"))][, share := reads / sum(reads), by = .(tract, strand)]
+  xr <- sl[, .(lo = stats::quantile(length, 0.0005), hi = stats::quantile(length, 0.9995)), by = tract]
+  dist_s <- xr[dist_s, on = "tract"][length >= lo & length <= hi]
+  p_sl2 <- ggplot(dist_s, aes(length, share, colour = strand)) + geom_step(direction = "mid", linewidth = 0.5) +
+    facet_wrap(~ tract, scales = "free_x", ncol = 1) + scale_y_log10(labels = pct_axis()) +
+    scale_colour_manual(values = c(forward = "#377eb8", reverse = "#e41a1c"), name = NULL) +
+    labs(x = "Tract length (units)", y = "Share of the strand's reads (log scale)", title = "Length distribution by strand") +
+    theme_bw() + theme(legend.position = "top")
+  p_sl <- patchwork::wrap_plots(p_sl1, p_sl2, widths = c(1, 1.3))
+  print(p_sl); save_plot(p_sl, file.path(plots_dir, "strand_by_length.png"), 11, max(5, 3.2 * nrow(tracts)))
+  strand_summary <- sl[, .(reads = .N, reverse = mean(reverse), median_forward = as.numeric(median(length[!reverse])),
+                           median_reverse = as.numeric(median(length[reverse]))), by = .(file_stem, tract)]
+} else { strand_summary <- NULL; cat("No strand information.\n") }
+```
+
+---
+
 # Counting methods
 
 For each read and tract, **full** counts every base of the tract (so an interruption or a sequencing error inside it adds units rather than splitting it), **match** counts exact motif units, and **pure** is the longest uninterrupted run. They agree for a clean tract. Where they differ, the tract contains either a real interruption or a sequencing error. The comparisons below are made read by read, so they need no assumption about alleles, controls or how similar the alleles of a tract are.
@@ -206,10 +253,24 @@ by_len <- rbindlist(lapply(tracts$tract, function(t) {
   span <- diff(stats::quantile(d$full, c(0.001, 0.999), na.rm = TRUE))
   w <- if (span > 40) 5 else 1
   d[, length_bin := floor(full / w) * w]
+  q_when <- function(x, p) { x <- x[x != 0]; if (length(x)) as.numeric(stats::quantile(x, p, type = 1)) else NA_real_ }
   d[, .(tract = t, bin_width = w, reads = .N, full_ne_match = mean(full != match), full_ne_pure = mean(full != pure),
-        mean_full_minus_pure = mean(full - pure)), by = .(file_stem, length_bin)]
+        mean_full_minus_pure = mean(full - pure),
+        # how far apart the counts are in the reads where they differ (repeat units)
+        median_gap_match = q_when(full - match, 0.5), p90_gap_match = q_when(full - match, 0.9),
+        median_gap_pure = q_when(full - pure, 0.5), p90_gap_pure = q_when(full - pure, 0.9)), by = .(file_stem, length_bin)]
 }))
 setorder(by_len, tract, file_stem, length_bin)
+# The same, pooled over all samples, from the reads themselves (quantiles cannot be pooled from per-sample values)
+gap_pooled <- rbindlist(lapply(tracts$tract, function(t) {
+  w <- by_len$bin_width[by_len$tract == t][1]
+  d <- read_tracts[get(paste0(t, "_found")) %in% TRUE, .(full = get(paste0(t, "_full")), match = get(paste0(t, "_match")), pure = get(paste0(t, "_pure")))]
+  d[, length_bin := floor(full / w) * w]
+  rbind(d[full != match, .(tract = t, bin_width = w, method = "match", differing = .N, median_gap = as.numeric(median(full - match)),
+                           p90_gap = as.numeric(stats::quantile(full - match, 0.9, type = 1))), by = length_bin],
+        d[full != pure, .(tract = t, bin_width = w, method = "pure", differing = .N, median_gap = as.numeric(median(full - pure)),
+                          p90_gap = as.numeric(stats::quantile(full - pure, 0.9, type = 1))), by = length_bin])
+}))
 ```
 
 ## Disagreement by tract length
@@ -227,11 +288,6 @@ pooled <- by_len[, .(full_ne_match = sum(full_ne_match * reads) / sum(reads), fu
 pooled_long <- melt(pooled, id.vars = c("tract", "length_bin", "reads"), measure.vars = c("full_ne_match", "full_ne_pure"),
                     variable.name = "method", value.name = "share")
 pooled_long[, method := factor(method, levels = c("full_ne_match", "full_ne_pure"), labels = levels(bl_long$method))]
-# Fill in empty lengths as NA so that lines break across gaps instead of joining distant lengths
-fill_gaps <- function(d, keys) {
-  grid <- d[, .(length_bin = seq(min(length_bin), max(length_bin), by = bin_width[1])), by = keys]
-  d[grid, on = c(keys, "length_bin")]
-}
 bl_plot <- fill_gaps(bl_long[reads >= 20], c("tract", "method", "file_stem"))
 pooled_long[, bin_width := by_len$bin_width[match(tract, by_len$tract)]]
 pooled_plot <- fill_gaps(pooled_long, c("tract", "method"))
@@ -258,6 +314,43 @@ p_agree <- ggplot(bl_plot, aes(x, share)) +
        title = "Counting-method disagreement by tract length",
        subtitle = sprintf("Grey = one sample; colour = all reads pooled\nDashed = expected from one error chance per base, fitted (%s per base)", e_text)) + theme_bw()
 print(p_agree); save_plot(p_agree, file.path(plots_dir, "count_method_agreement.png"), 10, 6)
+```
+
+## How far apart the counts are
+
+**How to read this.** The plot above shows how often the counts differ; this one shows by how much. Only reads whose **match** (top) or **pure** (bottom) count differs from their **full** count are used. The x-axis is the tract length (full count) and the y-axis is how many repeat units lower the other count is than **full**. The solid coloured line is the median over all such reads at that length, the dashed coloured line the 90th percentile (one in ten reads differs by more), and each grey line is one sample's median (lengths with at least 20 differing reads in that sample).
+
+**What it shows.** A single sequencing error costs **match** about one unit wherever it falls, so its line stays near 1 and rises only slowly as longer tracts collect more errors. **pure** loses everything on the shorter side of the break, so its gap grows with tract length: for a long tract with one break the median gap is about a quarter of the tract. A real interruption would give a gap of a fixed size at the length of the allele that carries it, in every sample with that allele.
+
+```{r gap_by_length, fig.height=6}
+gp <- copy(gap_pooled)[differing >= 20]
+gp[, method := factor(method, levels = c("match", "pure"), labels = c("match lower than full", "pure lower than full"))]
+gp[, x := length_bin + (bin_width - 1) / 2]
+gp_long <- melt(gp, id.vars = c("tract", "method", "x", "length_bin", "bin_width"), measure.vars = c("median_gap", "p90_gap"),
+                variable.name = "stat", value.name = "gap")
+gp_long[, stat := factor(stat, levels = c("median_gap", "p90_gap"), labels = c("median", "90th percentile"))]
+gs <- melt(by_len, id.vars = c("file_stem", "tract", "length_bin", "bin_width", "reads", "full_ne_match", "full_ne_pure"),
+           measure.vars = c("median_gap_match", "median_gap_pure"), variable.name = "method", value.name = "gap")
+gs[, n_diff := reads * ifelse(method == "median_gap_match", full_ne_match, full_ne_pure)]
+gs <- gs[n_diff >= 20 & !is.na(gap)]
+gs[, method := factor(method, levels = c("median_gap_match", "median_gap_pure"), labels = levels(gp$method))]
+gs[, x := length_bin + (bin_width - 1) / 2]
+gs <- fill_gaps(gs[, .(file_stem, tract, method, length_bin, bin_width, x, gap)], c("tract", "method", "file_stem"))
+gs[, x := length_bin + (bin_width - 1) / 2]
+gp_long <- fill_gaps(gp_long, c("tract", "method", "stat")); gp_long[, x := length_bin + (bin_width - 1) / 2]
+if (nrow(gp)) {
+  p_gap <- ggplot(gs, aes(x, gap)) +
+    geom_line(aes(group = file_stem), colour = "grey70", alpha = 0.6) +
+    geom_line(data = gp_long, aes(colour = method, linetype = stat), linewidth = 0.9) +
+    facet_grid(method ~ tract, scales = "free") +
+    scale_colour_manual(values = c("#4daf4a", "#e41a1c"), guide = "none") +
+    scale_linetype_manual(values = c(median = "solid", `90th percentile` = "dashed"), name = "All reads") +
+    labs(x = "Tract length, full count (units)", y = "Units lower than the full count\n(reads where the counts differ)",
+         title = "How far the counting methods differ, by tract length",
+         subtitle = "Grey = one sample's median; colour = all reads pooled") +
+    theme_bw() + theme(legend.position = "top")
+  print(p_gap); save_plot(p_gap, file.path(plots_dir, "count_method_gap.png"), 10, 6)
+} else cat("The counting methods agree for every read.\n")
 ```
 
 ## Counts against each other
@@ -397,12 +490,13 @@ if (isTRUE(params$export_read_counts)) {
 read_tracts[, c("left", "right") := NULL]
 module3_output <- list(read_tracts = read_tracts, lengths = lengths, measures = measures, primary = primary,
                        tracts = tracts, composites = composites, alignment_counts_slim = alignment_counts_slim,
-                       detection = det, method_agreement = agree, method_by_length = by_len, modal_by_method = modal_method,
+                       detection = det, method_agreement = agree, method_by_length = by_len, method_gap_pooled = gap_pooled,
+                       strand_summary = strand_summary, modal_by_method = modal_method,
                        between = if (exists("between")) between else NULL, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "03_repeat_detection.RData")
 save(module3_output, file = output_path)
 write_excel_function(list(tracts = tracts, measures = measures, detection = det, method_agreement = agree,
-                          method_by_length = by_len,
+                          method_by_length = by_len, method_gap_pooled = gap_pooled, strand_by_sample = strand_summary,
                           modal_by_method = modal_method, between_tracts = module3_output$between), xlsx_path)
 timings["Save"] <- proc.time()["elapsed"] - .t
 ```
@@ -423,6 +517,8 @@ manifest <- build_manifest(module3_output, c(
   alignment_counts_slim = "Primary tract per read in the Duke 2.x layout (left, mid, right, repeat_count_*)",
   detection = "Tract detection per sample", method_agreement = "Counting-method agreement per sample",
   method_by_length = "Counting-method agreement per sample, tract and tract length",
+  method_gap_pooled = "How far match and pure are below full, where they differ, by tract length (all samples)",
+  strand_summary = "Reverse-strand share and median length per strand, per sample and tract",
   modal_by_method = "Modal length per sample by counting method", between = "Between-tract sequences per sample",
   hash = "Parameter hash used for resume"))
 write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)

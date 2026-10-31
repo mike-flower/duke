@@ -47,21 +47,25 @@ This module handles:
 4. All of the above per read and, when UMIs were used, per molecule
 5. Comparing tracts (when more than one was measured): whether reads that changed in one tract also changed in the other
 
-**Metric definitions** (*d* = length − setpoint for each read or molecule in the range, *n* = how many):
+**Metric definitions.** Every metric compares each read (or molecule) in a range with a **setpoint**, a reference length for that sample and range (defined below the table). *d* = the read's length minus the setpoint, in repeat units; *n* = how many reads or molecules are in the range. Every column of `instability.xlsx`, with its units, is listed in the workbook's `definitions` sheet.
 
 ```{r metric_definitions, results='asis'}
+kk <- paste(params$expansion_thresholds, collapse = " and ")
 md <- data.frame(
-  Metric = c("instability_index", "expansion_index, contraction_index", "mean_expansion_size, mean_contraction_size",
-             "prop_above, prop_below, prop_at", "prop_above_k, prop_below_k", "expansion_ratio, contraction_ratio",
-             "modal_diff, median_diff, mean_diff"),
-  Definition = c("mean(<em>d</em>) &ndash; Lee et al. (2010); signed",
-                 "sum of positive (negative) <em>d</em> divided by <em>n</em>, so that II = EI + CI",
-                 "mean of positive (negative) <em>d</em> &ndash; how big a typical change is (Duke 2.x called these EI and CI)",
-                 "share with <em>d</em> &gt; 0.5, <em>d</em> &lt; &minus;0.5, |<em>d</em>| &le; 0.5",
-                 sprintf("share with <em>d</em> &ge; k or &le; &minus;k, for k = %s", paste(params$expansion_thresholds, collapse = ", ")),
-                 "reads above (below) &divide; reads at the setpoint. Kept for continuity, but its denominator is a single length bin, so it is noisy; <code>prop_above_k</code> is the stable alternative",
-                 "sample statistic &minus; setpoint"))
+  Metric = c("instability_index", "expansion_index, contraction_index", "mean_change_above_setpoint, mean_change_below_setpoint",
+             "share_at_setpoint, share_above_setpoint, share_below_setpoint", sprintf("share_Kplus_above_setpoint, share_Kplus_below_setpoint (K = %s)", kk),
+             "n_at_setpoint, n_above_setpoint, n_below_setpoint", "expansion_ratio, contraction_ratio",
+             "modal_minus_setpoint, median_minus_setpoint, mean_minus_setpoint"),
+  Definition = c("mean(<em>d</em>) &ndash; Lee et al. (2010); positive = longer than the setpoint on average",
+                 "sum of the positive (negative) <em>d</em> divided by <em>n</em>, so that instability index = expansion index + contraction index",
+                 "mean <em>d</em> among the reads longer (shorter) than the setpoint: how large a typical expansion (contraction) is. Called mean_expansion_size and mean_contraction_size before v3.1, and EI and CI in Duke 2.x",
+                 "share of reads at the setpoint (within half a unit), above it, and below it. Called prop_at, prop_above, prop_below before v3.1",
+                 "share of reads at least K repeat units above (below) the setpoint. Called prop_above_K, prop_below_K before v3.1",
+                 "the same as counts of reads or molecules",
+                 "reads above (below) &divide; reads at the setpoint. Kept for continuity, but its denominator is a single length, so it is noisy; <code>share_Kplus_above_setpoint</code> is the stable alternative",
+                 "the sample's modal, median or mean length minus the setpoint. Called modal_diff, median_diff, mean_diff before v3.1"))
 md$Metric <- vapply(strsplit(md$Metric, ", "), function(x) paste0("<code>", x, "</code>", collapse = ", "), character(1))
+md$Metric <- gsub("</code> \\(K = ", " (K = ", md$Metric)
 cat(knitr::kable(md, format = "html", escape = FALSE,
                  table.attr = 'class="table table-condensed" style="width:100%; table-layout:auto;"'))
 ```
@@ -70,8 +74,8 @@ The setpoint is the **`r params$control_setpoint_metric`**: the sample's own (`s
 
 **Outputs:**
 
-- `06_instability/instability.xlsx` – ranges, distribution statistics, peaks, controls, instability metrics, tract-comparison statistics
-- `06_instability/plots/` – timecourses by group for every measure and range, tract-comparison plots
+- `06_instability/instability.xlsx` – a `definitions` sheet (every column, what it means and its units), ranges, distribution statistics, peaks, controls, instability metrics, tract-comparison statistics
+- `06_instability/plots/` – control setpoints, instability index by range, timecourses by group for every measure and range, tract-comparison plots
 
 ---
 
@@ -193,6 +197,7 @@ The read-based setpoint is used for read-based metrics, and the molecule-based s
 ```{r controls}
 .t <- proc.time()["elapsed"]
 sp_metric <- params$control_setpoint_metric
+plot_ranges_c <- if (length(params$plot_ranges)) params$plot_ranges else head(sort(unique(range_table$range_name[range_table$measure == primary])), 2)
 ctrl_pool <- distribution_summary[!is.na(get(sp_metric))]
 if (params$control_sample_selection == "flagged") ctrl_pool <- ctrl_pool[is_control == TRUE]
 if (params$control_sample_selection == "earliest") {
@@ -207,6 +212,23 @@ if (isTRUE(params$group_control) && nrow(group_controls) == 0)
   warning("No control samples found (selection: ", params$control_sample_selection, "). Only sample-relative metrics are calculated.")
 timings["Controls"] <- proc.time()["elapsed"] - .t
 if (nrow(group_controls)) dt_full(group_controls, caption = sprintf("Group control setpoints (%s of the controls' %s)", params$control_aggregation_method, sp_metric), digits = 2)
+```
+
+`r if (nrow(group_controls)) sprintf("**How to read this.** One panel per group, for %s in ranges %s. Each point is one control sample's %s, read-based (grey) and molecule-based (teal), and the horizontal bar is the group's setpoint, the %s of those points. Points close together mean the controls agree and the setpoint is well defined; a control far from the others pulls the setpoint and every control-relative metric of its group with it, so check it before trusting that group's results.", primary, paste(plot_ranges_c, collapse = ", "), gsub("_", " ", sp_metric), params$control_aggregation_method) else ""`
+
+```{r control_plot, eval=nrow(group_controls) > 0, fig.height=4.5}
+cp <- ctrl_pool[measure == primary & analysis_range_name %in% plot_ranges_c][, unit := factor(unit, levels = c("reads", "molecules"))]
+gcp <- group_controls[measure == primary & analysis_range_name %in% plot_ranges_c]
+if (nrow(cp)) {
+  p_ctrl <- ggplot(cp, aes(unit, get(sp_metric), colour = unit)) +
+    geom_crossbar(data = gcp, aes(y = control_setpoint, ymin = control_setpoint, ymax = control_setpoint), width = 0.6, colour = "grey20", linewidth = 0.4) +
+    geom_jitter(width = 0.12, height = 0, size = 2, alpha = 0.8) +
+    facet_grid(analysis_range_name ~ group_label, scales = "free_y", labeller = labeller(group_label = as_labeller(wrap_label))) +
+    scale_colour_manual(values = unit_cols, guide = "none") +
+    labs(x = NULL, y = paste("Control sample", gsub("_", " ", sp_metric)), title = paste("Control samples and group setpoints:", primary),
+         subtitle = "Points = control samples; bar = the group setpoint") + theme_bw() + theme(strip.text = element_text(size = 7))
+  print(p_ctrl); save_plot(p_ctrl, file.path(plots_dir, "control_setpoints.png"), min(40, 3 + 2.2 * uniqueN(cp$group_label)), 2 + 2.5 * length(plot_ranges_c))
+}
 ```
 
 ---
@@ -247,11 +269,11 @@ for (u in names(wide)) {
   inst_list[[u]] <- rbindlist(res)
 }
 instability_metrics <- rbindlist(inst_list)
-setnames(instability_metrics, "setpoint", "setpoint_repeat_length")
+setnames(instability_metrics, "setpoint", "setpoint_length")
 instability_metrics <- distribution_summary[, .(file_stem, unit, measure, analysis_range_name, group, group_label, time, is_control,
                                                 modal_length, median_length, mean_length, sd)][instability_metrics, on = .(file_stem, unit, measure, analysis_range_name)]
-instability_metrics[, `:=`(modal_diff = modal_length - setpoint_repeat_length, median_diff = median_length - setpoint_repeat_length,
-                           mean_diff = mean_length - setpoint_repeat_length)]
+instability_metrics[, `:=`(modal_minus_setpoint = modal_length - setpoint_length, median_minus_setpoint = median_length - setpoint_length,
+                           mean_minus_setpoint = mean_length - setpoint_length)]
 cz <- setp[, .(file_stem, unit, measure, analysis_range_name, own, control_setpoint, control_sd)]
 instability_metrics <- cz[instability_metrics, on = .(file_stem, unit, measure, analysis_range_name)]
 instability_metrics[setpoint_type == "control_relative" & control_sd > 0, z_score := (own - control_setpoint) / control_sd]
@@ -263,18 +285,20 @@ timings["Instability metrics"] <- proc.time()["elapsed"] - .t
 
 ```{r headline_setup}
 plot_ranges <- if (length(params$plot_ranges)) params$plot_ranges else head(sort(unique(range_table$range_name[range_table$measure == primary])), 2)
-hl <- intersect(params$headline_metrics, names(instability_metrics))
+hl <- intersect(update_metric_names(params$headline_metrics), names(instability_metrics))
 hl_type <- if (params$headline_setpoint_type %in% instability_metrics$setpoint_type) params$headline_setpoint_type else "sample_relative"
 hl_labels <- c(modal_length = "Modal length", median_length = "Median length", mean_length = "Mean length",
                instability_index = "Instability index", expansion_index = "Expansion index", contraction_index = "Contraction index",
-               mean_expansion_size = "Mean expansion size", expansion_ratio = "Expansion ratio",
-               setNames(paste0("Share >= setpoint + ", params$expansion_thresholds), paste0("prop_above_", params$expansion_thresholds)),
-               prop_above = "Reads above setpoint")
+               mean_change_above_setpoint = "Mean change above\nthe setpoint", mean_change_below_setpoint = "Mean change below\nthe setpoint",
+               expansion_ratio = "Expansion ratio",
+               setNames(paste0("Share ", params$expansion_thresholds, "+ units\nabove the setpoint"), threshold_col(params$expansion_thresholds, "above")),
+               setNames(paste0("Share ", params$expansion_thresholds, "+ units\nbelow the setpoint"), threshold_col(params$expansion_thresholds, "below")),
+               share_above_setpoint = "Share above\nthe setpoint", share_below_setpoint = "Share below\nthe setpoint")
 timecourse_plot <- function(d, title) {
   # One row per metric (each with its own y axis, % ticks for proportions), one column per group
   rows <- lapply(seq_along(hl), function(k) {
     v <- hl[k]; dd <- d[, .(time, group_label, unit, value = get(v))]
-    is_prop <- grepl("^prop", v)
+    is_prop <- grepl("^share", v)
     base <- if (has_time) ggplot(dd, aes(time, value, colour = unit)) + geom_point(alpha = 0.6, size = 1.6) +
         stat_summary(aes(group = unit), fun = mean, geom = "line", linewidth = 0.8)
       else ggplot(dd, aes(group_label, value, colour = unit)) + geom_boxplot(outlier.shape = NA, fill = NA) +
@@ -310,10 +334,35 @@ for (m in measures$measure) for (rg in sort(unique(range_table$range_name[range_
 timings["Timecourse plots"] <- proc.time()["elapsed"] - .t
 ```
 
+## Instability index across ranges
+
+**How to read this.** The `r primary` instability index (`r gsub("_", " ", hl_type)`) of every sample in every range, one panel per group: the x-axis is the range (as defined in the settings file), each point one sample, read-based in grey and molecule-based in teal, with a box for the spread across samples. **What it shows.** How much the result depends on the range chosen. Where a range cuts through an allele's peak, or takes in a smear of short PCR products, its index moves away from the neighbouring ranges; a range that agrees with its neighbours, and where reads and molecules agree, is a safer headline.
+
+```{r ii_by_range, fig.height=min(30, 1.5 + 3 * ceiling(uniqueN(instability_metrics$group_label) / 2))}
+ir <- instability_metrics[measure == primary & setpoint_type == hl_type & !is.na(instability_index)]
+if (nrow(ir)) {
+  # One label per range; a range whose bounds differ between samples is labelled as such
+  rlab <- as.data.table(range_table)[measure == primary, .(range_text = if (uniqueN(range_text) == 1) range_text[1] else "varies by sample"),
+                                     by = .(analysis_range_name = range_name)]
+  ir <- rlab[ir, on = "analysis_range_name"][, unit := factor(unit, levels = c("reads", "molecules"))]
+  ir[, xlab := factor(paste0(analysis_range_name, "\n", range_text), levels = unique(paste0(rlab$analysis_range_name, "\n", rlab$range_text)[order(rlab$analysis_range_name)]))]
+  p_ir <- ggplot(ir, aes(xlab, instability_index, colour = unit)) + geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
+    geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.5, size = 1) +
+    facet_wrap(~ group_label, ncol = 2, labeller = as_labeller(wrap_label)) +
+    scale_colour_manual(values = unit_cols, name = NULL) +
+    labs(x = "Analysis range", y = "Instability index (units)", title = paste("Instability index by range:", primary),
+         subtitle = paste("Each point is one sample;", gsub("_", " ", hl_type))) +
+    theme_bw() + theme(axis.text.x = if (uniqueN(ir$analysis_range_name) > 6) element_text(angle = 90, vjust = 0.5, hjust = 1, size = 7) else element_text(size = 8),
+                       legend.position = "top")
+  print(p_ir); save_plot(p_ir, file.path(plots_dir, "instability_index_by_range.png"), min(40, 4 + 0.7 * uniqueN(ir$analysis_range_name) * 2), min(40, 1.5 + 3 * ceiling(uniqueN(ir$group_label) / 2)))
+}
+```
+
 ```{r instability_table}
-show_cols <- c("file_stem", "unit", "measure", "analysis_range_name", "group", "time", "setpoint_type", "setpoint_repeat_length",
+show_cols <- c("file_stem", "unit", "measure", "analysis_range_name", "group", "time", "setpoint_type", "setpoint_length",
                "n_used", "modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "contraction_index",
-               paste0("prop_above_", params$expansion_thresholds), "expansion_ratio", "z_score")
+               threshold_col(params$expansion_thresholds, "above"), "expansion_ratio", "z_score")
 dt_full(instability_metrics[, intersect(show_cols, names(instability_metrics)), with = FALSE], caption = "Instability metrics (key columns; every column is in instability.xlsx)", digits = 3)
 ```
 
@@ -404,7 +453,7 @@ module6_output <- list(settings = settings, range_table = range_table, distribut
                        excluded = st$excluded, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "06_instability.RData")
 save(module6_output, file = output_path)
-write_excel_function(list(range_table = range_table, distribution_summary = distribution_summary, modal_peaks = modal_peaks,
+write_excel_function(list(definitions = metric_definitions(params$expansion_thresholds), range_table = range_table, distribution_summary = distribution_summary, modal_peaks = modal_peaks,
                           group_controls = group_controls, instability_metrics = instability_metrics, 
                           pair_stats = module6_output$pair_stats, excluded_samples = st$excluded), xlsx_path)
 ```
