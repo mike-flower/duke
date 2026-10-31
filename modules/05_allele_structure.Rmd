@@ -276,11 +276,15 @@ var_summary <- variants[, .(alleles_in_consensus = sum(in_consensus), alleles_mi
 timings["Variants"] <- proc.time()["elapsed"] - .t
 ```
 
+```{asis, echo=params$cluster}
 **How the alleles are described.** Each sample's two largest clusters are its alleles 1 and 2, numbered by length (allele 1 is the shorter), so the same number means the same kind of allele in every sample; further clusters are numbered 3 upwards. For each allele: its modal length for every measure, and the region between the reference flanks written out in repeat notation from its consensus, e.g. (CAG)17 CAACAGCCGCCA (CCG)7, so the tract lengths and interruptions can be read directly. `r if (params$cluster && params$call_variants) sprintf("Variants are the differences between an allele's flank consensus and the reference, so each belongs to one allele (they are phased). Each carries its read support: the share of that allele's reads (up to %s per allele) that contain the variant with %d bases of its consensus either side, out of those reads that contain either the variant or the reference base in that context. Variants not in an allele's consensus are reported when at least %s of its reads carry them (substitutions only; found in the reads aligned for the consensus and confirmed by the read count). A consensus variant that fewer than half of the counted reads carry is marked not confirmed (column confirmed; FILTER LowSupport in the VCF): it usually comes from a consensus misaligned around an indel or inside a repeat, so check it in the BAM before relying on it.", format(params$allele_support_reads, big.mark = ","), 8L, if (is.na(params$allele_minor_share)) "-" else percent(params$allele_minor_share)) else ""`
+```
 
 `r if (params$cluster) sprintf("Variants can only be called where the reads give flank sequence: the allele consensuses cover a median of %d bp of left flank and %d bp of right flank (counting any sequence between the tract and the reference flank, such as the rest of an N block), out of %s and %s bp in the reference (%s, N block at %d–%d).", as.integer(stats::median(cons$left_bp, na.rm = TRUE)), as.integer(stats::median(cons$right_bp, na.rm = TRUE)), format(ref$n_start - 1, big.mark = ","), format(nchar(ref$full) - ref$n_end, big.mark = ","), ref$ref_id, ref$n_start, ref$n_end) else ""`
 
+```{asis, echo=params$cluster}
 ## Alleles in every sample
+```
 
 ```{r allele_table, eval=params$cluster}
 show <- c("file_stem", "allele", "cluster_number", "reads", "proportion", grep("^modal_", names(cons), value = TRUE), "repeat_notation",
@@ -288,11 +292,13 @@ show <- c("file_stem", "allele", "cluster_number", "reads", "proportion", grep("
 dt_full(cons[, intersect(show, names(cons)), with = FALSE], caption = "Alleles per sample: reads, modal length of every measure, the region between the flanks in repeat notation, and variants", digits = 3)
 ```
 
+```{asis, echo=params$cluster}
 ## Variants across the cohort
+```
 
 `r if (params$cluster && params$call_variants && exists("support_all") && nrow(support_all)) "**How to read this.** One row per variant (reference position, reference > alternative base), one column per sample, one panel per allele. The colour is the variant's read support in that allele: the share of the allele's reads carrying it. Every variant found in either allele of a sample is measured in both, so a tile with a dot is in that allele's consensus, a light tile without a dot is carried by a minority of its reads, and a dark tile is an allele that does not carry it (support near 0%). A grey tile is a variant whose support could not be counted, because no read contained it or the reference with the same surrounding bases; that usually means the call sits in a misaligned or error-prone stretch, and such calls are marked not confirmed. A heterozygous flank SNP shows as bright in one allele's panel and dark in the other, in every sample of a line; a variant at intermediate support in one sample only is worth checking in the BAM." else if (params$cluster && params$call_variants) "No allele differs from the reference within the flank sequence covered, and no minority variant reached the threshold, so the VCF holds only the repeat record." else ""`
 
-```{r variant_map, eval=params$cluster && params$call_variants && exists("support_all") && nrow(support_all) > 0, fig.height=min(30, 2.5 + 0.25 * uniqueN(paste(support_all$pos, support_all$ref, support_all$alt)))}
+```{r variant_map, eval=params$cluster && params$call_variants && exists("support_all") && nrow(support_all) > 0, fig.height=if (exists("support_all")) min(30, 2.5 + 0.25 * uniqueN(paste(support_all$pos, support_all$ref, support_all$alt))) else 4}
 lab_v <- short_labels(cons$file_stem)
 vm <- copy(support_all)[allele %in% 1:2][, `:=`(sample = factor(lab_v[file_stem], levels = unique(lab_v[sort(unique(cons$file_stem))])),
                                              vlab = sprintf("%d %s>%s", pos, ref, alt), allele_lab = paste("Allele", allele))]
@@ -310,7 +316,9 @@ if (nrow(vm)) {
 if (exists("var_summary")) dt_full(var_summary, caption = "Variants across the cohort: alleles carrying each in their consensus or as a minority, samples, and median read support", digits = 3)
 ```
 
+```{asis, echo=params$cluster}
 ## One sample's alleles
+```
 
 `r if (params$cluster) "Each sample's alleles drawn for review, one row per allele. The middle panel is the region between the reference flanks in repeat notation. The side panels show the stretch of each flank the allele's consensus covers (grey) on reference coordinates, with each variant marked: filled when it is in the allele's consensus, open when it is carried by a minority of the reads, labelled with its position, bases and read support. The first sample is shown; every sample is in plots/alleles/." else ""`
 

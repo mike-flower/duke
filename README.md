@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.2.0** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.2.1** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -623,6 +623,10 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 **v3.0.10**
 - Module 5 haplotype clustering: the left and right flanks are no longer joined into one sequence for k-mer counting, so no k-mer spans the junction. Junction k-mers combined the bases either side of the tract, so jitter where the tract ends changed ~15 k-mers in the same reads at once, which looks like a real variant; on the jasmine CAG + CCG run this split ~10% of the expanded allele into a second "haplotype" (H2) in 45 of 66 samples, with the same length distribution and a consensus that differed only in the bases next to the tract. On simulated reads the old code split off 9% of reads on boundary jitter alone and missed a real SNP carried by 30% of reads; the new code keeps one cluster for jitter and splits on the SNP. A real variant within ~7 bp of the tract is no longer used for haplotypes.
 - Module 5 report: the variants section says how much flank sequence the consensuses cover (on a UMI amplicon this is ~50 bp left and ~80 bp right of the tract, not the whole reference flank), and says plainly when no consensus differs from the reference, rather than introducing a table that is not there.
+
+**v3.2.1**
+- Module 5 runs with clustering off again: the variant map's figure height was worked out from the read-support table even when the chunk was skipped, so a run with `cluster = FALSE` stopped with `object 'support_all' not found`.
+- Module 5 with clustering off no longer shows the allele headings (*Alleles in every sample*, *Variants across the cohort*, *One sample's alleles*) or the note on how alleles are numbered, which were empty.
 
 **v3.2.0** – phased alleles in standard formats, with a review view
 - Module 5 describes each sample by its **alleles**: the two clusters with most reads are alleles 1 and 2, numbered by length (1 = shorter), so the same number means the same kind of allele in every sample; further clusters are 3 upwards. For each allele: the modal length of every measure, and the region between the reference flanks in repeat notation from its consensus, e.g. `(CAG)17 CAACAGCCGCCA (CCG)7 CCTCCT`.
