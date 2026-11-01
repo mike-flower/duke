@@ -117,6 +117,7 @@ duke_param_spec <- function() {
 
     # --- Module 6: instability --------------------------------------------------------------
     .p("range_peak_span", 3L, "int", "Instability", "Window for modal peak detection"),
+    .p("range_min_n", 50L, "int", "Instability", "Fewest reads (or molecules) a sample needs in a range for that range's statistics and metrics to be calculated; below it they are left blank, and a control sample is left out of the setpoint"),
     .p("group_control", TRUE, "lgl", "Instability", "Calculate group control setpoints"),
     .p("control_sample_selection", "flagged", "chr", "Instability", "'flagged', 'earliest' or 'all'"),
     .p("control_setpoint_metric", "median_length", "chr", "Instability", "'modal_length', 'mean_length' or 'median_length'"),

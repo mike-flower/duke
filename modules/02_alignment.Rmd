@@ -109,7 +109,7 @@ p_funnel <- ggplot(fl, aes(step, pct)) +
   geom_line(aes(group = interaction(file_stem, ref_id)), colour = "grey70", alpha = 0.5) +
   geom_boxplot(outlier.shape = NA, fill = NA, colour = "grey30", width = 0.5) +
   stat_summary(fun = mean, geom = "point", shape = 18, size = 4, colour = "red") +
-  stat_summary(fun = mean, geom = "text", colour = "red", size = 3.2, vjust = -1.2, aes(label = percent(after_stat(y), 0.1))) +
+  stat_summary(fun = mean, geom = "text", colour = "red", size = 3.2, hjust = 0, position = position_nudge(x = 0.3), aes(label = percent(after_stat(y), 0.1))) +
   scale_y_continuous(labels = pct_axis(), limits = c(0, 1.05)) +
   facet_wrap(~ ref_id) +
   labs(x = NULL, y = "Reads remaining (% of input)", title = "Reads remaining after each alignment step",
@@ -155,7 +155,8 @@ qual <- dplyr::bind_rows(lapply(names(alignments), function(r) {
 p_quality <- qual %>% pivot_longer(c(left_mapq, right_mapq), names_to = "flank", values_to = "mapq") %>%
   dplyr::mutate(flank = ifelse(flank == "left_mapq", "Left flank", "Right flank")) %>%
   ggplot(aes(flank, mapq)) + box_points_mean() + facet_wrap(~ ref_id) +
-  labs(x = NULL, y = "Mean MAPQ", title = "Mapping quality per sample") + theme_bw()
+  expand_limits(y = c(0, 60)) +
+  labs(x = NULL, y = "Mean MAPQ", title = "Mapping quality per sample", subtitle = "Axis drawn over minimap2's full range, 0 to 60") + theme_bw()
 print(p_quality); save_plot(p_quality, file.path(plots_dir, "mapping_quality.png"), 8, 4.5)
 ```
 

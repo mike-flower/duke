@@ -287,8 +287,9 @@ Each point is one sample: its mean read length against its mean base quality (Ph
 ```{r qc_scatter, fig.height=5}
 p_qc <- ggplot(qc_summary, aes(mean_length, mean_phred, size = read_count)) +
   geom_point(shape = 21, fill = "skyblue", alpha = 0.7) + scale_size_continuous(labels = comma, name = "Reads") +
-  scale_x_continuous(labels = comma) + labs(x = "Mean read length (bp)", y = "Mean base quality (Phred)",
-                                            title = "Read length against base quality, per sample") + theme_bw()
+  scale_x_continuous(labels = comma) + expand_limits(y = 0) +
+  labs(x = "Mean read length (bp)", y = "Mean base quality (Phred)", title = "Read length against base quality, per sample",
+       subtitle = "Quality axis from 0, so that small differences are not magnified") + theme_bw()
 print(p_qc); save_plot(p_qc, file.path(plots_dir, "quality_vs_length.png"), 10, 5)
 ```
 

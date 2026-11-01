@@ -68,17 +68,20 @@ dist_rows <- function(d, title = NULL, xlab = "Repeat length", binwidth = 1, bw 
     ggplot2::scale_fill_manual(values = unit_cols, guide = "none") + ggplot2::scale_colour_manual(values = unit_cols, guide = "none") +
     ggplot2::scale_y_continuous(labels = scales::label_percent(), expand = ggplot2::expansion(mult = c(0, 0.08))) +
     ggplot2::coord_cartesian(xlim = xlim) +
-    ggplot2::labs(x = xlab, y = "Share at each length", title = title) + ggplot2::theme_bw()
+    ggplot2::labs(x = xlab, y = "Share", title = title) + ggplot2::theme_bw()
   if (!is.null(marks) && nrow(marks)) {
     # marks: unit, stat, value - drawn per row, so read and molecule statistics are each beside their own data
     marks <- data.table::as.data.table(marks)[, unit := factor(unit, levels = levels(d$unit))]
     ytop <- h[, .(top = max(share)), by = unit]
-    marks <- ytop[marks, on = "unit"][, y := top * c(modal = 0.95, median = 0.78, mean = 0.61)[as.character(stat)]]
+    # The values are listed in the panel's top right corner rather than beside their lines:
+    # modal, median and mean are often within a unit of each other, and labels at the
+    # lines would sit on top of one another
+    marks <- ytop[marks, on = "unit"][, y := top * c(modal = 1.0, median = 0.86, mean = 0.72)[as.character(stat)]]
     cols <- c(modal = "#e41a1c", median = "#984ea3", mean = "#ff7f00")
     p <- p +
       ggplot2::geom_vline(data = marks, ggplot2::aes(xintercept = value), colour = cols[as.character(marks$stat)], linewidth = 0.4, linetype = "dashed") +
-      ggplot2::geom_label(data = marks, ggplot2::aes(x = value, y = y, label = sprintf("%s %.1f", stat, value)), colour = cols[as.character(marks$stat)],
-                          inherit.aes = FALSE, size = 2.6, hjust = -0.05, label.size = 0, fill = "white", alpha = 0.85)
+      ggplot2::geom_text(data = marks, ggplot2::aes(x = Inf, y = y, label = sprintf("%s %.1f", stat, value)), colour = cols[as.character(marks$stat)],
+                         inherit.aes = FALSE, size = 2.6, hjust = 1.05, vjust = 1)
   }
   p
 }
@@ -143,7 +146,8 @@ hist_rows_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length", 
     ggplot2::scale_y_continuous(labels = scales::label_percent(), n.breaks = 3) +
     ggplot2::coord_cartesian(xlim = xlim) +
     ggplot2::labs(x = xlab, y = "Share at each length", title = title,
-                  subtitle = "One row per sample; each panel is the share of that sample's reads (grey) or molecules (teal) at each length, on its own scale") +
+                  subtitle = if (data.table::uniqueN(h$unit) > 1) "One row per sample; each panel is the share of that sample's reads (grey) or molecules (teal) at each length, on its own scale"
+                             else "One row per sample; each panel is the share of that sample's reads at each length, on its own scale") +
     ggplot2::theme_bw() + ggplot2::theme(strip.text = ggplot2::element_text(size = 7, margin = ggplot2::margin(1, 1, 1, 1)),
                                          panel.spacing.y = grid::unit(2, "pt"), axis.text.y = ggplot2::element_text(size = 6))
 }

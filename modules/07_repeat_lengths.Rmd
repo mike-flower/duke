@@ -129,7 +129,7 @@ For each group, its samples stacked in time order, for the `r primary` length: a
 - **Density (ridge).** Each sample's reads as a grey density, scaled to the sample's own height, so its shape is visible whatever its depth`r if (!is.null(mol)) ", with the molecules as a teal line on the same row" else ""`. Below each ridge, every read is a dot (up to `r format(params$plot_dots_max, big.mark = ",")` per sample, drawn at random, spread slightly sideways), so where reads are sparse – a thin expansion tail, a few outliers – they can be seen individually; the red dashed line is the reads' modal length. In the all-lengths figure the largest allele sets the height, so look at the range figures for the shape of a smaller one.
 - **Histogram.** One row per sample, with reads`r if (!is.null(mol)) " and molecules in separate columns" else ""`, each panel the share of that sample's reads`r if (!is.null(mol)) " (or molecules)" else ""` at each length on its own scale.
 
-The first group's figures are shown here; every group is in `plots/all_lengths/by_group/` and `plots/{range}/by_group/`.
+The first group's figures are shown here (the density and histogram for all lengths, and the density for each range drawn); every group is in `plots/all_lengths/by_group/` and `plots/{range}/by_group/`.
 
 ```{r by_group, results='asis', fig.height=5}
 .t <- proc.time()["elapsed"]
@@ -168,7 +168,7 @@ done <- apply_fn(seq_len(nrow(jobs)), function(i) {
 })
 # The first group's figures, drawn again here for the report
 g1 <- meta$group_label[1]
-for (f in names(folders)[seq_len(min(length(folders), 2))]) {
+for (f in names(folders)[seq_len(min(length(folders), 3))]) {
   rg <- folders[[f]]; fd <- folder_data(meta[group_label == g1, file_stem], rg)
   if (!nrow(fd$rd)) next
   xl <- folder_xlim(fd$rd$length); n <- uniqueN(fd$rd$file_stem)

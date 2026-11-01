@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.2.1"
+duke_version <- "3.2.2"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -30,7 +30,7 @@ duke_version <- "3.2.1"
           "haplotype_cluster_max", "haplotype_cluster_downsample", "haplotype_region", "haplotype_trim_length",
           "consensus_threshold", "consensus_downsample", "call_variants", "waterfall", "waterfall_downsample",
           "waterfall_per_cluster", "waterfall_flank_bp"),
-  `6` = c("settings_signature", "range_peak_span", "group_control", "control_sample_selection",
+  `6` = c("settings_signature", "range_peak_span", "range_min_n", "group_control", "control_sample_selection",
           "control_setpoint_metric", "control_aggregation_method", "use_manual_controls", "expansion_thresholds", "cohort_plot_by",
           "headline_metrics", "headline_setpoint_type", "plot_ranges", "measure_pairs", "pair_max_points"),
   `7` = c("sample_cards", "repeat_histogram_binwidth", "settings_signature"))

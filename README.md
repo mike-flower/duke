@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.2.1** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.2.2** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -299,6 +299,7 @@ Distribution statistics (modal, median, mean, SD, IQR, 5th and 95th percentiles,
 | Parameter | Default | Format | What it does |
 |---|---|---|---|
 | `range_peak_span` | `3` | whole number | Window for modal peak detection |
+| `range_min_n` | `50` | whole number | Fewest reads (or molecules) a sample needs in a range for that range's statistics and metrics; below it they are left blank and a control sample is left out of the setpoint |
 | `group_control` | `TRUE` | TRUE / FALSE | Calculate group control setpoints |
 | `control_sample_selection` | `flagged` | text | `flagged`, `earliest` or `all` |
 | `control_setpoint_metric` | `median_length` | text | `modal_length`, `mean_length` or `median_length` |
@@ -623,6 +624,14 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 **v3.0.10**
 - Module 5 haplotype clustering: the left and right flanks are no longer joined into one sequence for k-mer counting, so no k-mer spans the junction. Junction k-mers combined the bases either side of the tract, so jitter where the tract ends changed ~15 k-mers in the same reads at once, which looks like a real variant; on the jasmine CAG + CCG run this split ~10% of the expanded allele into a second "haplotype" (H2) in 45 of 66 samples, with the same length distribution and a consensus that differed only in the bases next to the tract. On simulated reads the old code split off 9% of reads on boundary jitter alone and missed a real SNP carried by 30% of reads; the new code keeps one cluster for jitter and splits on the SNP. A real variant within ~7 bp of the tract is no longer used for haplotypes.
 - Module 5 report: the variants section says how much flank sequence the consensuses cover (on a UMI amplicon this is ~50 bp left and ~80 bp right of the tract, not the whole reference flank), and says plainly when no consensus differs from the reference, rather than introducing a table that is not there.
+
+**v3.2.2**
+- Module 5 read support for insertions and deletions in repetitive sequence: the read context around each variant is widened (from 8 up to 60 bases each side) until the reference and alternative contexts no longer contain each other, and a read matching both is not counted. Before, a short reference context sat inside the alternative one for a duplicated stretch, so every read counted as reference as well, and a real variant showed ~50% support in both alleles and was marked `LowSupport`. On the RUES2/QS5 MSN run this was a 20 bp duplication at 2068 (`CCGCCTCCGCCGGCGCGGCC`) on the QS5 expanded allele, which now shows 97–100% support in that allele and 2–7% in the other.
+- Module 5 length clusters: neighbouring clusters that are one allele are merged after the Gaussian mixture – a stutter shoulder within max(2, 10% of the length) units holding under half the peak height (e.g. a 6% cluster at 21 next to an allele at 20, which became a spurious allele 2), or two halves of one broad expanded peak with no dip between them (e.g. an expanded allele cut into clusters at 126 and 127). Heterozygotes one or two units apart with similar read counts stay separate.
+- Module 5 variant map: samples are rows and variants columns, so sample names read across; a long insertion or deletion is labelled by its first bases and length.
+- Shorter sample labels in plots: parts of the file name that every sample shares (e.g. `hifi_reads`, `demux`) are dropped as well as a shared start, so `m84277_251024_160109_s2.hifi_reads.bc2001.demux.bc1002--bc1050` shows as `251024_160109_s2.bc2001.bc1002--bc1050`.
+- Module 6: new `range_min_n` (default 50). A sample with fewer reads (or molecules) than this in a range gets no statistics or metrics for that range (`too_few` = TRUE, count kept in `n_used`), and a control sample below it is left out of that range's group setpoint. Before, a few stray reads gave full results: on the RUES2/QS5 run, samples with no expanded allele had 1–27 reads at ≥36 CAG (barcode cross-talk and PCR smear), which gave a control setpoint of 39 from a single read and instability indices of 45–88. The counts plot marks the threshold.
+- Report clarity: mapping quality and base quality are drawn on their full scales (0–60, and from 0), so differences in the second decimal place no longer look large; the read-accounting labels sit beside the boxes; per-sample lines in Module 3 break where a sample has no data instead of jumping across the gap (gap rows lost their position); sample-card modal, median and mean are listed in the panel corner instead of on top of each other; Module 7 shows the density for every range drawn; text about molecules only appears in UMI runs; the Module 3 between-tract text is no longer specific to HTT; Module 5 reports flank coverage in reference bases; cluster counts have whole-number axes.
 
 **v3.2.1**
 - Module 5 runs with clustering off again: the variant map's figure height was worked out from the read-support table even when the chunk was skipped, so a run with `cluster = FALSE` stopped with `object 'support_all' not found`.

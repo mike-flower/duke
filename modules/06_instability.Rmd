@@ -152,10 +152,15 @@ for (u in names(wide)) {
       rm <- W[[r$range_measure]]
       n_total <- if (is.null(rm)) 0L else sum(!is.na(rm) & rm >= r$lo & rm <= r$hi)
       x <- select_values(W, r)
+      # Too few reads in the range: counted, but no statistics (stray reads from another
+      # sample or a PCR smear would otherwise give a modal length and a setpoint)
+      few <- length(x) < params$range_min_n
+      ds <- distribution_stats(if (few) numeric(0) else x); ds$n_used <- length(x)
       out[[i]] <- data.frame(file_stem = s, unit = u, measure = r$measure, range_measure = r$range_measure,
-                             analysis_range_name = r$range_name, range_label = r$range_label, n_total = n_total, distribution_stats(x))
+                             analysis_range_name = r$range_name, range_label = r$range_label, n_total = n_total,
+                             too_few = few, ds)
       pk[[i]] <- data.frame(file_stem = s, unit = u, measure = r$measure, analysis_range_name = r$range_name,
-                            find_modal_peaks(x, r$max_peaks, params$range_peak_span))
+                            find_modal_peaks(if (few) numeric(0) else x, r$max_peaks, params$range_peak_span))
     }
     list(dist = rbindlist(out), peaks = rbindlist(pk))
   })
@@ -169,15 +174,17 @@ timings["Distributions"] <- proc.time()["elapsed"] - .t
 
 ## Reads and molecules in each range
 
-Each point is one sample: how many reads (and molecules) fall in each range of the primary measure. Ranges with only a handful of reads per sample give unreliable metrics.
+Each point is one sample: how many reads (and molecules) fall in each range of the primary measure. The dashed line is `range_min_n` (`r params$range_min_n`): a sample with fewer reads (or molecules) than this in a range gets no statistics or metrics for that range (they are left blank, with the count kept in `n_used`), and a control sample below it is left out of that range's group setpoint. This stops a few stray reads – from a PCR smear, or from another sample through barcode cross-talk – from giving a modal length or an instability index, as in a range above the normal allele of a sample with no expanded allele. `r rc_few <- distribution_summary[too_few == TRUE & n_used > 0, .N]; if (rc_few) sprintf('In this run %d sample–range combinations had at least one read but fewer than %d.', rc_few, params$range_min_n) else ''`
 
 ```{r range_counts, fig.height=5}
 rc <- distribution_summary[measure == primary]
 p_rc <- ggplot(rc, aes(analysis_range_name, pmax(n_total, 1), colour = unit)) +
   geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
   geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.6, size = 1.2) +
+  geom_hline(yintercept = params$range_min_n, linetype = "dashed", colour = "grey30") +
   scale_y_log10(labels = comma) + scale_colour_manual(values = unit_cols, name = NULL) +
-  labs(x = "Analysis range", y = "Count in range (log scale)", title = paste("Reads and molecules per range:", primary)) +
+  labs(x = "Analysis range", y = "Count in range (log scale)", title = paste("Reads and molecules per range:", primary),
+       subtitle = sprintf("Dashed line = range_min_n (%d): below it a range gets no statistics or metrics", params$range_min_n)) +
   theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 print(p_rc); save_plot(p_rc, file.path(plots_dir, "counts_per_range.png"), 11, 5)
 ```
@@ -214,7 +221,7 @@ timings["Controls"] <- proc.time()["elapsed"] - .t
 if (nrow(group_controls)) dt_full(group_controls, caption = sprintf("Group control setpoints (%s of the controls' %s)", params$control_aggregation_method, sp_metric), digits = 2)
 ```
 
-`r if (nrow(group_controls)) sprintf("**How to read this.** One panel per group, for %s in ranges %s. Each point is one control sample's %s, read-based (grey) and molecule-based (teal), and the horizontal bar is the group's setpoint, the %s of those points. Points close together mean the controls agree and the setpoint is well defined; a control far from the others pulls the setpoint and every control-relative metric of its group with it, so check it before trusting that group's results.", primary, paste(plot_ranges_c, collapse = ", "), gsub("_", " ", sp_metric), params$control_aggregation_method) else ""`
+`r if (nrow(group_controls)) sprintf("**How to read this.** One panel per group, for %s in ranges %s. Each point is one control sample's %s%s, and the horizontal bar is the group's setpoint, the %s of those points. Points close together mean the controls agree and the setpoint is well defined; a control far from the others pulls the setpoint and every control-relative metric of its group with it, so check it before trusting that group's results.", primary, paste(plot_ranges_c, collapse = ", "), gsub("_", " ", sp_metric), if ("molecules" %in% names(units)) ", read-based (grey) and molecule-based (teal)" else "", params$control_aggregation_method) else ""`
 
 ```{r control_plot, eval=nrow(group_controls) > 0, fig.height=4.5}
 cp <- ctrl_pool[measure == primary & analysis_range_name %in% plot_ranges_c][, unit := factor(unit, levels = c("reads", "molecules"))]
@@ -261,7 +268,8 @@ for (u in names(wide)) {
         out[[length(out) + 1]] <- data.frame(file_stem = s, unit = u, measure = r$measure, analysis_range_name = r$range_name,
           setpoint_type = type, setpoint_metric = sp_metric,
           setpoint_source = if (type == "sample_relative") "sample" else spi$control_source[1],
-          instability_stats(x, s0, params$expansion_thresholds))
+          if (length(x) < params$range_min_n) { st <- instability_stats(numeric(0), s0, params$expansion_thresholds); st$n_used <- length(x); st }
+          else instability_stats(x, s0, params$expansion_thresholds))
       }
     }
     rbindlist(out)
@@ -336,7 +344,7 @@ timings["Timecourse plots"] <- proc.time()["elapsed"] - .t
 
 ## Instability index across ranges
 
-**How to read this.** The `r primary` instability index (`r gsub("_", " ", hl_type)`) of every sample in every range, one panel per group: the x-axis is the range (as defined in the settings file), each point one sample, read-based in grey and molecule-based in teal, with a box for the spread across samples. **What it shows.** How much the result depends on the range chosen. Where a range cuts through an allele's peak, or takes in a smear of short PCR products, its index moves away from the neighbouring ranges; a range that agrees with its neighbours, and where reads and molecules agree, is a safer headline.
+**How to read this.** The `r primary` instability index (`r gsub("_", " ", hl_type)`) of every sample in every range, one panel per group: the x-axis is the range (as defined in the settings file), each point one sample`r if ("molecules" %in% names(units)) ", read-based in grey and molecule-based in teal" else ""`, with a box for the spread across samples. **What it shows.** How much the result depends on the range chosen. Where a range cuts through an allele's peak, or takes in a smear of short PCR products, its index moves away from the neighbouring ranges; a range that agrees with its neighbours, and where reads and molecules agree, is a safer headline.
 
 ```{r ii_by_range, fig.height=min(30, 1.5 + 3 * ceiling(uniqueN(instability_metrics$group_label) / 2))}
 ir <- instability_metrics[measure == primary & setpoint_type == hl_type & !is.na(instability_index)]

@@ -192,7 +192,7 @@ update_metric_names <- function(x) {
 metric_definitions <- function(thresholds) {
   k <- paste(thresholds, collapse = " and ")
   d <- data.frame(stringsAsFactors = FALSE, column = c(
-    "unit", "measure", "analysis_range_name", "range_label", "range_measure", "n_total", "n_used",
+    "unit", "measure", "analysis_range_name", "range_label", "range_measure", "n_total", "n_used", "too_few",
     "modal_length", "modal_frequency", "median_length", "mean_length", "sd", "iqr", "p05", "p95", "min_length", "max_length", "cv",
     "skewness", "kurtosis", "share_below_modal", "share_above_modal",
     "setpoint_type", "setpoint_metric", "setpoint_source", "setpoint_length",
@@ -205,6 +205,7 @@ metric_definitions <- function(thresholds) {
     "reads or molecules (UMI runs report both)", "the tract or combined measure", "the range from the settings file",
     "the range's bounds as written (min-max)", "the measure whose length selects the reads for the range (the primary tract unless the measure has its own ranges)",
     "reads or molecules in the range", "reads or molecules used (after the floor)",
+    "TRUE when n_used is below range_min_n: the statistics and metrics of this range are left blank for this sample",
     "commonest length", "how many reads or molecules have the modal length", "median length", "mean length", "standard deviation of the length",
     "interquartile range of the length", "5th percentile of the length", "95th percentile of the length", "shortest length", "longest length",
     "coefficient of variation (sd / mean)", "skewness of the length distribution (0 = symmetric; negative = longer tail of short lengths)",
@@ -224,7 +225,7 @@ metric_definitions <- function(thresholds) {
     "modal length minus the setpoint", "median length minus the setpoint", "mean length minus the setpoint",
     "how many control standard deviations the sample's own setpoint lies from its group control (control_relative rows only)",
     "the group control setpoint: the controls' setpoint statistic combined by control_aggregation_method", "spread of that statistic across the control samples", "number of control samples"),
-  units = c("", "", "", "", "", "count", "count", "units", "count", "units", "units", "units", "units", "units", "units", "units", "units", "ratio",
+  units = c("", "", "", "", "", "count", "count", "", "units", "count", "units", "units", "units", "units", "units", "units", "units", "units", "ratio",
             "", "", "share", "share", "", "", "", "units", "units", "units", "units", "units", "units", "share", "share", "share",
             "count", "count", "count", "share", "share", "ratio", "ratio", "units", "units", "units", "SD", "units", "units", "count"))
   d$units[d$units == "units"] <- "repeat units of the measure (bp for a combined measure whose tracts have motifs of different lengths)"

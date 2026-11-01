@@ -199,6 +199,8 @@ params <- list(
   # --- Instability -------------------------------------------------------------
   # Window for modal peak detection
   range_peak_span = 3L,
+  # Fewest reads (or molecules) a sample needs in a range for its statistics and metrics
+  range_min_n = 50L,
   # Calculate group control setpoints
   group_control = TRUE,
   # 'flagged', 'earliest' or 'all'

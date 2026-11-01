@@ -32,10 +32,49 @@ cluster_by_repeat_length <- function(values, cluster_max = 6L, min_prop = 0.05, 
     target <- as.integer(names(others)[which.min(abs(others - centres[as.character(small)]))])
     cl[cl == small] <- target
   }
+  cl <- merge_length_shoulders(v, cl)
   centres <- tapply(v, cl, mean)
   cl <- match(cl, as.integer(names(sort(centres))))   # 1 = shortest
   out[ok] <- cl
   out
+}
+
+# Merges neighbouring length clusters that are one allele. The mixture can split one
+# allele's peak in two: stutter one or two units from a sharp peak becomes its own small
+# cluster, and the broad smear of an expanded allele is cut through the middle. Two
+# neighbouring clusters (by modal length) are merged when either
+#   - the smaller one is a shoulder: its modes are at most max(2, 10% of the length) apart
+#     and its peak is under half the height of the other's, or
+#   - they are one broad peak: their modes are within the width over which the histogram
+#     is smoothed (3% of the length each side) and there is no dip between them.
+# Peak heights are read from the length histogram smoothed over +/- 3% of the length
+# (none for short alleles), so a heterozygote whose alleles differ by one or two units
+# and have similar read counts (e.g. 17 and 18) stays two clusters.
+merge_length_shoulders <- function(v, cl, shoulder_ratio = 0.5, dip = 0.8) {
+  len <- round(v)
+  counts <- tabulate(len - min(len) + 1L)
+  at <- function(x) counts[x - min(len) + 1L]
+  smooth_at <- function(x, h) mean(at(seq(max(min(len), x - h), min(max(len), x + h))))
+  repeat {
+    ids <- sort(unique(cl)); if (length(ids) < 2) break
+    modes <- vapply(ids, function(i) { t <- tabulate(len[cl == i] - min(len) + 1L); as.numeric(which.max(t) + min(len) - 1L) }, numeric(1))
+    o <- order(modes); ids <- ids[o]; modes <- modes[o]
+    merged <- FALSE
+    for (k in seq_len(length(ids) - 1L)) {
+      m1 <- modes[k]; m2 <- modes[k + 1L]; gap <- m2 - m1
+      h <- floor(0.03 * (m1 + m2) / 2)
+      p1 <- smooth_at(m1, h); p2 <- smooth_at(m2, h)
+      shoulder <- gap <= max(2, 0.1 * max(m1, m2)) && min(p1, p2) < shoulder_ratio * max(p1, p2)
+      between <- if (gap > 1) vapply(seq(m1 + 1, m2 - 1), smooth_at, numeric(1), h = h) else numeric(0)
+      one_peak <- h >= 1 && gap <= 2 * h && (!length(between) || min(between) >= dip * min(p1, p2))
+      if (shoulder || one_peak) {
+        keep <- if (sum(cl == ids[k]) >= sum(cl == ids[k + 1L])) ids[k] else ids[k + 1L]
+        cl[cl %in% ids[k:(k + 1L)]] <- keep; merged <- TRUE; break
+      }
+    }
+    if (!merged) break
+  }
+  cl
 }
 
 # ------------------------------------------------------------------------------
@@ -245,11 +284,20 @@ call_flank_variants <- function(consensus, ref_flank, offset, edge = 3L) {
   # alternative bases (alt_context) or to the reference bases (ref_context). Counting reads
   # that contain each gives the variant's read support.
   qn <- which(q != "-")
-  ctx <- function(i, j, flank_bp = 8L) {
+  # The context starts at 8 bases each side and is widened (up to 60) until neither context
+  # contains the other: for an insertion or deletion in repetitive sequence (a duplicated
+  # stretch, a homopolymer) a short reference context sits inside the alternative one, so
+  # every read carrying the variant would also count as reference.
+  ctx <- function(i, j, flank_bp = 8L, max_bp = 60L) {
     before <- q[qn[qn < i]]; after <- q[qn[qn > j]]
-    left <- paste(utils::tail(before, flank_bp), collapse = ""); right <- paste(utils::head(after, flank_bp), collapse = "")
-    data.frame(alt_context = paste0(left, paste(q[i:j][q[i:j] != "-"], collapse = ""), right),
-               ref_context = paste0(left, paste(r[i:j][r[i:j] != "-"], collapse = ""), right), stringsAsFactors = FALSE)
+    a_mid <- paste(q[i:j][q[i:j] != "-"], collapse = ""); r_mid <- paste(r[i:j][r[i:j] != "-"], collapse = "")
+    repeat {
+      left <- paste(utils::tail(before, flank_bp), collapse = ""); right <- paste(utils::head(after, flank_bp), collapse = "")
+      a <- paste0(left, a_mid, right); b <- paste0(left, r_mid, right)
+      if (flank_bp >= max_bp || (!grepl(b, a, fixed = TRUE) && !grepl(a, b, fixed = TRUE))) break
+      flank_bp <- flank_bp + 4L
+    }
+    data.frame(alt_context = a, ref_context = b, stringsAsFactors = FALSE)
   }
   ev <- list(); k <- 1L; i <- 1L; n <- length(q)
   while (i <= n) {
@@ -364,11 +412,14 @@ repeat_notation <- function(x, motifs) {
 }
 
 # Read support for a variant in one allele's reads: reads containing the alternative
-# context against reads containing the reference context (reads with neither, e.g. an
-# error nearby or a read that stops short, are not counted).
+# context against reads containing the reference context. Reads with neither (an error
+# nearby, a read that stops short) are not counted, and nor are reads with both, which
+# cannot tell the two apart (possible only where the consensus is too short for the
+# context to be widened past repetitive sequence).
 variant_support <- function(reads, alt_context, ref_context) {
   reads <- reads[!is.na(reads)]
-  n_alt <- sum(grepl(alt_context, reads, fixed = TRUE)); n_ref <- sum(grepl(ref_context, reads, fixed = TRUE))
+  a <- grepl(alt_context, reads, fixed = TRUE); b <- grepl(ref_context, reads, fixed = TRUE)
+  n_alt <- sum(a & !b); n_ref <- sum(b & !a)
   c(alt_reads = n_alt, ref_reads = n_ref, support = if (n_alt + n_ref > 0) n_alt / (n_alt + n_ref) else NA_real_)
 }
 

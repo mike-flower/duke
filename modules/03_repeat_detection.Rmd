@@ -36,8 +36,11 @@ tracts <- params$tracts_table; composites <- params$composites_table
 primary <- tracts$tract[1]
 # Fill in empty lengths as NA so that lines break across gaps instead of joining distant lengths
 fill_gaps <- function(d, keys) {
-  grid <- d[, .(length_bin = seq(min(length_bin), max(length_bin), by = bin_width[1])), by = keys]
-  d[grid, on = c(keys, "length_bin")]
+  # The added rows keep their bin width, so their x position is defined and the NA value
+  # breaks the line there (with an NA position the row is dropped and the line jumps the gap)
+  grid <- d[, .(length_bin = seq(min(length_bin), max(length_bin), by = bin_width[1]), bw_ = bin_width[1]), by = keys]
+  out <- d[grid, on = c(keys, "length_bin")]
+  out[, bin_width := bw_][, bw_ := NULL][]
 }
 ```
 
@@ -458,7 +461,7 @@ p_between <- ggplot(between[, .(prop = sum(prop)), by = .(file_stem, junction, l
 print(p_between); save_plot(p_between, file.path(plots_dir, "between_tract_sequences.png"), 10, 5)
 ```
 
-The sequence between the CAG and CCG tracts identifies the interruption structure of each read: `CAACAGCCGCCA` is the canonical allele, a duplicated `CAACAG` gives DOI, and an allele with no CAA or CCA interruption has the tracts adjacent. Per-sample proportions are in `repeat_detection.xlsx`.
+`r if (any(grepl("^between_", names(read_tracts)))) "**How to read this.** For each pair of consecutive tracts, the sequence between them in each read, as the share of each sample's reads (the six commonest sequences across the cohort are named and the rest pooled as other). The commonest sequence is usually the reference structure. A sequence carried by a large share of some samples' reads and few of the others' is an allele with a different interruption structure (at HTT, for example, a duplicated CAACAG or the loss of the CAA and CCA interruptions, which leaves the tracts adjacent); one at a low share in every sample is sequencing error at the junction. Per-sample proportions are in repeat_detection.xlsx." else ""`
 
 ---
 

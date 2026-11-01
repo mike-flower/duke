@@ -263,8 +263,17 @@ save_plot <- function(p, path, width = 10, height = 6, dpi = NULL) {
 # to the last '.', '_' or '-' so a label never starts mid-word), e.g.
 # "m84277_..._s1.hifi_reads.bc2083.skera.demux.kxF01--kxR13" -> "kxF01--kxR13"
 short_labels <- function(x) {
-  u <- unique(as.character(x))
-  if (length(u) < 2) return(setNames(u, u))
+  u0 <- unique(as.character(x))
+  if (length(u0) < 2) return(setNames(u0, u0))
+  # Dot-separated parts that every name shares in the same place (e.g. "hifi_reads",
+  # "demux" in PacBio file names) are dropped first, then any common start
+  u <- u0
+  parts <- strsplit(u, ".", fixed = TRUE)
+  if (length(unique(lengths(parts))) == 1 && lengths(parts)[1] > 1) {
+    m <- do.call(rbind, parts)
+    keep <- apply(m, 2, function(col) length(unique(col)) > 1)
+    if (any(keep)) { u2 <- apply(m[, keep, drop = FALSE], 1, paste, collapse = "."); if (!anyDuplicated(u2)) u <- u2 }
+  }
   ch <- strsplit(u, "")
   n <- min(lengths(ch)); k <- 0
   while (k < n && length(unique(vapply(ch, `[`, "", k + 1))) == 1) k <- k + 1
@@ -272,7 +281,7 @@ short_labels <- function(x) {
   cut <- max(c(0, gregexpr("[._-]", pre)[[1]]))
   out <- substring(u, cut + 1)
   if (any(!nzchar(out)) || anyDuplicated(out)) out <- u
-  setNames(out, u)
+  setNames(out, u0)
 }
 
 # PacBio read quality (rq, predicted accuracy) as a Phred-scaled QV, capped at 60
