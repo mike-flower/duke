@@ -127,7 +127,7 @@ duke_param_spec <- function() {
     .p("expansion_thresholds", c(5L, 10L), "intvec", "Instability", "k for proportion of reads at least k units above / below the setpoint"),
     .p("cohort_plot_by", c("group", "time"), "chrvec", "Instability", "Dimensions for cohort plots: group, time"),
     .p("headline_metrics", c("modal_length", "median_length", "mean_length", "instability_index",
-                             "expansion_index", "share_5plus_above_setpoint"),
+                             "expansion_index", "contraction_index", "share_5plus_above_setpoint", "share_5plus_below_setpoint"),
        "chrvec", "Instability", "Metrics drawn as timecourses by group"),
     .p("headline_setpoint_type", "control_relative", "chr", "Instability", "Setpoint type for headline plots: 'control_relative' or 'sample_relative'"),
     .p("plot_ranges", character(0), "chrvec", "Instability", "Ranges drawn inline (default: the first two ranges of the primary measure)"),

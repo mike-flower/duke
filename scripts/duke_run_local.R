@@ -217,7 +217,7 @@ params <- list(
   # Dimensions for cohort plots: group, time
   cohort_plot_by = c("group", "time"),
   # Metrics drawn as timecourses by group
-  headline_metrics = c("modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "share_5plus_above_setpoint"),
+  headline_metrics = c("modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "contraction_index", "share_5plus_above_setpoint", "share_5plus_below_setpoint"),
   # Setpoint type for headline plots: 'control_relative' or 'sample_relative'
   headline_setpoint_type = "control_relative",
   # Ranges drawn inline (default: the first two ranges of the primary measure)

@@ -137,7 +137,7 @@ sf <- dplyr::bind_rows(lapply(names(alignments), function(r) {
 p_sf <- sf %>% pivot_longer(c(prop_left_short, prop_right_short), names_to = "flank", values_to = "pct") %>%
   dplyr::mutate(flank = ifelse(flank == "prop_left_short", "Left flank", "Right flank")) %>%
   ggplot(aes(flank, pct)) + box_points_mean(digits = 1, percent = TRUE) + facet_wrap(~ ref_id) +
-  scale_y_continuous(labels = pct_axis()) +
+  scale_y_continuous(labels = pct_axis()) + expand_limits(y = 0) +
   labs(x = NULL, y = "Reads whose flank alignment stops\nshort of the repeat", title = "Flank alignments that stop short of the repeat, per sample") + theme_bw()
 print(p_sf); save_plot(p_sf, file.path(plots_dir, "flank_boundary_shortfall.png"), 8, 5)
 ```
@@ -162,7 +162,7 @@ print(p_quality); save_plot(p_quality, file.path(plots_dir, "mapping_quality.png
 
 ## Strand
 
-**What is measured.** PacBio and nanopore sequence each molecule from one strand or the other, effectively at random, so about half the reads of an amplicon should align to the reverse strand (these are reverse-complemented, so that every read reads 5' to 3' along the reference). Each point is one sample: the percentage of its reads on the reverse strand at each step of the alignment, from reads aligning to each flank on its own, through reads aligning to both, to the reads kept.
+**What is measured.** PacBio and nanopore sequence each molecule from one strand or the other, effectively at random, so about half the reads of an amplicon should be on the **forward strand**, reading in the same direction as the reference, and half on the reverse strand (those are reverse-complemented, so that every read reads 5' to 3' along the reference). Each point is one sample: the percentage of its reads on the forward strand at each step of the alignment, from reads aligning to each flank on its own, through reads aligning to both, to the reads kept.
 
 **What it shows.** If the share is already away from 50% among reads aligning to a single flank, the imbalance was there in the reads as they came off the sequencer (library preparation or the sequencing chemistry), and is not caused by Duke. If it moves between steps, reads from one strand are failing that step more often than the other, for example because one strand more often gives truncated or chimeric reads. Whether the two strands give the same repeat lengths is shown in Module 3 (*Strand and tract length*), and that is what matters for the results.
 
@@ -170,13 +170,14 @@ print(p_quality); save_plot(p_quality, file.path(plots_dir, "mapping_quality.png
 st_long <- as.data.table(strand_steps)[, .(file_stem, ref_id, `Left flank` = reverse_left, `Right flank` = reverse_right,
                                            `Both flanks` = reverse_both, Final = reverse_final)]
 st_long <- melt(st_long, id.vars = c("file_stem", "ref_id"), variable.name = "step", value.name = "reverse")[!is.na(reverse)]
+st_long[, forward := 1 - reverse]
 if (nrow(st_long)) {
-  p_strand <- ggplot(st_long, aes(step, reverse)) +
+  p_strand <- ggplot(st_long, aes(step, forward)) +
     geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey40") +
     geom_line(aes(group = interaction(file_stem, ref_id)), colour = "grey75", alpha = 0.5) +
     box_points_mean(digits = 1, percent = TRUE) + facet_wrap(~ ref_id) +
     scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
-    labs(x = "Alignment step", y = "Reads on the reverse strand", title = "Reads on the reverse strand at each alignment step, per sample",
+    labs(x = "Alignment step", y = "Reads on the forward strand", title = "Reads on the forward strand at each alignment step, per sample",
          subtitle = "Grey lines join one sample's steps; dashed = 50%") + theme_bw()
   print(p_strand); save_plot(p_strand, file.path(plots_dir, "strand_by_step.png"), 9, 4.5)
 }
@@ -232,7 +233,7 @@ timing_df <- build_timing_table(timings)
 manifest <- build_manifest(module2_output, c(
   alignments = "Per reference: one row per read with the strand-corrected sequence and flank coordinates",
   refs = "Parsed references (flanks, N block position)", funnel = "Reads per sample after each alignment step",
-  quality = "Mean MAPQ, mismatches and strand per sample", strand = "Share of reads on the reverse strand at each alignment step, per sample", hash = "Parameter hash used for resume"))
+  quality = "Mean MAPQ, mismatches and strand per sample", strand = "Share of reads on the reverse strand at each alignment step, per sample (forward = 1 - reverse)", hash = "Parameter hash used for resume"))
 write_excel_function(list(timing = timing_df, manifest = manifest), xlsx_path)
 dt_compact(timing_df, caption = "Section timing")
 dt_compact(manifest, caption = sprintf("module2_output – %s on disk", format_size(file.size(output_path))))

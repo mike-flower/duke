@@ -307,7 +307,7 @@ timecourse_plot <- function(d, title) {
   rows <- lapply(seq_along(hl), function(k) {
     v <- hl[k]; dd <- d[, .(time, group_label, unit, value = get(v))]
     is_prop <- grepl("^share", v)
-    base <- if (has_time) ggplot(dd, aes(time, value, colour = unit)) + geom_point(alpha = 0.6, size = 1.6) +
+    base <- if (has_time) ggplot(dd, aes(time, value, colour = unit)) + geom_point(alpha = 0.6, size = 2.2) +
         stat_summary(aes(group = unit), fun = mean, geom = "line", linewidth = 0.8)
       else ggplot(dd, aes(group_label, value, colour = unit)) + geom_boxplot(outlier.shape = NA, fill = NA) +
         geom_jitter(width = 0.15, height = 0, alpha = 0.6)
@@ -315,8 +315,8 @@ timecourse_plot <- function(d, title) {
       scale_colour_manual(values = unit_cols, name = NULL, drop = TRUE) +
       (if (is_prop) scale_y_continuous(labels = pct_axis()) else scale_y_continuous()) +
       labs(x = if (k == length(hl)) (if (has_time) "Time" else NULL) else NULL, y = if (v %in% names(hl_labels)) hl_labels[[v]] else v) +
-      theme_bw() + theme(legend.position = if (k == 1) "top" else "none",
-                         strip.text = if (k == 1) element_text(size = 8) else element_blank(),
+      theme_bw(base_size = 13) + theme(legend.position = if (k == 1) "top" else "none",
+                         strip.text = if (k == 1) element_text(size = 11) else element_blank(),
                          strip.background = if (k == 1) element_rect() else element_blank(),
                          axis.text.x = if (k == length(hl)) element_text() else element_blank())
   })
@@ -324,10 +324,10 @@ timecourse_plot <- function(d, title) {
     subtitle = sprintf("Points = samples; lines = mean at each time.\nInstability metrics %s; setpoint = %s.", gsub("_", " ", hl_type), gsub("_", " ", sp_metric)))
 }
 n_groups <- length(unique(instability_metrics$group_label))
-tc_w <- min(40, 3 + 3.2 * n_groups); tc_h <- min(40, 1.9 * length(hl) + 2)
+tc_w <- min(40, 3.5 + 3.6 * n_groups); tc_h <- min(45, 2.1 * length(hl) + 2)
 ```
 
-The headline metrics for each group, plotted against time: one column per group, one row per metric, each row on its own scale. Length metrics (modal, median, mean) are the sample's own; the instability metrics are `r gsub("_", " ", hl_type)`. Reads are grey`r if ("molecules" %in% names(units)) " and molecules teal" else ""`. Shown here: **`r primary`**, ranges `r paste(plot_ranges, collapse = ", ")`. Every measure and range is saved in `plots/timecourse/`.
+The headline metrics for each group, plotted against time: one column per group, one row per metric, each row on its own scale. By default these are the modal, median and mean length, the instability, expansion and contraction indices, and the shares of reads at least 5 units above and below the setpoint (`headline_metrics` sets them; every metric is in instability.xlsx, and the noisier expansion and contraction ratios can be added). Length metrics (modal, median, mean) are the sample's own; the instability metrics are `r gsub("_", " ", hl_type)`. Reads are grey`r if ("molecules" %in% names(units)) " and molecules teal" else ""`. Shown here: **`r primary`**, ranges `r paste(plot_ranges, collapse = ", ")`. Every measure and range is saved in `plots/timecourse/`.
 
 ```{r headline_plots, fig.width=tc_w, fig.height=tc_h, results='asis'}
 .t <- proc.time()["elapsed"]

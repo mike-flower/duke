@@ -167,21 +167,34 @@ cat(sprintf("\n\nTracts come from %d references. %s of %s reads (%.1f%%) aligned
 
 # Flank length
 
-**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the tract. Every read in a sample comes from the same amplicon, so this should be almost the same in every read, and the *modal* combined flank length is the commonest value in that sample. Each point is one sample: the share of its reads whose combined flank length is exactly the modal value, or 1, 2–5, 6–10, 11–50 or more than 50 bases away from it.
+**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the tract. Every read in a sample comes from the same amplicon, so it should be almost the same in every read; the commonest value in a sample is its *usual* flank length. One bar per sample, sorted by the share of reads at exactly the usual length: each bar is split into the reads at that length (darkest), 1 base off, 2–5, 6–10, 11–50 and more than 50 bases off (lightest). A sample whose bar is mostly dark has clean flanks; a light block in one sample, or a group of samples, is where to look.
 
 This check comes straight after tract detection because the optional flank filter (`rm_flank_length_outliers`, `r if (isTRUE(params$rm_flank_length_outliers)) "on in this run" else "off in this run"`) acts here: `r if (isTRUE(params$rm_flank_length_outliers)) "reads it removes are left out of every later section and module" else "with it off, every read is kept"`.
 
 **What it shows.** Reads 1–2 bases off are normal: single-base insertions or deletions are the commonest PacBio error, and a flank of a few hundred bases often carries one. Reads more than 10 bases off are truncated reads, chimeras or a shifted tract boundary. When nearly all reads are within a few bases, differences in read length come from the repeat itself, not from the flanks. At HTT a sample can legitimately carry two flank lengths when its alleles differ in the CCG tract, which is why the optional flank filter is off by default.
 
-```{r flank_qc, fig.height=5}
+```{r flank_qc, fig.height=min(30, 2.2 + 0.16 * uniqueN(read_tracts$file_stem))}
 fq <- read_tracts[!is.na(left), .(file_stem, qname, flank_total = nchar(left) + nchar(right))]
 fq[, modal := { tb <- table(flank_total); as.numeric(names(tb)[which.max(tb)]) }, by = file_stem]
 fq[, dev := abs(flank_total - modal)]
 fq[, band := cut(dev, c(-1, 0, 1, 5, 10, 50, Inf), labels = c("exactly modal", "1 bp off", "2-5 bp off", "6-10 bp off", "11-50 bp off", ">50 bp off"))]
 fband <- fq[, .N, by = .(file_stem, band)][, prop := N / sum(N), by = file_stem]
-p_flank <- ggplot(fband, aes(band, prop)) + box_points_mean(digits = 1, percent = TRUE) + scale_y_continuous(labels = pct_axis()) +
-  labs(x = "Combined flank length compared with the sample's commonest value", y = "Reads in the sample", title = "Combined flank length, per sample") + theme_bw()
-print(p_flank); save_plot(p_flank, file.path(plots_dir, "flank_length.png"), 9, 5)
+lab_f <- short_labels(fband$file_stem)
+ord_f <- fband[band == "exactly modal"][order(prop), file_stem]
+ord_f <- c(setdiff(unique(fband$file_stem), ord_f), ord_f)
+fband[, sample := factor(lab_f[file_stem], levels = lab_f[ord_f])]
+fband[, band := factor(band, levels = rev(levels(fq$band)))]
+n_f <- uniqueN(fband$file_stem)
+p_flank <- ggplot(fband, aes(prop, sample, fill = band)) + geom_col(width = 0.85) +
+  scale_fill_manual(values = setNames(rev(c("#08306b", "#2171b5", "#6baed6", "#c6dbef", "#fdae6b", "#e6550d")), rev(levels(fq$band))),
+                    breaks = levels(fq$band)[6:1], name = "Flank length\nagainst the usual") +
+  scale_x_continuous(labels = pct_axis(), expand = expansion(mult = c(0, 0.01))) +
+  labs(x = "Share of the sample's reads", y = NULL, title = "Combined flank length, per sample",
+       subtitle = "Each bar is one sample; dark = reads at the sample's usual flank length, orange = more than 10 bases off") +
+  theme_bw() + theme(axis.text.y = element_text(size = if (n_f > 60) 5 else 7))
+print(p_flank); save_plot(p_flank, file.path(plots_dir, "flank_length.png"), 10, min(40, 2.2 + 0.16 * n_f))
+dt_compact(dcast(fband, file_stem ~ band, value.var = "prop", fill = 0)[, .(samples = .N, exactly_modal = median(`exactly modal`), within_1 = median(`exactly modal` + `1 bp off`),
+           over_10 = median(`11-50 bp off` + `>50 bp off`))], caption = "Median share of reads per sample: at the usual flank length, within 1 base of it, and more than 10 bases off", digits = 3)
 if (isTRUE(params$rm_flank_length_outliers)) {
   fe <- fq[, .(q1 = quantile(flank_total, 0.25), q3 = quantile(flank_total, 0.75)), by = file_stem][, iqr := q3 - q1]
   fq <- fe[fq, on = "file_stem"]
@@ -195,7 +208,7 @@ if (isTRUE(params$rm_flank_length_outliers)) {
 
 # Strand and tract length
 
-**How to read this.** Each read was sequenced from one of the two strands of its molecule (Module 2, *Strand*). Left: the share of reads on the reverse strand at each tract length; each grey line is one sample (lengths with at least 20 reads), the coloured line is all reads pooled and the dashed line is 50%. Right: the length distribution of the reads on each strand, all samples pooled, each strand scaled to its own total so the shapes can be compared; the y-axis is logarithmic so that the tails are visible.
+**How to read this.** Each read was sequenced from one of the two strands of its molecule (Module 2, *Strand*). Left: the share of reads on the **forward strand** (reading in the same direction as the reference) at each tract length; each grey line is one sample (lengths with at least 20 reads), the coloured line is all reads pooled and the dashed line is 50%. Right: the length distribution of the reads on each strand, all samples pooled, each strand scaled to its own total so the shapes can be compared; the y-axis is logarithmic so that the tails are visible.
 
 **What it shows.** Whether the strand a read came from affects the length measured. If both strands give the same distribution, a strand imbalance does not bias the results. If one strand runs shorter or longer, or its share changes with tract length, slippage or errors depend on the strand being copied, and samples with different strand balances are not directly comparable.
 
@@ -208,15 +221,15 @@ sl <- rbindlist(lapply(seq_len(nrow(tracts)), function(k) {
 if (nrow(sl)) {
   sl[, w := { span <- diff(stats::quantile(length, c(0.001, 0.999), na.rm = TRUE)); if (span > 40) 5 else 1 }, by = tract]
   sl[, length_bin := floor(length / w) * w]
-  s_samp <- sl[, .(reads = .N, reverse = mean(reverse)), by = .(file_stem, tract, length_bin, w)][reads >= 20]
-  s_pool <- sl[, .(reads = .N, reverse = mean(reverse)), by = .(tract, length_bin, w)][reads >= 50]
+  s_samp <- sl[, .(reads = .N, forward = mean(!reverse)), by = .(file_stem, tract, length_bin, w)][reads >= 20]
+  s_pool <- sl[, .(reads = .N, forward = mean(!reverse)), by = .(tract, length_bin, w)][reads >= 50]
   s_samp <- fill_gaps(s_samp[, bin_width := w], c("tract", "file_stem")); s_pool <- fill_gaps(s_pool[, bin_width := w], "tract")
   s_samp[, x := length_bin + (bin_width - 1) / 2]; s_pool[, x := length_bin + (bin_width - 1) / 2]
-  p_sl1 <- ggplot(s_samp, aes(x, reverse)) + geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey40") +
+  p_sl1 <- ggplot(s_samp, aes(x, forward)) + geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey40") +
     geom_line(aes(group = file_stem), colour = "grey70", alpha = 0.6) +
     geom_line(data = s_pool, colour = "#377eb8", linewidth = 1) + facet_wrap(~ tract, scales = "free_x", ncol = 1) +
     scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
-    labs(x = "Tract length (units)", y = "Reads on the reverse strand", title = "Reverse-strand share by tract length") + theme_bw()
+    labs(x = "Tract length (units)", y = "Reads on the forward strand", title = "Forward-strand share by tract length") + theme_bw()
   dist_s <- sl[, .(reads = .N), by = .(tract, length, strand = ifelse(reverse, "reverse", "forward"))][, share := reads / sum(reads), by = .(tract, strand)]
   xr <- sl[, .(lo = stats::quantile(length, 0.0005), hi = stats::quantile(length, 0.9995)), by = tract]
   dist_s <- xr[dist_s, on = "tract"][length >= lo & length <= hi]
@@ -227,7 +240,7 @@ if (nrow(sl)) {
     theme_bw() + theme(legend.position = "top")
   p_sl <- patchwork::wrap_plots(p_sl1, p_sl2, widths = c(1, 1.3))
   print(p_sl); save_plot(p_sl, file.path(plots_dir, "strand_by_length.png"), 11, max(5, 3.2 * nrow(tracts)))
-  strand_summary <- sl[, .(reads = .N, reverse = mean(reverse), median_forward = as.numeric(median(length[!reverse])),
+  strand_summary <- sl[, .(reads = .N, forward = mean(!reverse), median_forward = as.numeric(median(length[!reverse])),
                            median_reverse = as.numeric(median(length[reverse]))), by = .(file_stem, tract)]
 } else { strand_summary <- NULL; cat("No strand information.\n") }
 ```
@@ -236,7 +249,13 @@ if (nrow(sl)) {
 
 # Counting methods
 
-For each read and tract, **full** counts every base of the tract (so an interruption or a sequencing error inside it adds units rather than splitting it), **match** counts exact motif units, and **pure** is the longest uninterrupted run. They agree for a clean tract. Where they differ, the tract contains either a real interruption or a sequencing error. The comparisons below are made read by read, so they need no assumption about alleles, controls or how similar the alleles of a tract are.
+Duke counts each tract in every read three ways. Each is in repeat units of the tract's motif.
+
+- **full**: the length of the whole tract, from its first to its last motif copy, divided by the motif length. A wrong base inside the tract still counts towards its length. This is the count used everywhere else in Duke.
+- **match**: the number of motif copies in the tract that are exactly right. Each wrong copy is not counted, so one error makes **match** one unit lower than **full**.
+- **pure**: the longest unbroken run of exact copies. One error splits the tract in two and **pure** keeps only the longer piece.
+
+For example, a read whose CAG tract is 20 copies with one copy read as CAA at copy 15 (CAG×14, CAA, CAG×5) has **full** = 20, **match** = 19 and **pure** = 14. For a clean tract the three agree. Where they differ, the tract contains either a real interruption (the same in every read of an allele) or a sequencing error (at a random place in each read). The comparisons below are made read by read, so they need no assumption about alleles, controls or how similar the alleles of a tract are.
 
 ```{r method_agreement}
 .t <- proc.time()["elapsed"]
@@ -321,13 +340,13 @@ print(p_agree); save_plot(p_agree, file.path(plots_dir, "count_method_agreement.
 
 ## How far apart the counts are
 
-**How to read this.** The plot above shows how often the counts differ; this one shows by how much. Only reads whose **match** (top) or **pure** (bottom) count differs from their **full** count are used. The x-axis is the tract length (full count) and the y-axis is how many repeat units lower the other count is than **full**. The solid coloured line is the median over all such reads at that length, the dashed coloured line the 90th percentile (one in ten reads differs by more), and each grey line is one sample's median (lengths with at least 20 differing reads in that sample).
+**How to read this.** The plot above shows how often the counts differ; this one shows by how much. Only reads whose **match** (top) or **pure** (bottom) count differs from their **full** count are used. The x-axis is the tract length (full count) and the y-axis is how many repeat units **full** counts beyond the other count (full minus match, or full minus pure; **full** is never the smaller). The solid coloured line is the median over all such reads at that length, the dashed coloured line the 90th percentile (one in ten reads differs by more), and each grey line is one sample's median (lengths with at least 20 differing reads in that sample).
 
 **What it shows.** A single sequencing error costs **match** about one unit wherever it falls, so its line stays near 1 and rises only slowly as longer tracts collect more errors. **pure** loses everything on the shorter side of the break, so its gap grows with tract length: for a long tract with one break the median gap is about a quarter of the tract. A real interruption would give a gap of a fixed size at the length of the allele that carries it, in every sample with that allele.
 
 ```{r gap_by_length, fig.height=6}
 gp <- copy(gap_pooled)[differing >= 20]
-gp[, method := factor(method, levels = c("match", "pure"), labels = c("match lower than full", "pure lower than full"))]
+gp[, method := factor(method, levels = c("match", "pure"), labels = c("full minus match", "full minus pure"))]
 gp[, x := length_bin + (bin_width - 1) / 2]
 gp_long <- melt(gp, id.vars = c("tract", "method", "x", "length_bin", "bin_width"), measure.vars = c("median_gap", "p90_gap"),
                 variable.name = "stat", value.name = "gap")
@@ -348,7 +367,7 @@ if (nrow(gp)) {
     facet_grid(method ~ tract, scales = "free") +
     scale_colour_manual(values = c("#4daf4a", "#e41a1c"), guide = "none") +
     scale_linetype_manual(values = c(median = "solid", `90th percentile` = "dashed"), name = "All reads") +
-    labs(x = "Tract length, full count (units)", y = "Units lower than the full count\n(reads where the counts differ)",
+    labs(x = "Tract length, full count (units)", y = "Units full counts beyond the other count\n(reads where the counts differ)",
          title = "How far the counting methods differ, by tract length",
          subtitle = "Grey = one sample's median; colour = all reads pooled") +
     theme_bw() + theme(legend.position = "top")
@@ -356,33 +375,31 @@ if (nrow(gp)) {
 } else cat("The counting methods agree for every read.\n")
 ```
 
-## Counts against each other
+## What a break does to each count
 
-**How to read this.** Each panel compares two counts for the same reads (a random subset of up to 2,000 reads per sample): the x-axis is the read's **full** count and the y-axis its **match** (left) or **pure** (right) count, both in repeat units. The colour is how many reads fall in each cell. Reads on the dashed diagonal got the same count both ways. In the **pure** panel the dotted line is half the full count.
+**How to read this.** Each panel is one tract and one count, for a random subset of up to 2,000 reads per sample. The x-axis is that count as a share of the read's **full** count (100% = the same as full). The bars are coloured by how many breaks the read's tract has: places where the run of exact motif copies is interrupted, by a wrong base, an inserted or missing base, or a real interruption. None, one, two, or three or more.
 
-**What it shows.** A wrong base inside a tract affects the three counts differently. **match** loses only the unit the error sits in, so its reads stay on or just below the diagonal. **pure** keeps only the longest unbroken run, so one error can cost it many units. Take a read whose tract is 100 units by the full count:
+**What it shows.** Why **pure** spreads so widely and **match** does not. With no break, every count equals full (the bar at 100%). One break costs **match** about one unit, so its reads sit just below 100% whatever the tract length. For **pure**, one break splits the tract and only the longer piece is kept, so depending on where the break falls **pure** is anywhere from half of full (a break in the middle) to almost all of it (a break near an end): the reads with one break spread evenly between 50% and 100%. With two or more breaks the longest piece can be under half. A real interruption would instead put a sharp peak at the same share in every read of the allele that carries it.
 
-- No error: pure = 100, on the diagonal.
-- One error at unit 30: the tract splits into runs of 29 and 70, and pure = 70. Depending on where the error lands, pure is anywhere from 50 (an error in the middle) to 99 (an error at an end), so reads with one error fill the space between the diagonal and the dotted half-way line.
-- Two or more errors: the tract splits into three or more pieces, and pure can fall below the dotted line.
-
-Long tracts usually carry at least one error (see *Disagreement by tract length*), so at each common tract length the reads form a vertical streak hanging down from the diagonal, and together these make the wedge. The wedge is a property of the **pure** count, not of the sample: it appears wherever there are many reads of one length. **full** is the default because it is not cut short in this way.
-
-```{r count_scatter, fig.height=5.5}
+```{r count_share, fig.height=2 + 2.5 * nrow(tracts)}
 set.seed(123)
 cs <- rbindlist(lapply(tracts$tract, function(t) {
   d <- read_tracts[get(paste0(t, "_found")) %in% TRUE, .(file_stem, full = get(paste0(t, "_full")),
-                    match = get(paste0(t, "_match")), pure = get(paste0(t, "_pure")))]
-  d <- d[, .SD[sample(.N, min(.N, 2000))], by = file_stem]
-  rbind(d[, .(tract = t, full, other = match, method = "match")], d[, .(tract = t, full, other = pure, method = "pure")])
+                    match = get(paste0(t, "_match")), pure = get(paste0(t, "_pure")), structure = get(paste0(t, "_structure")))]
+  d <- d[full > 0][, .SD[sample(.N, min(.N, 2000))], by = file_stem]
+  # breaks = pieces of the tract minus one (the structure lists the length of each unbroken run)
+  d[, errors := cut(lengths(strsplit(ifelse(is.na(structure), "", structure), ",", fixed = TRUE)) - 1, c(-Inf, 0, 1, 2, Inf), labels = c("none", "one", "two", "three or more"))]
+  rbind(d[, .(tract = t, method = "match as a share of full", share = match / full, errors)],
+        d[, .(tract = t, method = "pure as a share of full", share = pure / full, errors)])
 }))
-p_cs <- ggplot(cs, aes(full, other)) + geom_bin2d(binwidth = c(1, 1)) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey40") +
-  geom_abline(data = data.frame(method = "pure"), aes(slope = 0.5, intercept = 0), linetype = "dotted", colour = "grey40") +
-  scale_fill_viridis_c(trans = "log10", labels = comma, name = "Reads") +
-  facet_wrap(tract ~ method, scales = "free", labeller = labeller(method = c(match = "match against full", pure = "pure against full"))) +
-  labs(x = "full count (units)", y = "match or pure count (units)", title = "Counting methods against the full count, per read") + theme_bw()
-print(p_cs); save_plot(p_cs, file.path(plots_dir, "count_methods_scatter.png"), 10, 5.5)
+p_cs <- ggplot(cs, aes(pmin(share, 1), fill = errors)) + geom_histogram(binwidth = 0.02, boundary = 1, closed = "right") +
+  geom_vline(xintercept = 0.5, linetype = "dotted", colour = "grey40") +
+  facet_grid(tract ~ method, scales = "free_y") +
+  scale_x_continuous(labels = pct_axis(), limits = c(0, 1.02)) + scale_y_sqrt(labels = comma) +
+  scale_fill_manual(values = c(none = "grey70", one = "#377eb8", two = "#ff7f00", `three or more` = "#e41a1c"), name = "Breaks in the tract") +
+  labs(x = "Count as a share of the full count", y = "Reads (square-root axis)", title = "What breaks in the tract do to the match and pure counts",
+       subtitle = "Dotted line = half of full") + theme_bw()
+print(p_cs); save_plot(p_cs, file.path(plots_dir, "count_methods_share.png"), 10, 2 + 2.5 * nrow(tracts))
 pure_sum <- rbindlist(lapply(tracts$tract, function(t) {
   d <- read_tracts[get(paste0(t, "_found")) %in% TRUE, .(full = get(paste0(t, "_full")), pure = get(paste0(t, "_pure")))]
   d[, .(tract = t, reads = .N, short = mean(pure < full), median_loss = as.numeric(median((full - pure)[pure < full])),
@@ -459,9 +476,15 @@ p_between <- ggplot(between[, .(prop = sum(prop)), by = .(file_stem, junction, l
   labs(x = NULL, y = "Reads in the sample", title = "Sequence between consecutive tracts",
        subtitle = "One point per sample: the share of its reads carrying each sequence (the six most common across the cohort shown)") + theme_bw()
 print(p_between); save_plot(p_between, file.path(plots_dir, "between_tract_sequences.png"), 10, 5)
+# Every sequence, including those pooled as "other" in the plot
+between_cohort <- between[, .(reads = sum(n), samples = uniqueN(file_stem), median_share_per_sample = median(prop),
+                              max_share_in_a_sample = max(prop)), by = .(junction, sequence)][order(junction, -reads)]
+between_cohort[, `:=`(share_of_reads = reads / sum(reads), in_plot = ifelse(sequence %in% top$sequence, "named", "pooled as other")), by = junction]
+setcolorder(between_cohort, c("junction", "sequence", "in_plot", "reads", "share_of_reads", "samples"))
+dt_full(between_cohort, caption = "Every sequence found between consecutive tracts, across the cohort (those not named in the plot are pooled there as other)", digits = 4)
 ```
 
-`r if (any(grepl("^between_", names(read_tracts)))) "**How to read this.** For each pair of consecutive tracts, the sequence between them in each read, as the share of each sample's reads (the six commonest sequences across the cohort are named and the rest pooled as other). The commonest sequence is usually the reference structure. A sequence carried by a large share of some samples' reads and few of the others' is an allele with a different interruption structure (at HTT, for example, a duplicated CAACAG or the loss of the CAA and CCA interruptions, which leaves the tracts adjacent); one at a low share in every sample is sequencing error at the junction. Per-sample proportions are in repeat_detection.xlsx." else ""`
+`r if (any(grepl("^between_", names(read_tracts)))) "**How to read this.** For each pair of consecutive tracts, the sequence between them in each read, as the share of each sample's reads (the six commonest sequences across the cohort are named and the rest pooled as other). The commonest sequence is usually the reference structure. A sequence carried by a large share of some samples' reads and few of the others' is an allele with a different interruption structure (at HTT, for example, a duplicated CAACAG or the loss of the CAA and CCA interruptions, which leaves the tracts adjacent); one at a low share in every sample is sequencing error at the junction. The table lists every sequence, including those pooled as other; per-sample shares are in the between_tracts sheet of repeat_detection.xlsx and the cohort list in between_tracts_cohort." else ""`
 
 ---
 
@@ -500,7 +523,8 @@ output_path <- file.path(params$dir_out, "module_data", "03_repeat_detection.RDa
 save(module3_output, file = output_path)
 write_excel_function(list(tracts = tracts, measures = measures, detection = det, method_agreement = agree,
                           method_by_length = by_len, method_gap_pooled = gap_pooled, strand_by_sample = strand_summary,
-                          modal_by_method = modal_method, between_tracts = module3_output$between), xlsx_path)
+                          modal_by_method = modal_method, between_tracts = module3_output$between,
+                          between_tracts_cohort = if (exists("between_cohort")) between_cohort else NULL), xlsx_path)
 timings["Save"] <- proc.time()["elapsed"] - .t
 ```
 

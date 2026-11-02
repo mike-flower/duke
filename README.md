@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.2.2** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.3.0** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -307,7 +307,7 @@ Distribution statistics (modal, median, mean, SD, IQR, 5th and 95th percentiles,
 | `use_manual_controls` | `FALSE` | TRUE / FALSE | Use manual_control_repeat_length from the settings file as the control setpoint (replacing the group control) for those samples and ranges |
 | `expansion_thresholds` | `5, 10` | whole-number list | k for proportion of reads at least k units above / below the setpoint |
 | `cohort_plot_by` | `group, time` | text list | Dimensions for cohort plots: group, time |
-| `headline_metrics` | `modal_length, median_length, mean_length, instability_index, expansion_index, share_5plus_above_setpoint` | text list | Metrics drawn as timecourses by group (names from before v3.1, e.g. `prop_above_5`, still work) |
+| `headline_metrics` | `modal_length, median_length, mean_length, instability_index, expansion_index, contraction_index, share_5plus_above_setpoint, share_5plus_below_setpoint` | text list | Metrics drawn as timecourses by group (names from before v3.1, e.g. `prop_above_5`, still work) |
 | `headline_setpoint_type` | `control_relative` | text | Setpoint type for headline plots: `control_relative` or `sample_relative` |
 | `plot_ranges` | – | text list | Ranges drawn inline (default: the first two ranges of the primary measure) |
 | `measure_pairs` | – | text list | Pairs of measures to plot against each other per read, e.g. `CAG:CCG` (default: every pair of tracts) |
@@ -379,7 +379,7 @@ The tables are generated from `lib/params.R`, which defines every parameter; aft
 | `np_min` | NA | minimum PacBio passes |
 | `na_repeat_handling` | keep | reads with no tract: keep (no length), convert_to_zero (length 0, as in v2) or filter |
 | `use_manual_controls` | FALSE | settings-file control lengths replace the group control |
-| `headline_metrics` | modal, median, mean, II, EI, share_5plus_above_setpoint | timecourse rows in Module 6 |
+| `headline_metrics` | modal, median, mean, II, EI, CI, share_5plus_above_setpoint, share_5plus_below_setpoint | timecourse rows in Module 6 |
 | `plot_ranges` | first two ranges | ranges drawn in Module 6 and on sample cards |
 | `sample_cards` | TRUE | one figure per sample in Module 7 |
 
@@ -624,6 +624,21 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 **v3.0.10**
 - Module 5 haplotype clustering: the left and right flanks are no longer joined into one sequence for k-mer counting, so no k-mer spans the junction. Junction k-mers combined the bases either side of the tract, so jitter where the tract ends changed ~15 k-mers in the same reads at once, which looks like a real variant; on the jasmine CAG + CCG run this split ~10% of the expanded allele into a second "haplotype" (H2) in 45 of 66 samples, with the same length distribution and a consensus that differed only in the bases next to the tract. On simulated reads the old code split off 9% of reads on boundary jitter alone and missed a real SNP carried by 30% of reads; the new code keeps one cluster for jitter and splits on the SNP. A real variant within ~7 bp of the tract is no longer used for haplotypes.
 - Module 5 report: the variants section says how much flank sequence the consensuses cover (on a UMI amplicon this is ~50 bp left and ~80 bp right of the tract, not the whole reference flank), and says plainly when no consensus differs from the reference, rather than introducing a table that is not there.
+
+**v3.3.0** – clearer reports, and where each extra allele comes from
+- Module 5, extra clusters explained: each allele from 3 upwards gets an `origin` in the allele table and under its allele figure, saying whose length it has (allele 1's, allele 2's or its own) and whose flanks, read at the variants that tell alleles 1 and 2 apart. An extra cluster with one allele's length and the other's flanks is marked as a likely PCR chimera; flanks that match each allele at different variants are marked as a third haplotype (another line or a contaminating sample). Read support is now measured in every allele, not only alleles 1 and 2.
+- Module 5 figures: per-sample cluster plots draw one row per cluster on a shared length axis (clusters of the same length no longer hide behind each other), labelled with the allele number and, where reads were split by haplotype, the haplotype – which the text explains is numbered within each length cluster. Allele figures label each row with every tract's length (e.g. CAG 14, CCG 9) and say which allele is shorter. The variant map labels each sample with its alleles' lengths and its panels as the shorter and the longer allele; the `variants` and `variant_support` sheets carry each allele's modal lengths.
+- Module 5: a section on viewing the BAMs and VCF in IGV (the reference with the N block, grouping reads by `HP`) and what the allele FASTA is for. Cluster and consensus caches renamed, so a resumed run never reuses clusters made by an earlier version.
+- Module 3: the flank-length check is one stacked bar per sample; strand plots show the forward-strand share (Module 2 too); the counting methods are defined with a worked example; the gap plot shows how many units full counts beyond match or pure; the full-against-pure scatter is replaced by the share of full that match and pure keep, coloured by the number of breaks in the tract; every sequence between tracts, including those pooled as other, is in a report table and the `between_tracts_cohort` sheet.
+- Module 4: *Reads per molecule* shows molecules and the reads they hold by depth group as bars, with dropped groups shaded; status labels say why molecules were dropped; axes and text say *repeat length* wherever a read's or molecule's tract length is meant.
+- Module 6: timecourses also show the contraction index and the share 5+ units below the setpoint by default, with larger text.
+- Module 7: in the density figures each read's dot sits inside its sample's ridge; the report shows example sample cards for the primary measure only, large enough to read, and the saved cards (every measure) are larger.
+
+**v3.2.3**
+- Module 4 *Reads per molecule*: the reads line and the share of reads in dropped molecules were wrong. Molecules were grouped by their read count and the reads summed within each group, which counted one molecule's reads per group; on the jasmine run this gave 0.0% of reads in molecules with fewer than 3 reads, against the correct 16% shown in the bar beside it.
+- Figures that are drawn tall (Module 4 filter effect by group; Module 7 group densities and histograms and the sample cards) are shown in the report from the saved files, at their full height: a figure size changed inside a report chunk is ignored, so they were squeezed into 5 inches. The Module 4 filter-effect figure is sized by the groups that have samples in the run, not every group in the settings file.
+- Sample cards and per-sample distributions: each row's modal, median and mean are written in its header, so they no longer overlap in short panels.
+- Axes from 0 for the PacBio pass count and read quality (Module 1) and the flank-alignment shortfall (Module 2), so small differences are not magnified; shorter Module 5 variant-map subtitle and two-line Module 4 subtitles, so none is cut off.
 
 **v3.2.2**
 - Module 5 read support for insertions and deletions in repetitive sequence: the read context around each variant is widened (from 8 up to 60 bases each side) until the reference and alternative contexts no longer contain each other, and a read matching both is not counted. Before, a short reference context sat inside the alternative one for a duplicated stretch, so every read counted as reference as well, and a real variant showed ~50% support in both alleles and was marked `LowSupport`. On the RUES2/QS5 MSN run this was a 20 bp duplication at 2068 (`CCGCCTCCGCCGGCGCGGCC`) on the QS5 expanded allele, which now shows 97–100% support in that allele and 2–7% in the other.

@@ -71,17 +71,16 @@ dist_rows <- function(d, title = NULL, xlab = "Repeat length", binwidth = 1, bw 
     ggplot2::labs(x = xlab, y = "Share", title = title) + ggplot2::theme_bw()
   if (!is.null(marks) && nrow(marks)) {
     # marks: unit, stat, value - drawn per row, so read and molecule statistics are each beside their own data
-    marks <- data.table::as.data.table(marks)[, unit := factor(unit, levels = levels(d$unit))]
-    ytop <- h[, .(top = max(share)), by = unit]
-    # The values are listed in the panel's top right corner rather than beside their lines:
-    # modal, median and mean are often within a unit of each other, and labels at the
-    # lines would sit on top of one another
-    marks <- ytop[marks, on = "unit"][, y := top * c(modal = 1.0, median = 0.86, mean = 0.72)[as.character(stat)]]
+    marks <- data.table::as.data.table(marks)[is.finite(value)][, unit := factor(unit, levels = levels(d$unit))]
+  }
+  if (!is.null(marks) && nrow(marks)) {
+    # The values go in the panel's header strip, not beside their lines: modal, median and
+    # mean are often within a unit of each other, so labels at the lines would overlap
     cols <- c(modal = "#e41a1c", median = "#984ea3", mean = "#ff7f00")
-    p <- p +
-      ggplot2::geom_vline(data = marks, ggplot2::aes(xintercept = value), colour = cols[as.character(marks$stat)], linewidth = 0.4, linetype = "dashed") +
-      ggplot2::geom_text(data = marks, ggplot2::aes(x = Inf, y = y, label = sprintf("%s %.1f", stat, value)), colour = cols[as.character(marks$stat)],
-                         inherit.aes = FALSE, size = 2.6, hjust = 1.05, vjust = 1)
+    vals <- marks[, .(txt = paste(sprintf("%s %s", stat, formatC(value, format = "f", digits = 1)), collapse = ", ")), by = unit]
+    lab[as.character(vals$unit)] <- paste0(lab[as.character(vals$unit)], " \u2013 ", vals$txt)
+    p <- p + ggplot2::facet_wrap(~ unit, ncol = 1, scales = "free_y", labeller = ggplot2::as_labeller(lab)) +
+      ggplot2::geom_vline(data = marks, ggplot2::aes(xintercept = value), colour = cols[as.character(marks$stat)], linewidth = 0.4, linetype = "dashed")
   }
   p
 }
@@ -104,13 +103,18 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
   }, by = label][, base := idx[as.character(label)]][, top := base + 0.85 * y]
   rdn <- dens(rd)
   set.seed(123)
-  # dots jittered sideways by up to 0.35 units, so reads of one whole length do not stack into a bar
-  dots <- rd[, .SD[sample(.N, min(.N, dots_max))], by = label][, `:=`(y = idx[as.character(label)] - 0.06 - stats::runif(.N, 0, 0.26),
-                                                                      length = length + stats::runif(.N, -0.35, 0.35))]
+  # Each read is a dot inside its sample's ridge: jittered sideways by up to 0.35 units, so reads of
+  # one whole length do not stack into a bar, and placed at random between the baseline and the
+  # ridge's height at that length, so the dots fill the shape and stay within their own sample
+  dots <- rd[, .SD[sample(.N, min(.N, dots_max))], by = label][, length := length + stats::runif(.N, -0.35, 0.35)]
+  dots[, h := { r <- rdn[label == .BY$label]
+                 if (data.table::uniqueN(r$x) < 2) rep(0.85, .N) else stats::approx(r$x, r$top - r$base, xout = length, rule = 2, ties = max)$y }, by = label]
+  dots[, y := idx[as.character(label)] + stats::runif(.N, 0.02, 0.98) * pmax(h, 0.02)]
   modal <- rd[, .(modal = { tb <- table(round(length)); as.numeric(names(tb)[which.max(tb)]) }), by = label][, base := idx[as.character(label)]]
   p <- ggplot2::ggplot() +
-    ggplot2::geom_ribbon(data = rdn, ggplot2::aes(x, ymin = base, ymax = top, group = label), fill = "grey82", colour = "grey25", linewidth = 0.3) +
-    ggplot2::geom_point(data = dots, ggplot2::aes(length, y), size = 0.35, alpha = 0.3, colour = "black", stroke = 0)
+    ggplot2::geom_ribbon(data = rdn, ggplot2::aes(x, ymin = base, ymax = top, group = label), fill = "grey90", colour = NA) +
+    ggplot2::geom_point(data = dots, ggplot2::aes(length, y), size = 0.35, alpha = 0.35, colour = "black", stroke = 0) +
+    ggplot2::geom_line(data = rdn, ggplot2::aes(x, top, group = label), colour = "grey25", linewidth = 0.3)
   if (!is.null(md) && nrow(md)) {
     md <- data.table::as.data.table(md)[is.finite(length) & label %in% L]
     if (nrow(md)) p <- p + ggplot2::geom_line(data = dens(md), ggplot2::aes(x, top, group = label, colour = "Molecules"), linewidth = 0.5) +
@@ -122,7 +126,7 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
     ggplot2::coord_cartesian(xlim = xlim) +
     ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(10)) +
     ggplot2::labs(x = xlab, y = NULL, title = title,
-                  subtitle = subtitle %||% sprintf("Grey = reads (density, scaled to each sample's height)%s\nDots = %s reads; red = the reads' modal length",
+                  subtitle = subtitle %||% sprintf("Grey = reads (density, scaled to each sample's height)%s\nDots inside each ridge = %s reads; red = the reads' modal length",
                                                    if (!is.null(md) && nrow(md)) ", teal = molecules" else "",
                                                    if (rd[, max(.N), by = label][, max(V1)] > dots_max) paste("up to", format(dots_max, big.mark = ","), "random") else "all")) +
     ggplot2::theme_bw() + ggplot2::theme(legend.position = "top", panel.grid.minor = ggplot2::element_blank())

@@ -522,10 +522,15 @@ write_allele_bam <- function(d, ref, path, preset = "-x map-hifi", threads = 1L,
 # marked (filled = in the consensus, open = carried by a minority of the reads) and
 # labelled with the share of the allele's reads that carry it. Middle panel: the allele's
 # repeat region written out in repeat notation.
-allele_map_plot <- function(al, vars, ref, title) {
+allele_map_plot <- function(al, vars, ref, title, tract_names = NULL) {
   al <- data.table::as.data.table(al)[order(allele)]
-  al[, row := factor(sprintf("Allele %s\n%s reads (%s)", allele, format(reads, big.mark = ","), scales::percent(proportion, 1)),
-                     levels = rev(sprintf("Allele %s\n%s reads (%s)", allele, format(reads, big.mark = ","), scales::percent(proportion, 1))))]
+  # Each row is labelled with the allele's modal length of every tract (e.g. CAG 14, CCG 9)
+  tn <- intersect(paste0("modal_", tract_names), names(al))
+  len_txt <- if (length(tn)) apply(al[, tn, with = FALSE], 1, function(x) paste(sprintf("%s %s", sub("^modal_", "", tn), x), collapse = ", ")) else rep("", nrow(al))
+  rl <- sprintf("Allele %s%s\n%s\n%s reads (%s)", al$allele, ifelse(al$allele == 1, " (shorter)", ifelse(al$allele == 2, " (longer)", "")),
+                len_txt, format(al$reads, big.mark = ","), scales::percent(al$proportion, 1))
+  al[, row := factor(rl, levels = rev(rl))]
+  org <- if ("origin" %in% names(al)) al[allele > 2 & !is.na(origin), sprintf("Allele %s: %s", allele, origin)] else character(0)
   v <- data.table::as.data.table(vars)
   if (nrow(v)) v <- al[, .(file_stem, allele, row)][v, on = .(file_stem, allele), nomatch = NULL]
   side_plot <- function(side) {
@@ -552,7 +557,8 @@ allele_map_plot <- function(al, vars, ref, title) {
     ggplot2::theme_bw() + ggplot2::theme(axis.text = ggplot2::element_blank(), axis.ticks = ggplot2::element_blank(), panel.grid = ggplot2::element_blank())
   patchwork::wrap_plots(side_plot("left"), mid + ggplot2::theme(axis.text.y = ggplot2::element_blank()), side_plot("right") + ggplot2::theme(axis.text.y = ggplot2::element_blank()),
                         nrow = 1, widths = c(2, 1.6, 2), guides = "collect") +
-    patchwork::plot_annotation(title = title, subtitle = "Grey = flank sequence each allele's consensus covers; orange = variants against the reference, labelled with the share of the allele's reads carrying them") &
+    patchwork::plot_annotation(title = title, subtitle = "Grey = flank sequence each allele's consensus covers; orange = variants against the reference, labelled with the share of the allele's reads carrying them",
+                               caption = if (length(org)) paste(org, collapse = "\n") else NULL) &
     ggplot2::theme(legend.position = "bottom")
 }
 stringr_wrap <- function(x, width) vapply(x, function(s) if (is.na(s)) "" else paste(strwrap(s, width), collapse = "\n"), "")
@@ -599,23 +605,29 @@ waterfall_breaks <- function(len, n_target = 30) {
 # One sample's clusters: histogram of the primary length, stacked by cluster, with
 # each cluster's modal length and share of reads written above it.
 cluster_length_plot <- function(d, cs, title, xlab = "Repeat length") {
+  # One row per cluster, sharing the length axis, so clusters of the same length (e.g. the
+  # same allele split by flank haplotype) are each visible rather than stacked out of sight
   d <- data.table::as.data.table(d)[is.finite(length)]
-  d[, cluster := factor(cluster_number, levels = sort(unique(cluster_number)))]
-  cs <- data.table::as.data.table(cs)[, cluster := factor(cluster_number, levels = levels(d$cluster))]
+  cs <- data.table::as.data.table(cs)
+  ord <- cs[order(if ("allele" %in% names(cs)) allele else cluster_number), cluster_number]
+  hap <- if (data.table::uniqueN(cs$haplotype_cluster) > 1) paste0(", flank haplotype ", cs$haplotype_cluster) else ""
+  cs[, label := sprintf("%sCluster %s: modal %s, %s of reads%s",
+                        if ("allele" %in% names(cs)) paste0("Allele ", allele, " \u2013 ") else "", cluster_number, round(modal_length),
+                        scales::percent(proportion, 0.1), hap)]
+  d[, cluster := factor(cluster_number, levels = ord)]
+  cs[, cluster := factor(cluster_number, levels = ord)]
   h <- d[, .N, by = .(cluster, length = floor(length + 0.5))]
-  top <- h[, .(top = sum(N)), by = length][, max(top)]
-  cs[, label := sprintf("C%s: mode %s, %s of reads%s", cluster, round(modal_length), scales::percent(proportion, 0.1),
-                        ifelse(!is.na(haplotype_cluster) & haplotype_cluster != "H1", paste0(", ", haplotype_cluster), ""))]
   xr <- c(min(d$length), stats::quantile(d$length, 0.999)) + c(-3, 3)
+  pal <- stats::setNames(rep(RColorBrewer::brewer.pal(9, "Set1"), length.out = length(ord)), ord)
   ggplot2::ggplot(h, ggplot2::aes(length, N, fill = cluster)) + ggplot2::geom_col(width = 1) +
-    ggplot2::geom_vline(data = cs, ggplot2::aes(xintercept = modal_length, colour = cluster), linetype = "dashed", linewidth = 0.4, show.legend = FALSE) +
-    ggplot2::scale_fill_brewer(palette = "Set1", name = "Cluster", labels = stats::setNames(cs$label, cs$cluster)) +
-    ggplot2::scale_colour_brewer(palette = "Set1") +
+    ggplot2::geom_vline(data = cs, ggplot2::aes(xintercept = modal_length), colour = "grey30", linetype = "dashed", linewidth = 0.4) +
+    ggplot2::facet_wrap(~ cluster, ncol = 1, scales = "free_y", labeller = ggplot2::as_labeller(stats::setNames(cs$label, cs$cluster))) +
+    ggplot2::scale_fill_manual(values = pal, guide = "none") +
     ggplot2::scale_y_sqrt(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05))) +
     ggplot2::coord_cartesian(xlim = xr) +
     ggplot2::labs(x = xlab, y = "Reads (square-root scale)", title = title,
-                  subtitle = "Bars stacked by cluster; dashed line = each cluster's modal length") +
-    ggplot2::theme_bw() + ggplot2::theme(legend.position = "right")
+                  subtitle = "One row per cluster, each on its own scale; dashed line = the cluster's modal length") +
+    ggplot2::theme_bw() + ggplot2::theme(strip.text = ggplot2::element_text(hjust = 0))
 }
 
 # ------------------------------------------------------------------------------

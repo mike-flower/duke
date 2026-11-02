@@ -142,9 +142,9 @@ Each point is one sample's median pass count (left) or median read quality (righ
 pb_long <- pacbio_summary %>% dplyr::select(file_stem, `Median pass count (np)` = median_np, `Median read quality (QV)` = median_qv) %>%
   pivot_longer(-file_stem, names_to = "metric", values_to = "value")
 p_pacbio <- ggplot(pb_long, aes(x = "", y = value)) + box_points_mean(digits = 1) +
-  facet_wrap(~ metric, scales = "free_y") +
+  facet_wrap(~ metric, scales = "free_y") + expand_limits(y = 0) +
   labs(x = NULL, y = "Per-sample median", title = "PacBio HiFi pass count and read quality",
-       subtitle = sprintf("%d PacBio samples; one point per sample", nrow(pacbio_summary))) +
+       subtitle = sprintf("%d PacBio samples; one point per sample; axes from 0, so that small differences are not magnified", nrow(pacbio_summary))) +
   theme_bw() + theme(axis.ticks.x = element_blank())
 print(p_pacbio)
 save_plot(p_pacbio, file.path(plots_dir, "pacbio_np_rq.png"), 10, 5)
