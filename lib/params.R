@@ -87,9 +87,9 @@ duke_param_spec <- function() {
     .p("umi_top_cluster_w", 3, "num", "UMI", "top_cluster: constant part of the window half-width (repeats)"),
     .p("umi_top_cluster_wfrac", 0.10, "num", "UMI", "top_cluster: length-proportional part of the window half-width"),
     .p("umi_top_cluster_min_share", 0.2, "num", "UMI", "top_cluster: share of the molecule's reads the window must also hold, so a few stray long reads cannot set the length (0 = only umi_top_cluster_k reads needed)"),
-    .p("umi_long_read_filter", TRUE, "lgl", "UMI", "Drop molecules where many reads are much longer than the molecule (most likely a longer template whose reads were shortened in PCR): the shortened-molecule filter"),
-    .p("umi_long_read_units", 20, "num", "UMI", "Long-read filter: how many units longer than its molecule a read must be to count as long"),
-    .p("umi_long_read_share", 0.2, "num", "UMI", "Long-read filter: share of the reads of a molecule that must be long for it to be flagged"),
+    .p("umi_shortened_filter", TRUE, "lgl", "UMI", "Drop molecules where many reads are much longer than the molecule (most likely a longer template whose reads were shortened in PCR): the shortened-molecule filter"),
+    .p("umi_shortened_min_units", 20, "num", "UMI", "Shortened-molecule filter: how many units longer than its molecule a read must be to count as long"),
+    .p("umi_shortened_min_share", 0.2, "num", "UMI", "Shortened-molecule filter: share of the reads of a molecule that must be long for the molecule to be flagged as shortened"),
 
     # --- Module 5: allele structure ---------------------------------------------------------
     .p("cluster", FALSE, "lgl", "Allele structure", "Cluster reads into alleles, build consensus sequences and call variants"),
@@ -122,10 +122,9 @@ duke_param_spec <- function() {
     .p("control_sample_selection", "flagged", "chr", "Instability", "'flagged', 'earliest' or 'all'"),
     .p("control_setpoint_metric", "median_length", "chr", "Instability", "'modal_length', 'mean_length' or 'median_length'"),
     .p("control_aggregation_method", "median", "chr", "Instability", "'mean', 'median' or 'trimmed_mean' across control samples"),
-    .p("use_manual_controls", FALSE, "lgl", "Instability",
-       "Use manual_control_repeat_length from the settings file as the control setpoint (replacing the group control) for those samples and ranges"),
     .p("expansion_thresholds", c(5L, 10L), "intvec", "Instability", "k for proportion of reads at least k units above / below the setpoint"),
     .p("cohort_plot_by", c("group", "time"), "chrvec", "Instability", "Dimensions for cohort plots: group, time"),
+    .p("time_label", "Time (days)", "chr", "Instability", "Axis label for the time column of the settings file, with its unit"),
     .p("headline_metrics", c("modal_length", "median_length", "mean_length", "instability_index",
                              "expansion_index", "contraction_index", "share_5plus_above_setpoint", "share_5plus_below_setpoint"),
        "chrvec", "Instability", "Metrics drawn as timecourses by group"),
@@ -160,11 +159,20 @@ duke_defaults <- function() {
 }
 
 # Parameters renamed or removed since v2.3.1, mapped to their replacements
+# v3.3.1: the long-read filter is now the shortened-molecule filter, so it is not read as
+# filtering out long (expanded) alleles
+.renamed_params <- c(umi_long_read_filter = "umi_shortened_filter",
+                     umi_long_read_units  = "umi_shortened_min_units",
+                     umi_long_read_share  = "umi_shortened_min_share")
+
 .legacy_params <- list(
   repeat_histogram = NULL, repeat_scatter = NULL, repeat_density = NULL,
   repeat_distribution_metrics = NULL, cluster_consensus = NULL, dna_colours = NULL,
   waterfall_y_axis_labels = NULL, haplotype_method = NULL, visualise_alignment_n_reads = NULL,
-  umi_allele_min_sep = NULL, umi_split_mixed = NULL
+  umi_allele_min_sep = NULL, umi_split_mixed = NULL,
+  # v3.3.1: a manual_control_repeat_length in the settings file always replaces the group
+  # control; a blank cell uses the group control
+  use_manual_controls = NULL
 )
 
 # Merge user params into defaults, coerce types and validate
@@ -172,9 +180,19 @@ resolve_params <- function(user = list()) {
   spec <- duke_param_spec()
   types <- setNames(vapply(spec, `[[`, "", "type"), vapply(spec, `[[`, "", "name"))
   p <- duke_defaults()
+  # Renamed parameters: the old name still works (unless the new one is also given)
+  for (old in intersect(names(user), names(.renamed_params))) {
+    new <- .renamed_params[[old]]
+    message(sprintf("%s has been renamed %s; using its value", old, new))
+    if (is.null(user[[new]])) user[[new]] <- user[[old]]
+    user[[old]] <- NULL
+  }
   unknown <- setdiff(names(user), names(p))
   legacy  <- intersect(unknown, names(.legacy_params))
   if (length(legacy)) message("Ignoring parameters no longer used: ", paste(legacy, collapse = ", "))
+  if ("use_manual_controls" %in% legacy)
+    message("use_manual_controls is no longer needed: a manual_control_repeat_length in the settings file now always ",
+            "replaces the group control for that sample and range, and a blank cell uses the group control")
   unknown <- setdiff(unknown, legacy)
   if (length(unknown)) warning("Unknown parameters ignored: ", paste(unknown, collapse = ", "))
   for (n in intersect(names(user), names(p))) p[[n]] <- user[[n]]
@@ -208,8 +226,8 @@ resolve_params <- function(user = list()) {
   if (!p$umi_cluster_max_dist %in% 0:2) stop("umi_cluster_max_dist must be 0, 1 or 2")
   if (!p$umi_collapse_stat %in% c("top_cluster", "max_supported", "mode", "median", "mean"))
     stop("umi_collapse_stat must be 'top_cluster', 'max_supported', 'mode', 'median' or 'mean'")
-  if (!is.finite(p$umi_long_read_units) || p$umi_long_read_units <= 0) stop("umi_long_read_units must be a positive number")
-  if (!is.finite(p$umi_long_read_share) || p$umi_long_read_share <= 0 || p$umi_long_read_share > 1) stop("umi_long_read_share must be above 0 and at most 1")
+  if (!is.finite(p$umi_shortened_min_units) || p$umi_shortened_min_units <= 0) stop("umi_shortened_min_units must be a positive number")
+  if (!is.finite(p$umi_shortened_min_share) || p$umi_shortened_min_share <= 0 || p$umi_shortened_min_share > 1) stop("umi_shortened_min_share must be above 0 and at most 1")
   if (!is.finite(p$umi_top_cluster_min_share) || p$umi_top_cluster_min_share < 0 || p$umi_top_cluster_min_share > 1)
     stop("umi_top_cluster_min_share must be between 0 and 1")
   p$dir_out <- normalizePath(p$dir_out, mustWork = FALSE)

@@ -19,9 +19,9 @@
 #   4. Molecules with fewer than umi_min_reads reads are dropped, and each
 #      measure is collapsed to one value per molecule (default top_cluster,
 #      needing at least 2 reads and 20% of the molecule's reads).
-#   5. Molecules where at least umi_long_read_share of the reads are at least
-#      umi_long_read_units longer than the molecule itself are flagged, and
-#      dropped when umi_long_read_filter is TRUE (the default): they most likely
+#   5. Molecules where at least umi_shortened_min_share of the reads are at least
+#      umi_shortened_min_units longer than the molecule itself are flagged, and
+#      dropped when umi_shortened_filter is TRUE (the default): they most likely
 #      came from a longer template whose reads were mostly shortened in PCR.
 # ==============================================================================
 
@@ -218,13 +218,17 @@ collapse_rules <- function(p) {
 collapse_scorecard <- function(rd, rules, n_max = 3000L, seed = 1L) {
   set.seed(seed)
   rd <- rd[is.finite(length)]
-  by_mol <- split(rd$length, rd$molecule_id)
   smp <- rd[, .(file_stem = file_stem[1], n = .N), by = molecule_id]
   pick <- function(min_n) { ids <- smp[n >= min_n, molecule_id]; if (length(ids) > n_max) sample(ids, n_max) else ids }
   ids6 <- pick(6L); ids20 <- pick(20L)
   # a random donor molecule from the same sample for each molecule tested for chimeras
   donor <- smp[, .(molecule_id, donor = if (.N > 1) molecule_id[(seq_len(.N) + sample.int(.N - 1, 1) - 1) %% .N + 1] else NA_character_), by = file_stem]
   donor <- setNames(donor$donor, donor$molecule_id)
+  # Only the tested molecules and their donors are split into reads (splitting every molecule
+  # took most of this step's time in large runs)
+  need <- unique(stats::na.omit(c(ids6, ids20, unname(donor[ids6]))))
+  sub_rd <- rd[molecule_id %in% need]
+  by_mol <- split(sub_rd$length, sub_rd$molecule_id)
   rbindlist(lapply(names(rules), function(r) {
     f <- rules[[r]]$f
     sh <- if (length(ids6)) mean(vapply(ids6, function(m) { v <- by_mol[[m]]; i <- sample.int(length(v)); h <- length(v) %/% 2
@@ -266,20 +270,20 @@ form_molecules <- function(sample, reads, lengths, p, primary) {
   ml <- lk[, .(length = .whole_unit(f(length), length), n_reads = .N, read_sd = stats::sd(length)), by = .(molecule_id, measure)]
   ml[, file_stem := sample]
 
-  # Long-read check, on the primary measure: reads at least umi_long_read_units longer than
-  # their own molecule. A molecule where they make up at least umi_long_read_share of its
+  # Long-read check, on the primary measure: reads at least umi_shortened_min_units longer than
+  # their own molecule. A molecule where they make up at least umi_shortened_min_share of its
   # reads most likely came from a longer template whose reads were mostly shortened in PCR
   # (an early-cycle deletion), so its length is too short. Judged from the molecule's own
   # reads only; no alleles are involved.
   pl <- ml[measure == primary, .(molecule_id, primary_length = length)]
   lr <- lk[measure == primary][pl, on = "molecule_id", nomatch = NULL][
-    , .(reads_measured = .N, long_reads = sum(length - primary_length >= p$umi_long_read_units)), by = molecule_id]
+    , .(reads_measured = .N, long_reads = sum(length - primary_length >= p$umi_shortened_min_units)), by = molecule_id]
   mol <- pl[mol, on = "molecule_id"]
   mol <- lr[mol, on = "molecule_id"]
   mol[is.na(long_reads), `:=`(long_reads = 0L, reads_measured = 0L)]
   mol[, long_share := ifelse(reads_measured > 0, long_reads / reads_measured, 0)]
-  mol[, long_flag := kept_depth & long_share >= p$umi_long_read_share]
-  mol[, kept := kept_depth & !(isTRUE(p$umi_long_read_filter) & long_flag)]
+  mol[, long_flag := kept_depth & long_share >= p$umi_shortened_min_share]
+  mol[, kept := kept_depth & !(isTRUE(p$umi_shortened_filter) & long_flag)]
   setcolorder(mol, c("molecule_id", "file_stem", "umi", "n_reads", "primary_length", "reads_measured", "long_reads", "long_share",
                      "kept_depth", "long_flag", "kept"))
   ml <- ml[molecule_id %in% mol$molecule_id[mol$kept]]
@@ -297,7 +301,7 @@ form_molecules <- function(sample, reads, lengths, p, primary) {
                            umis_with_neighbour = if (is.null(pairs) || nrow(pairs) == 0) 0L else data.table::uniqueN(c(pairs$a, pairs$b)),
                            expected_by_chance = expected_chance_neighbours(length(cl$u), stats::median(nchar(cl$u)), max(1, p$umi_cluster_max_dist)) * length(cl$u),
                            molecules = nrow(mol), molecules_enough_reads = sum(mol$kept_depth),
-                           molecules_long_read_flag = sum(mol$long_flag), molecules_kept = sum(mol$kept), stringsAsFactors = FALSE)
+                           molecules_shortened_flag = sum(mol$long_flag), molecules_kept = sum(mol$kept), stringsAsFactors = FALSE)
   list(reads = r[, .(file_stem = sample, qname, umi, umi_group, molecule_id)],
        molecules = mol, molecule_lengths = ml, clustering = clustering, collapse_compare = cmp)
 }

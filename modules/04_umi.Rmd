@@ -44,7 +44,7 @@ Every read in a UMI family descends from one original DNA molecule with one true
 2. UMIs are clustered per sample with the directional rule at edit distance `r params$umi_cluster_max_dist`: a UMI joins a neighbour that has at least twice its reads (minus one)
 3. Each UMI family (all reads whose UMIs clustered together) is one molecule. Repeat length plays no part in forming molecules: PCR slippage and deletion can make reads of one molecule differ by tens of units, which is the error collapsing is meant to remove, so length cannot be used to decide which reads belong together. Nothing is assumed about how many alleles or clones a sample has
 4. Molecules with fewer than `r params$umi_min_reads` reads are dropped, and every measure is collapsed to one repeat length per molecule with **`r params$umi_collapse_stat`**`r if (params$umi_collapse_stat == "top_cluster") sprintf(" (the median of the highest window of half-width %g + %g × length holding at least %d reads%s)", params$umi_top_cluster_w, params$umi_top_cluster_wfrac, params$umi_top_cluster_k, if (params$umi_top_cluster_min_share > 0) sprintf(" and at least %s of the molecule's reads", percent(params$umi_top_cluster_min_share)) else "") else ""`. A length halfway between two whole units goes to the one more of the molecule's reads sit on. Other length rules are compared in *Molecule repeat length*
-5. Molecules where at least `r percent(params$umi_long_read_share)` of the reads are at least `r params$umi_long_read_units` units longer than the molecule itself are flagged`r if (isTRUE(params$umi_long_read_filter)) " and dropped" else " (and kept, as umi_long_read_filter = FALSE)"`: such a molecule most likely came from a longer template whose reads were mostly shortened in PCR, so its length is too short. See *Shortened-molecule filter*
+5. Molecules where at least `r percent(params$umi_shortened_min_share)` of the reads are at least `r params$umi_shortened_min_units` units longer than the molecule itself are flagged`r if (isTRUE(params$umi_shortened_filter)) " and dropped" else " (and kept, as umi_shortened_filter = FALSE)"`: such a molecule most likely came from a longer template whose reads were mostly shortened in PCR, so its length is too short. See *Shortened-molecule filter*
 
 Modules 6 and 7 then report every result twice: per read and per molecule.
 
@@ -267,7 +267,7 @@ timings["Length rules"] <- proc.time()["elapsed"] - .t
 
 # Shortened-molecule filter
 
-PCR can shorten the repeat tract in the first cycles, and the shortened copy is then amplified like any other. A molecule whose first copies were shortened ends up with mostly short reads plus a minority of full-length ones, so its length rule gives a length that is too short. This is most likely in molecules with few reads, and it places molecules at lengths no template had. The filter finds such molecules from their own reads. Every molecule with at least `umi_min_reads` reads is checked: a read counts as **long** if it is at least `umi_long_read_units` = `r params$umi_long_read_units` units longer than the molecule's `r primary` length. PCR mostly shortens reads, so a molecule should rarely hold reads much longer than itself. Where long reads make up at least `umi_long_read_share` = `r percent(params$umi_long_read_share)` of a molecule's reads, the molecule most likely came from a longer template whose reads were mostly shortened in PCR (an early-cycle deletion copied into most of the family), so the length it was given is too short. Such molecules are flagged, and `r if (isTRUE(params$umi_long_read_filter)) "**dropped** (umi_long_read_filter = TRUE): they are not in the molecule repeat lengths used by Modules 5–7" else "**kept** (umi_long_read_filter = FALSE): they are counted in Modules 5–7 as they are"`. The check uses only the molecule's own reads, so nothing is assumed about alleles. All the plots in this section use every molecule with enough reads, before the filter.
+PCR can shorten the repeat tract in the first cycles, and the shortened copy is then amplified like any other. A molecule whose first copies were shortened ends up with mostly short reads plus a minority of full-length ones, so its length rule gives a length that is too short. This is most likely in molecules with few reads, and it places molecules at lengths no template had. The filter finds such molecules from their own reads. Every molecule with at least `umi_min_reads` reads is checked: a read counts as **long** if it is at least `umi_shortened_min_units` = `r params$umi_shortened_min_units` units longer than the molecule's `r primary` length. PCR mostly shortens reads, so a molecule should rarely hold reads much longer than itself. Where long reads make up at least `umi_shortened_min_share` = `r percent(params$umi_shortened_min_share)` of a molecule's reads, the molecule most likely came from a longer template whose reads were mostly shortened in PCR (an early-cycle deletion copied into most of the family), so the length it was given is too short. Such molecules are flagged, and `r if (isTRUE(params$umi_shortened_filter)) "**dropped** (umi_shortened_filter = TRUE): they are not in the molecule repeat lengths used by Modules 5–7" else "**kept** (umi_shortened_filter = FALSE): they are counted in Modules 5–7 as they are"`. The check uses only the molecule's own reads, so nothing is assumed about alleles. All the plots in this section use every molecule with enough reads, before the filter.
 
 ## Flagged molecules by length and depth
 
@@ -275,7 +275,7 @@ PCR can shorten the repeat tract in the first cycles, and the shortened copy is 
 
 **What it shows.** Where the flagged molecules sit, and whether they are a problem of shallow molecules. A molecule with only a few reads is the easiest to get wrong: if a longer template's first copies were shortened, most of its few reads carry the shortened length. With more reads, the full-length reads become numerous enough for the length rule to find, so the flagged share should fall towards the top of the right grid. Columns where the bottom rows are flagged far more often than the rows above are lengths where shallow molecules cannot be trusted. Even genuine molecules are sometimes flagged, because a single stray long read (a PCR chimera) is already a large share of a 3–5-read molecule; the flagged share in the cells at a common length shows that background.
 
-```{r long_read_flag, fig.height=5.5}
+```{r shortened_flag, fig.height=5.5}
 .t <- proc.time()["elapsed"]
 lf <- molecules[kept_depth == TRUE & !is.na(primary_length)]
 lf_bw <- if (nrow(lf) && diff(stats::quantile(lf$primary_length, c(0.001, 0.999))) > 40) 5 else 1
@@ -299,10 +299,46 @@ p_lf2 <- ggplot(lf_bin[molecules >= 5], aes(x, depth, fill = flagged)) + geom_ti
 p_lf <- patchwork::wrap_plots(p_lf1, p_lf2, nrow = 1) + patchwork::plot_annotation(
   title = "Molecules flagged by the shortened-molecule filter, by length and reads per molecule",
   subtitle = sprintf("%s of %s molecules with enough reads flagged (%s); flag = at least %s of reads %s+ units longer than the molecule",
-                     comma(sum(lf$long_flag)), comma(nrow(lf)), percent(mean(lf$long_flag), 0.1), percent(params$umi_long_read_share), params$umi_long_read_units))
-print(p_lf); save_plot(p_lf, file.path(plots_dir, "long_read_flag_by_length.png"), 12, 5.5)
+                     comma(sum(lf$long_flag)), comma(nrow(lf)), percent(mean(lf$long_flag), 0.1), percent(params$umi_shortened_min_share), params$umi_shortened_min_units))
+print(p_lf); save_plot(p_lf, file.path(plots_dir, "shortened_flag_by_length.png"), 12, 5.5)
 long_tab <- lf[, .(molecules = .N, flagged = sum(long_flag), share_flagged = mean(long_flag)), by = .(depth, length_bin)][order(depth, length_bin)]
+# Broad depth bands for the line plot and the summary sentence below
+b_edges <- sort(unique(c(params$umi_min_reads, 4, 6, 11, Inf))); b_edges <- b_edges[b_edges >= params$umi_min_reads]
+b_lab <- vapply(seq_len(length(b_edges) - 1), function(i) if (is.infinite(b_edges[i + 1])) paste0(b_edges[i], "+ reads") else if (b_edges[i + 1] - 1 == b_edges[i]) paste(b_edges[i], "reads") else sprintf("%d\u2013%d reads", b_edges[i], b_edges[i + 1] - 1), "")
+lf[, band := cut(n_reads, b_edges, right = FALSE, labels = b_lab)]
+# The run's common lengths: the most frequent molecule length, and the most frequent one at
+# least 20 units from it (the second allele), so the flagged share can be read against them
+tb_len <- lf[, .N, by = primary_length][order(-N)]
+peaks <- if (nrow(tb_len)) { p1 <- tb_len$primary_length[1]; p2 <- tb_len[abs(primary_length - p1) >= 20]$primary_length[1]; sort(stats::na.omit(c(p1, p2))) } else numeric(0)
+lf_band <- lf[primary_length <= lf_lim, .(molecules = .N, flagged = mean(long_flag)), by = .(band, length_bin)][molecules >= 5]
+lf_band[, x := length_bin + (lf_bw - 1) / 2]
 ```
+
+**How to read this.** The same molecules as the right grid, in four broad depth bands, one line each: the share of the molecules at each length that the filter flags. The dashed lines are the run's most common molecule lengths (normally the two alleles). A high line for shallow molecules between the dashed lines, falling for deeper molecules, means the shallow molecules called there are mostly shortened copies of the longer allele.
+
+```{r shortened_by_band, fig.height=4.5}
+p_lb <- ggplot(lf_band, aes(x, flagged, colour = band)) +
+  geom_vline(xintercept = peaks, linetype = "dashed", colour = "grey40") +
+  geom_line(linewidth = 0.7) + geom_point(size = 0.8) +
+  scale_colour_viridis_d(option = "plasma", end = 0.85, name = "Reads per molecule") +
+  scale_y_continuous(labels = pct_axis(), limits = c(0, 1)) +
+  labs(x = paste("Molecule's", primary, "repeat length (units)"), y = "Molecules flagged",
+       title = "Share of molecules flagged as shortened, by length and depth",
+       subtitle = sprintf("All samples pooled; points with 5+ molecules; dashed lines = the run's most common molecule lengths (%s)", paste(peaks, collapse = " and "))) +
+  theme_bw() + theme(legend.position = "bottom")
+print(p_lb); save_plot(p_lb, file.path(plots_dir, "shortened_flag_by_depth_band.png"), 10, 4.5)
+# Data-driven summary: for each depth band, the share flagged between the common lengths
+# (or below the highest one when there is only one)
+lo <- if (length(peaks) == 2) peaks[1] + 5 else min(lf$primary_length, na.rm = TRUE)
+hi <- if (length(peaks)) max(peaks) - 5 else max(lf$primary_length, na.rm = TRUE)
+mid <- lf[primary_length >= lo & primary_length <= hi, .(molecules = .N, flagged = mean(long_flag)), by = band][order(band)]
+at_pk <- if (length(peaks)) lf[Reduce(`|`, lapply(peaks, function(pk) abs(primary_length - pk) <= 2)), mean(long_flag)] else NA_real_
+shortened_sentence <- if (nrow(mid) && hi > lo) sprintf("**In this run**, of the molecules called between %s %s and %s (%s), %s are flagged as shortened, against %s of the molecules within 2 units of the common lengths. Where the share is high in shallow molecules and falls with depth, the molecules called between the alleles are mostly molecules of a longer template whose reads were shortened in PCR, and the filter removes them.",
+  primary, lo, hi, if (length(peaks) == 2) "from 5 units above the shorter common length to 5 below the longer" else "below the common length", paste(sprintf("%s of those with %s (%s molecules)", percent(mid$flagged, 1), mid$band, comma(mid$molecules)), collapse = ", "),
+  if (is.na(at_pk)) "-" else percent(at_pk, 0.1)) else ""
+```
+
+`r shortened_sentence`
 
 ## Effect on the molecule repeat length distribution
 
@@ -343,24 +379,24 @@ lv_lty <- setNames(c("dashed", "solid", "solid", "solid"), lv_levels)
 lv[, draw := factor(version, levels = rev(levels(version)))]
 n_grp <- uniqueN(lv$group)
 p_lv <- ggplot(lv[order(draw)], aes(len, share, colour = version, linetype = version, group = draw)) + geom_step(direction = "mid", linewidth = 0.55) +
-  facet_wrap(~ group, ncol = 1, labeller = labeller(group = function(g) paste0(g, " (", n_in_group$n_samples[match(g, n_in_group$group)], " samples)"))) +
+  facet_wrap(~ group, ncol = 1, labeller = labeller(group = function(g) paste0(display_group(g), " (", n_in_group$n_samples[match(g, n_in_group$group)], " samples)"))) +
   scale_colour_manual(values = lv_cols, name = NULL) + scale_linetype_manual(values = lv_lty, name = NULL) +
   scale_y_log10(labels = function(v) scales::percent(v, accuracy = 0.001, drop0trailing = TRUE), breaks = 10^(-5:0)) +
   labs(x = paste(primary, "repeat length (units)"), y = "Share of molecules, averaged over\nthe group's samples (log axis)",
        title = "Molecule repeat length distribution with and without the shortened-molecule filter, by group") + theme_bw() + theme(legend.position = "bottom")
-print(p_lv); save_plot(p_lv, file.path(plots_dir, "long_read_filter_distribution.png"), 10, min(40, 1.5 + 2.6 * n_grp))
+print(p_lv); save_plot(p_lv, file.path(plots_dir, "shortened_filter_distribution.png"), 10, min(40, 1.5 + 2.6 * n_grp))
 ```
 
 ## Molecules flagged per sample
 
-Each point is one sample: the share of its molecules (those with enough reads) flagged by the shortened-molecule filter, that is, molecules where at least `r percent(params$umi_long_read_share)` of the reads are at least `r params$umi_long_read_units` units longer than the length the molecule was given. A sample far above the others had more PCR damage, so more of its molecules were built from shortened copies; `r if (isTRUE(params$umi_long_read_filter)) "with the filter on, it also loses more molecules" else "with the filter off, its molecule results are the most affected"`.
+Each point is one sample: the share of its molecules (those with enough reads) flagged by the shortened-molecule filter, that is, molecules where at least `r percent(params$umi_shortened_min_share)` of the reads are at least `r params$umi_shortened_min_units` units longer than the length the molecule was given. A sample far above the others had more PCR damage, so more of its molecules were built from shortened copies; `r if (isTRUE(params$umi_shortened_filter)) "with the filter on, it also loses more molecules" else "with the filter off, its molecule results are the most affected"`.
 
 ```{r long_read_sample, fig.height=4.5}
 lf_s <- lf[, .(molecules = .N, flagged = sum(long_flag), share_flagged = mean(long_flag)), by = file_stem]
 p_lfs <- ggplot(lf_s, aes("", share_flagged)) + box_points_mean(digits = 1, percent = TRUE) +
   scale_y_continuous(labels = pct_axis(), limits = c(0, NA), expand = expansion(mult = c(0.02, 0.1))) +
   labs(x = NULL, y = "Share of the sample's molecules flagged", title = "Molecules flagged by the shortened-molecule filter, per sample") + theme_bw()
-print(p_lfs); save_plot(p_lfs, file.path(plots_dir, "long_read_flag_per_sample.png"), 6, 4.5)
+print(p_lfs); save_plot(p_lfs, file.path(plots_dir, "shortened_flag_per_sample.png"), 6, 4.5)
 dt_full(lf_s, caption = "Molecules flagged by the shortened-molecule filter, per sample", digits = 3)
 timings["Shortened-molecule filter"] <- proc.time()["elapsed"] - .t
 ```
@@ -369,10 +405,10 @@ timings["Shortened-molecule filter"] <- proc.time()["elapsed"] - .t
 
 # Molecules kept
 
-What is left after the two steps that remove molecules: those with fewer than `umi_min_reads` = `r params$umi_min_reads` reads, and those `r if (isTRUE(params$umi_long_read_filter)) "removed" else "flagged"` by the shortened-molecule filter. The table gives the counts per sample: UMI families formed, molecules with enough reads, molecules flagged by the filter (column `long_read_flag`), molecules kept, the reads they hold and their median depth.
+What is left after the two steps that remove molecules: those with fewer than `umi_min_reads` = `r params$umi_min_reads` reads, and those `r if (isTRUE(params$umi_shortened_filter)) "removed" else "flagged"` by the shortened-molecule filter. The table gives the counts per sample: UMI families formed, molecules with enough reads, molecules flagged by the filter (column `long_read_flag`), molecules kept, the reads they hold and their median depth.
 
 ```{r kept_table}
-summary_tab <- molecules[, .(molecules = .N, enough_reads = sum(kept_depth), long_read_flag = sum(long_flag), kept = sum(kept),
+summary_tab <- molecules[, .(molecules = .N, enough_reads = sum(kept_depth), shortened_flag = sum(long_flag), kept = sum(kept),
                              reads_in_kept = sum(n_reads[kept]), median_reads_per_kept = as.numeric(median(n_reads[kept]))), by = file_stem]
 summary_tab <- clustering[, .(file_stem, n_reads_with_umi, distinct_umis, umi_groups, umis_with_neighbour, expected_by_chance)][summary_tab, on = "file_stem"]
 dt_full(summary_tab, caption = "UMI clustering and molecules per sample", digits = 2)
@@ -380,14 +416,14 @@ dt_full(summary_tab, caption = "UMI clustering and molecules per sample", digits
 
 ## Reads per molecule
 
-**How to read this.** A *molecule* is one UMI family: all the reads whose UMIs clustered together, which came from one original DNA molecule, so a molecule's *depth* is how many reads it has. **Left:** the molecules are grouped by depth (1 read, 2 reads, 3, 4–5 and so on). For each group the dark bar is the share of all molecules that are in it and the light bar the share of all reads that those molecules hold. Groups shaded grey on the left have fewer than `umi_min_reads` = `r params$umi_min_reads` reads and are dropped. **Right:** what happened to all the molecules and to all the reads: dropped for having fewer than `r params$umi_min_reads` reads, `r if (isTRUE(params$umi_long_read_filter)) "dropped" else "flagged (kept)"` by the shortened-molecule filter, or kept.
+**How to read this.** A *molecule* is one UMI family: all the reads whose UMIs clustered together, which came from one original DNA molecule, so a molecule's *depth* is how many reads it has. **Left:** the molecules are grouped by depth (1 read, 2 reads, 3, 4–5 and so on). For each group the dark bar is the share of all molecules that are in it and the light bar the share of all reads that those molecules hold. Groups shaded grey on the left have fewer than `umi_min_reads` = `r params$umi_min_reads` reads and are dropped. **Right:** what happened to all the molecules and to all the reads: dropped for having fewer than `r params$umi_min_reads` reads, `r if (isTRUE(params$umi_shortened_filter)) "dropped" else "flagged (kept)"` by the shortened-molecule filter, or kept.
 
 **What it shows.** Most UMI families are seen only once or twice: a UMI with a sequencing or PCR error that was not merged into its parent, or a molecule that was sampled only once. There are many such molecules, but each holds only one or two reads, so together they hold a small share of the reads. That share of reads (the light bars on the left of the dashed line) is the sequencing spent without contributing a molecule length. A large share there means the run was shallow for the number of tagged molecules, or that error UMIs were not merged.
 
 ```{r family_size, fig.height=5.5, fig.width=12}
 km <- molecules[kept == TRUE, n_reads]
 st_lab <- c(sprintf("fewer than %d reads (dropped)", params$umi_min_reads),
-            if (isTRUE(params$umi_long_read_filter)) "shortened molecule (dropped)" else "shortened molecule (flagged, kept)", "kept")
+            if (isTRUE(params$umi_shortened_filter)) "shortened molecule (dropped)" else "shortened molecule (flagged, kept)", "kept")
 molecules[, status := factor(ifelse(!kept_depth, st_lab[1], ifelse(long_flag, st_lab[2], st_lab[3])), levels = st_lab)]
 # Molecules by depth group; grouped by n_reads, so inside each group n_reads is that one value
 dep <- molecules[, .(molecules = .N), by = n_reads][, reads := as.numeric(n_reads) * molecules]
@@ -489,6 +525,10 @@ wl[, length_bin := floor(molecule_length / bin_width) * bin_width]
 we_len <- wl[, .(reads = .N, exact = mean(abs(dev) <= 0.5), below = mean(dev < -0.5), above = mean(dev > 0.5),
                  q10 = stats::quantile(dev, 0.10), q25 = stats::quantile(dev, 0.25), median = stats::median(dev),
                  q75 = stats::quantile(dev, 0.75), q90 = stats::quantile(dev, 0.90)), by = .(measure, length_bin)][reads >= 50][order(measure, length_bin)]
+# Each panel's x-axis covers the molecule lengths of 99.8% of its molecules, so a short tract
+# such as CCG (a few units wide) is not stretched across a handful of rare outlying lengths
+x_keep <- wl[, .(lo = stats::quantile(molecule_length, 0.001), hi = stats::quantile(molecule_length, 0.999)), by = measure]
+we_len <- x_keep[we_len, on = "measure"][length_bin >= floor(lo) - 1 & length_bin <= ceiling(hi) + 1][, c("lo", "hi") := NULL][]
 dt_compact(we_sum, caption = "Within-molecule read error per measure: share of reads exactly at, below and above their molecule's repeat length", digits = 3)
 ```
 
@@ -608,10 +648,10 @@ for (s in unique(wide$file_stem)) fwrite(wide[file_stem == s], file.path(mol_dir
 module4_output <- list(umi_reads = umi_reads, molecules = molecules, molecule_lengths = molecule_lengths,
                        clustering = clustering, summary = summary_tab, collapse_compare = collapse_compare, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "04_umi.RData")
-save(module4_output, file = output_path)
+save(module4_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
 write_excel_function(list(summary = summary_tab, extraction = dcast(outcome, file_stem ~ umi_outcome, value.var = "N", fill = 0),
                           within_molecule_error = we_sum, within_error_by_length = we_len, reads_far_from_molecule = far,
-                          long_read_flag_by_length = long_tab, long_read_flag_per_sample = lf_s, length_rule_scorecard = scorecard, length_rule_comparison = rule_tab), xlsx_path)
+                          shortened_flag_by_length = long_tab, shortened_flag_per_sample = lf_s, length_rule_scorecard = scorecard, length_rule_comparison = rule_tab), xlsx_path)
 ```
 
 **`r comma(sum(molecules$kept))`** molecules kept across **`r uniqueN(molecules$file_stem)`** samples.

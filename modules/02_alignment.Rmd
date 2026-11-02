@@ -219,7 +219,7 @@ cat("Per-sample alignment plots written to", by_sample_dir)
 write_excel_function(list(references = ref_table, read_accounting = funnel, alignment_quality = quality_table), xlsx_path)
 module2_output <- list(alignments = alignments, refs = refs, funnel = funnel, quality = qual, strand = strand_steps, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "02_alignment.RData")
-save(module2_output, file = output_path)
+save(module2_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
 ```
 
 **`r comma(sum(funnel$final))`** reads passed to Module 3.

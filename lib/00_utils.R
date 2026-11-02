@@ -193,7 +193,7 @@ truthy <- function(x) {
 # ------------------------------------------------------------------------------
 safe_path <- function(x, replacement = "-") {
   x <- as.character(x)
-  x <- gsub("[/\\\\:*?\"<>|[:cntrl:]]", replacement, x, perl = TRUE)
+  x <- gsub("[/\\\\:*?\"<>|#%[:cntrl:]]", replacement, x, perl = TRUE)   # # and % break links in the HTML reports
   x <- gsub("[[:space:]]+", replacement, x)
   x <- gsub(paste0("^", replacement, "+|", replacement, "+$"), "", x)
   x[is.na(x) | x == ""] <- "unnamed"
@@ -309,3 +309,15 @@ box_points_mean <- function(point_colour = "grey30", digits = 1, label = TRUE, p
 }
 
 log_step <- function(...) message(sprintf("[%s] %s", format(Sys.time(), "%H:%M:%S"), paste0(...)))
+
+# A local file path for a markdown image link: %, # and spaces percent-encoded, so pandoc finds
+# the file however the sample or group is named
+md_path <- function(path) {
+  x <- normalizePath(path)
+  x <- gsub("%", "%25", x, fixed = TRUE); x <- gsub("#", "%23", x, fixed = TRUE); gsub(" ", "%20", x, fixed = TRUE)
+}
+
+# A group name for display: leading and trailing dashes, underscores and spaces removed (a
+# group made by joining settings columns, some blank, can end in "----"). The group itself is
+# unchanged, since it is the key for group controls and ranges.
+display_group <- function(x) gsub("^[-_ ]+|[-_ ]+$", "", as.character(x))

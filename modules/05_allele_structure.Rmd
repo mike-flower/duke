@@ -43,7 +43,7 @@ xlsx_path <- file.path(st_dir, "allele_structure.xlsx"); if (file.exists(xlsx_pa
 This module looks at the sequence of the reads around the primary tract:
 
 1. **Allele clustering** (cluster = `r params$cluster`): reads are grouped by repeat length (`r paste(params$cluster_by, collapse = " then ")`). The number of length clusters is chosen by a Gaussian mixture, and clusters holding under `r percent(params$repeat_cluster_min_prop)` of a sample's reads are merged into their neighbour, so an expansion smear is not cut into many small clusters. With `haplotype` in `cluster_by`, reads are also grouped by flank haplotype: 15-mers found in 10–90% of reads are kept only when at least 7 others appear in exactly the same reads (the signature of a real SNP or indel, not a sequencing error), they are grouped into variant blocks, and each read is scored on the k-mers it carries from each allele of each block. A split is accepted when the mean silhouette exceeds 0.5 and every cluster holds at least 5% of reads, so haplotypes carried by more than about 10–20% of reads are found. Reads whose flank variants combine the two alleles' haplotypes (e.g. PCR chimeras) form their own cluster
-2. **Alleles.** In each sample, the two clusters with the most reads are its **alleles 1 and 2**, numbered by length (allele 1 = the shorter); any further clusters (a subclone, PCR chimeras) are numbered 3 upwards by reads
+2. **Alleles.** In each sample, the two clusters with the most reads are its **alleles 1 and 2**, numbered by the length of the primary tract (allele 1 = the shorter); any further clusters (a subclone, PCR chimeras) are numbered 3 upwards by reads
 3. **Consensus sequences** of each allele's left flank, tract and right flank (DECIPHER, up to `r params$consensus_downsample` reads, `r percent(params$consensus_threshold)` agreement; the tract consensus uses only reads at the allele's modal length), joined into one full-length allele sequence; the region between the reference flanks is written in repeat notation, e.g. (CAG)17 CAACAGCCGCCA (CCG)7
 4. **Phased variants**: each allele's flank consensus against the reference (so every variant belongs to allele 1 or 2), plus substitutions carried by at least `r if (is.na(params$allele_minor_share)) "– (off)" else percent(params$allele_minor_share)` of an allele's reads but not in its consensus; for each, the share of the allele's reads that carry it (its **read support**)
 5. **Standard files**: a phased VCF with one column per sample (the repeat region as one record with each allele's motif counts, and the flank variants with their read support per allele), the allele sequences as FASTA, and `r if (isTRUE(params$allele_bam)) "a BAM per sample of reads aligned to the whole reference and tagged by allele (HP), for IGV" else "no BAMs (allele_bam = FALSE)"`
@@ -274,8 +274,12 @@ if (nrow(support_all)) {
 # and 2, and its flanks are read at the variants that tell alleles 1 and 2 apart (support at
 # least 60 points higher in one than the other): the share of its reads with allele 1's base.
 # An extra cluster with one allele's length and the other allele's flanks is the signature of a
-# PCR chimera (template switching between the alleles during amplification).
-allele_origin <- function(cs, sa) {
+# PCR chimera (template switching between the alleles during amplification). The other tracts
+# (e.g. CCG) are also compared: an extra cluster whose other tract lengths match neither allele
+# cannot have come from either and most likely comes from another sample; where alleles 1 and 2
+# differ in another tract, that tract tells which allele the extra cluster's reads came from even
+# when no flank variant does.
+allele_origin <- function(cs, sa, tc = NULL) {
   a12 <- cs[allele %in% 1:2]
   if (nrow(a12) < 2) return(data.table(file_stem = character(0), allele = integer(0), origin = character(0)))
   near <- function(m, ref_m) abs(m - ref_m) <= max(3, 0.1 * ref_m)
@@ -285,8 +289,28 @@ allele_origin <- function(cs, sa) {
     m <- cs[allele == k, modal_length]
     len_like <- c(near(m, a12[allele == 1, modal_length]), near(m, a12[allele == 2, modal_length]))
     len_txt <- if (all(len_like)) "length of alleles 1 and 2" else if (len_like[1]) "allele 1's length" else if (len_like[2]) "allele 2's length" else sprintf("its own length (%s)", m)
+    # Other tracts: lengths within 1 unit count as the same
+    tr_txt <- ""; tr_a <- NA_integer_
+    if (!is.null(tc) && nrow(tc) && all(c(1:2, k) %in% tc$allele)) {
+      oth <- intersect(paste0("modal_", setdiff(tracts$tract, primary)), names(tc))
+      for (o in oth) {
+        x <- tc[allele == k, get(o)]; x1 <- tc[allele == 1, get(o)]; x2 <- tc[allele == 2, get(o)]
+        if (anyNA(c(x, x1, x2))) next
+        nm <- sub("^modal_", "", o)
+        if (abs(x - x1) > 1 && abs(x - x2) > 1) { tr_txt <- sprintf(", its %s length (%s) matches neither allele (%s, %s) – likely from another sample", nm, x, x1, x2); break }
+        if (abs(x1 - x2) > 1) { tr_a <- if (abs(x - x1) <= 1) 1L else 2L; tr_txt <- sprintf(", its %s length (%s) is allele %d's", nm, x, tr_a) }
+      }
+    }
     fl <- if (nrow(ph)) sa[allele == k & !is.na(support), .(pos, ref, alt, support)][ph, on = .(pos, ref, alt), nomatch = NULL] else data.table()
-    if (!nrow(fl)) return(data.table(allele = k, origin = paste0(len_txt, "; no variant tells alleles 1 and 2 apart, so its flanks cannot be assigned")))
+    if (grepl("another sample", tr_txt)) return(data.table(allele = k, origin = paste0(len_txt, tr_txt)))
+    if (!nrow(fl)) {
+      len_a0 <- if (sum(len_like) == 1) which(len_like) else NA_integer_
+      v0 <- if (is.na(tr_a)) "; no variant tells alleles 1 and 2 apart, so its flanks cannot be assigned"
+            else if (!is.na(len_a0) && len_a0 != tr_a) " – likely PCR chimera"
+            else if (!is.na(len_a0)) sprintf(" – part of allele %d", len_a0)
+            else " – a different length on that allele (subclone, smear or contamination)"
+      return(data.table(allele = k, origin = paste0(len_txt, tr_txt, v0)))
+    }
     fl[, like1 := ifelse(s1 > s2, support, 1 - support)]
     # Per flank: 1 or 2 when nearly every telling variant matches that allele; "other" when each
     # variant clearly matches one allele but not always the same one (a third haplotype); "mixed"
@@ -307,10 +331,10 @@ allele_origin <- function(cs, sa) {
                else if (all(!is.na(num)) && length(unique(num)) > 1) " \u2013 likely PCR chimera (each flank from a different allele)"
                else if (any(side$cl == "other")) " \u2013 a third haplotype: another cell line or a contaminating sample"
                else ""
-    data.table(allele = k, origin = paste0(len_txt, ", ", fl_txt, verdict))
+    data.table(allele = k, origin = paste0(len_txt, tr_txt, ", ", fl_txt, verdict))
   }))[, file_stem := cs$file_stem[1]][]
 }
-origin <- rbindlist(lapply(split(cluster_summary, by = "file_stem"), function(cs) allele_origin(cs, if (nrow(support_all)) support_all[file_stem == cs$file_stem[1]] else data.table())), fill = TRUE)
+origin <- rbindlist(lapply(split(cluster_summary, by = "file_stem"), function(cs) allele_origin(cs, if (nrow(support_all)) support_all[file_stem == cs$file_stem[1]] else data.table(), cons[file_stem == cs$file_stem[1]])), fill = TRUE)
 if (nrow(origin)) cons <- origin[cons, on = .(file_stem, allele)] else cons[, origin := NA_character_]
 var_dir <- file.path(st_dir, "variants"); unlink(var_dir, recursive = TRUE); dir.create(var_dir, showWarnings = FALSE)
 write_allele_vcf(as.data.frame(cons), as.data.frame(support_all), ref, paste(tracts$tract, collapse = "_"), file.path(var_dir, "alleles.vcf"))
@@ -320,7 +344,7 @@ timings["Variants"] <- proc.time()["elapsed"] - .t
 ```
 
 ```{asis, echo=params$cluster}
-**How the alleles are described.** Each sample's two largest clusters are its alleles 1 and 2, numbered by length (allele 1 is the shorter), so the same number means the same kind of allele in every sample; further clusters are numbered 3 upwards. For each allele: its modal length for every measure, and the region between the reference flanks written out in repeat notation from its consensus, e.g. (CAG)17 CAACAGCCGCCA (CCG)7, so the tract lengths and interruptions can be read directly. `r if (params$cluster && params$call_variants) sprintf("Variants are the differences between an allele's flank consensus and the reference, so each belongs to one allele (they are phased). Each carries its read support: the share of that allele's reads (up to %s per allele) that contain the variant with at least %d bases of its consensus either side, out of those reads that contain either the variant or the reference in that context (the context is widened, up to 60 bases, until the two cannot be confused, which matters for an insertion or deletion in repetitive sequence; a read matching both is not counted). Variants not in an allele's consensus are reported when at least %s of its reads carry them (substitutions only; found in the reads aligned for the consensus and confirmed by the read count). A consensus variant that fewer than half of the counted reads carry is marked not confirmed (column confirmed; FILTER LowSupport in the VCF): it usually comes from a consensus misaligned around an indel or inside a repeat, so check it in the BAM before relying on it.", format(params$allele_support_reads, big.mark = ","), 8L, if (is.na(params$allele_minor_share)) "-" else percent(params$allele_minor_share)) else ""`
+**How the alleles are described.** Each sample's two largest clusters are its alleles 1 and 2, numbered by the length of the primary tract, `r primary` (allele 1 is the shorter), so the same number means the same kind of allele in every sample; further clusters are numbered 3 upwards. For each allele: its modal length for every measure, and the region between the reference flanks written out in repeat notation from its consensus, e.g. (CAG)17 CAACAGCCGCCA (CCG)7, so the tract lengths and interruptions can be read directly. `r if (params$cluster && params$call_variants) sprintf("Variants are the differences between an allele's flank consensus and the reference, so each belongs to one allele (they are phased). Each carries its read support: the share of that allele's reads (up to %s per allele) that contain the variant with at least %d bases of its consensus either side, out of those reads that contain either the variant or the reference in that context (the context is widened, up to 60 bases, until the two cannot be confused, which matters for an insertion or deletion in repetitive sequence; a read matching both is not counted). Variants not in an allele's consensus are reported when at least %s of its reads carry them (substitutions only; found in the reads aligned for the consensus and confirmed by the read count). A consensus variant that fewer than half of the counted reads carry is marked not confirmed (column confirmed; FILTER LowSupport in the VCF): it usually comes from a consensus misaligned around an indel or inside a repeat, so check it in the BAM before relying on it.", format(params$allele_support_reads, big.mark = ","), 8L, if (is.na(params$allele_minor_share)) "-" else percent(params$allele_minor_share)) else ""`
 ```
 
 `r if (params$cluster) sprintf("Variants can only be called where the reads give flank sequence: the allele consensuses cover a median of %s of the %s bp of the left reference flank and %s of the %s bp of the right (%s, N block at %d–%d); any sequence between the tract and a flank, such as the rest of an N block, is written in the repeat notation instead.", format(as.integer(stats::median(ref$n_start - cons$left_from, na.rm = TRUE)), big.mark = ","), format(ref$n_start - 1, big.mark = ","), format(as.integer(stats::median(cons$right_to - ref$n_end, na.rm = TRUE)), big.mark = ","), format(nchar(ref$full) - ref$n_end, big.mark = ","), ref$ref_id, ref$n_start, ref$n_end) else ""`
@@ -352,7 +376,7 @@ len_ab <- if (pm %in% names(cons)) cons[allele %in% 1:2, .(txt = paste(get(pm), 
 lab_v2 <- stats::setNames(paste0(lab_v, ifelse(is.na(len_ab$txt[match(names(lab_v), len_ab$file_stem)]), "", paste0("  [", primary, " ", len_ab$txt[match(names(lab_v), len_ab$file_stem)], "]"))), names(lab_v))
 vm <- copy(support_all)[allele %in% 1:2][, `:=`(sample = factor(lab_v2[file_stem], levels = rev(unique(lab_v2[sort(unique(cons$file_stem))]))),
                                              vlab = sprintf("%d %s>%s", pos, short_allele(ref), short_allele(alt)),
-                                             allele_lab = ifelse(allele == 1, "Allele 1 (the shorter)", "Allele 2 (the longer)"))]
+                                             allele_lab = ifelse(allele == 1, sprintf("Allele 1 (shorter %s)", primary), sprintf("Allele 2 (longer %s)", primary)))]
 vm[, vlab := factor(vlab, levels = unique(vm[order(pos)]$vlab))]
 if (nrow(vm)) {
   n_s <- uniqueN(vm$sample); n_v <- uniqueN(vm$vlab)
@@ -373,19 +397,19 @@ if (exists("var_summary")) dt_full(var_summary, caption = "Variants across the c
 ## One sample's alleles
 ```
 
-`r if (params$cluster) "Each sample's alleles drawn for review, one row per allele, labelled with the allele's modal length of every tract (allele 1 is the shorter, allele 2 the longer) and its reads. Under the figure, each extra allele (3 upwards) is described by whose length and whose flanks it has. The middle panel is the region between the reference flanks in repeat notation. The side panels show the stretch of each flank the allele's consensus covers (grey) on reference coordinates, with each variant marked: filled when it is in the allele's consensus, open when it is carried by a minority of the reads, labelled with its position, bases and read support. The first sample is shown; every sample is in plots/alleles/." else ""`
+`r if (params$cluster) "Each sample's alleles drawn for review, one row per allele, labelled with the allele's modal length of every tract (allele 1 has the shorter primary tract, allele 2 the longer) and its reads. Under the figure, each extra allele (3 upwards) is described by whose length and whose flanks it has. The middle panel is the region between the reference flanks in repeat notation. The side panels show the stretch of each flank the allele's consensus covers (grey) on reference coordinates, with each variant marked: filled when it is in the allele's consensus, open when it is carried by a minority of the reads, labelled with its position, bases and read support. The first sample is shown; every sample is in plots/alleles/." else ""`
 
 ```{r allele_maps, eval=params$cluster, fig.height=if (exists("cons")) 2.2 + 1.3 * nrow(cons[file_stem == cons$file_stem[1]]) else 3.8, fig.width=13}
 al_dir <- file.path(plots_dir, "alleles")
 vv_all <- if (exists("variants")) variants else data.table()
 invisible(apply_fn(unique(cons$file_stem), function(s) {
   if (s != cons$file_stem[1] && !isTRUE(params$plot_per_sample)) return(NULL)
-  p <- allele_map_plot(cons[file_stem == s], if (nrow(vv_all)) vv_all[file_stem == s] else vv_all, ref, s, tracts$tract)
+  p <- allele_map_plot(cons[file_stem == s], if (nrow(vv_all)) vv_all[file_stem == s] else vv_all, ref, s, tracts$tract, primary)
   save_plot(p, file.path(al_dir, paste0(s, ".png")), 13, 2.2 + 1.3 * nrow(cons[file_stem == s]))
   TRUE
 }))
 s1 <- cons$file_stem[1]
-print(allele_map_plot(cons[file_stem == s1], if (nrow(vv_all)) vv_all[file_stem == s1] else vv_all, ref, s1, tracts$tract))
+print(allele_map_plot(cons[file_stem == s1], if (nrow(vv_all)) vv_all[file_stem == s1] else vv_all, ref, s1, tracts$tract, primary))
 ```
 
 ```{r allele_bams, eval=params$cluster && isTRUE(params$allele_bam)}
@@ -459,7 +483,7 @@ module5_output <- list(
   variants = if (params$cluster && params$call_variants) variants else NULL,
   variant_support = if (params$cluster && params$call_variants) support_all else NULL, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "05_allele_structure.RData")
-save(module5_output, file = output_path)
+save(module5_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
 # Variant rows carry the modal length of every measure in their allele, so each can be read as
 # being on the shorter or the longer allele without looking it up in the alleles sheet
 with_len <- function(x) {

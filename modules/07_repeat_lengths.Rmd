@@ -158,7 +158,7 @@ done <- apply_fn(seq_len(nrow(jobs)), function(i) {
   fd <- folder_data(meta[group_label == g, file_stem], rg)
   if (!nrow(fd$rd)) return(NULL)
   n <- uniqueN(fd$rd$file_stem); xl <- folder_xlim(fd$rd$length)
-  ttl <- sprintf("%s: %s%s", g, primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg, " (", range_row(fd$rd$file_stem[1], primary, rg)$range_text, ")"))
+  ttl <- sprintf("%s: %s%s", display_group(g), primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg, " (", range_row(fd$rd$file_stem[1], primary, rg)$range_text, ")"))
   pr <- ridge_dots_plot(fd$rd, fd$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max)
   ph <- hist_rows_plot(fd$rd, fd$md, ttl, paste(primary, "length (repeat units)"), xl, params$repeat_histogram_binwidth)
   dir <- file.path(plots_dir, f, "by_group")
@@ -174,8 +174,8 @@ for (f in names(folders)[seq_len(min(length(folders), 3))]) {
   files <- file.path(dir, paste0(safe_path(g1), c("-density.png", if (is.na(folders[[f]])) "-histogram.png")))
   files <- files[file.exists(files)]
   if (!length(files)) next
-  cat(sprintf("\n\n## %s, %s\n\n", g1, if (is.na(folders[[f]])) "all lengths" else folders[[f]]))
-  for (fl in files) cat(sprintf("![](%s)\n\n", normalizePath(fl)))
+  cat(sprintf("\n\n## %s, %s\n\n", display_group(g1), if (is.na(folders[[f]])) "all lengths" else folders[[f]]))
+  for (fl in files) cat(sprintf("![](%s)\n\n", md_path(fl)))
 }
 timings["By group"] <- proc.time()["elapsed"] - .t
 ```
@@ -237,7 +237,7 @@ make_card <- function(s, ms = measures$measure) {
                                                if (!is.null(ml_s[[s]])) sprintf("; %s molecules", comma(uniqueN(ml_s[[s]]$molecule_id))) else "") else NULL
   g <- meta[file_stem == s, group_label]; tm <- meta[file_stem == s, time]
   patchwork::wrap_plots(panels, ncol = 1 + length(plot_ranges)) +
-    patchwork::plot_annotation(title = s, subtitle = paste0(g, if (!is.na(tm)) paste0(", time ", tm) else "", if (!is.null(sub)) paste0("\n", sub) else ""))
+    patchwork::plot_annotation(title = s, subtitle = paste0(display_group(g), if (!is.na(tm)) paste0(", time ", tm) else "", if (!is.null(sub)) paste0("\n", sub) else ""))
 }
 row_h <- if (!is.null(mol)) 5 else 3.2
 card_h <- 1.6 + nrow(measures) * row_h
@@ -253,7 +253,7 @@ for (s in show_s) {
   card <- make_card(s, primary)
   if (is.null(card)) next
   fl <- tempfile(fileext = ".png"); save_plot(card, fl, card_w, 1.6 + row_h)
-  cat(sprintf("\n\n![](%s)\n\n", normalizePath(fl)))
+  cat(sprintf("\n\n![](%s)\n\n", md_path(fl)))
 }
 timings["Sample cards"] <- proc.time()["elapsed"] - .t
 ```
@@ -265,7 +265,7 @@ timings["Sample cards"] <- proc.time()["elapsed"] - .t
 ```{r save}
 module7_output <- list(sample_order = meta, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "07_repeat_lengths.RData")
-save(module7_output, file = output_path)
+save(module7_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
 write_excel_function(list(sample_order = meta[, .(sample_index, short_label = as.character(short_label), file_stem, group, time)]), xlsx_path)
 ```
 

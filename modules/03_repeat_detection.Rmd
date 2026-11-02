@@ -152,8 +152,8 @@ miss_digits <- if (max(miss) > 0) max(1, -floor(log10(max(miss) * 100)) + 1) els
 p_det <- ggplot(det, aes(tract, 1 - detection_rate)) + box_points_mean(digits = miss_digits, percent = TRUE) +
   scale_y_continuous(labels = pct_axis(), limits = c(0, NA), expand = expansion(mult = c(0.02, 0.1))) +
   labs(x = "Tract", y = "Aligned reads with no tract found", title = "Reads without a tract, per sample",
-       subtitle = sprintf("%s of %s aligned reads had no tract (%s)", comma(sum(det$aligned_reads - det$with_tract)),
-                          comma(sum(det$aligned_reads)), percent(1 - sum(det$with_tract) / sum(det$aligned_reads), 10^-miss_digits))) + theme_bw()
+       subtitle = paste(det[, .(txt = sprintf("%s: %s of %s aligned reads had no tract (%s)", tract[1], comma(sum(aligned_reads - with_tract)),
+                          comma(sum(aligned_reads)), percent(1 - sum(with_tract) / sum(aligned_reads), 10^-miss_digits))), by = tract]$txt, collapse = "; ")) + theme_bw()
 print(p_det); save_plot(p_det, file.path(plots_dir, "detection_rate.png"), 7, 5)
 ```
 
@@ -167,7 +167,7 @@ cat(sprintf("\n\nTracts come from %d references. %s of %s reads (%.1f%%) aligned
 
 # Flank length
 
-**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the tract. Every read in a sample comes from the same amplicon, so it should be almost the same in every read; the commonest value in a sample is its *usual* flank length. One bar per sample, sorted by the share of reads at exactly the usual length: each bar is split into the reads at that length (darkest), 1 base off, 2–5, 6–10, 11–50 and more than 50 bases off (lightest). A sample whose bar is mostly dark has clean flanks; a light block in one sample, or a group of samples, is where to look.
+**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the tract. Every read in a sample comes from the same amplicon, so it should be almost the same in every read; the commonest value in a sample is its *usual* flank length. A sample can have two usual lengths, when one allele carries an insertion or deletion in its flank: every length carried by at least 20% of the sample's reads counts as usual, and each read is judged against the nearest one. One bar per sample, sorted by the share of reads at exactly the usual length: each bar is split into the reads at that length (darkest), 1 base off, 2–5, 6–10, 11–50 and more than 50 bases off (lightest). A sample whose bar is mostly dark has clean flanks; a light block in one sample, or a group of samples, is where to look.
 
 This check comes straight after tract detection because the optional flank filter (`rm_flank_length_outliers`, `r if (isTRUE(params$rm_flank_length_outliers)) "on in this run" else "off in this run"`) acts here: `r if (isTRUE(params$rm_flank_length_outliers)) "reads it removes are left out of every later section and module" else "with it off, every read is kept"`.
 
@@ -175,8 +175,12 @@ This check comes straight after tract detection because the optional flank filte
 
 ```{r flank_qc, fig.height=min(30, 2.2 + 0.16 * uniqueN(read_tracts$file_stem))}
 fq <- read_tracts[!is.na(left), .(file_stem, qname, flank_total = nchar(left) + nchar(right))]
-fq[, modal := { tb <- table(flank_total); as.numeric(names(tb)[which.max(tb)]) }, by = file_stem]
-fq[, dev := abs(flank_total - modal)]
+# A sample can have two usual flank lengths (e.g. an indel in one allele's flank): every value
+# carrying at least 20% of the sample's reads counts as usual (at most 3, always the commonest),
+# and each read is judged against the nearest of them
+fq[, modal := { tb <- sort(table(flank_total), decreasing = TRUE); as.numeric(names(tb)[1]) }, by = file_stem]
+fq[, dev := { tb <- sort(table(flank_total), decreasing = TRUE); u <- as.numeric(names(tb)[seq_len(min(3, max(1, sum(tb / sum(tb) >= 0.2))))])
+              do.call(pmin, lapply(u, function(v) abs(flank_total - v))) }, by = file_stem]
 fq[, band := cut(dev, c(-1, 0, 1, 5, 10, 50, Inf), labels = c("exactly modal", "1 bp off", "2-5 bp off", "6-10 bp off", "11-50 bp off", ">50 bp off"))]
 fband <- fq[, .N, by = .(file_stem, band)][, prop := N / sum(N), by = file_stem]
 lab_f <- short_labels(fband$file_stem)
@@ -520,7 +524,7 @@ module3_output <- list(read_tracts = read_tracts, lengths = lengths, measures = 
                        strand_summary = strand_summary, modal_by_method = modal_method,
                        between = if (exists("between")) between else NULL, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "03_repeat_detection.RData")
-save(module3_output, file = output_path)
+save(module3_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
 write_excel_function(list(tracts = tracts, measures = measures, detection = det, method_agreement = agree,
                           method_by_length = by_len, method_gap_pooled = gap_pooled, strand_by_sample = strand_summary,
                           modal_by_method = modal_method, between_tracts = module3_output$between,

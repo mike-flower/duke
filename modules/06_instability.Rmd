@@ -70,7 +70,7 @@ cat(knitr::kable(md, format = "html", escape = FALSE,
                  table.attr = 'class="table table-condensed" style="width:100%; table-layout:auto;"'))
 ```
 
-The setpoint is the **`r params$control_setpoint_metric`**: the sample's own (`sample_relative`) or the `r params$control_aggregation_method` across its group's control samples (`control_relative`; selection: `r params$control_sample_selection`). `r if (params$use_manual_controls) "A manual control length in the settings file (manual_control_repeat_length) replaces the group control for that sample and range." else "Manual control lengths in the settings file are not used (use_manual_controls = FALSE); set it to TRUE to make them replace the group control."`
+The setpoint is the **`r params$control_setpoint_metric`**: the sample's own (`sample_relative`) or the `r params$control_aggregation_method` across its group's control samples (`control_relative`; selection: `r params$control_sample_selection`). Where the settings file gives a manual control length (`manual_control_repeat_length`) for a sample and range, it replaces the group control there; a blank cell uses the group control.
 
 **Outputs:**
 
@@ -121,8 +121,8 @@ settings$group_label <- ifelse(is.na(settings$group), "ungrouped", settings$grou
 em <- settings %>% dplyr::count(group_label, time)
 p_map <- if (has_time) ggplot(em, aes(time, group_label, size = n)) + geom_point(colour = "steelblue", alpha = 0.7) +
   geom_text(aes(label = n), size = 3, colour = "white") + scale_size_continuous(range = c(4, 14), guide = "none") +
-  labs(x = "Time", y = NULL, title = "Samples by group and time") + theme_bw() else
-  ggplot(em, aes(n, group_label)) + geom_col(fill = "steelblue") + geom_text(aes(label = n), hjust = -0.3) +
+  scale_y_discrete(labels = display_group) + labs(x = params$time_label, y = NULL, title = "Samples by group and time") + theme_bw() else
+  ggplot(em, aes(n, group_label)) + geom_col(fill = "steelblue") + geom_text(aes(label = n), hjust = -0.3) + scale_y_discrete(labels = display_group) +
   labs(x = "Samples", y = NULL, title = "Samples per group") + theme_bw()
 print(p_map); save_plot(p_map, file.path(plots_dir, "experiment_map.png"), 10, max(3, 0.35 * length(unique(settings$group_label)) + 2))
 ```
@@ -199,7 +199,7 @@ print(p_rc); save_plot(p_rc, file.path(plots_dir, "counts_per_range.png"), 11, 5
 2. **One value per control sample.** For each control sample, unit (reads or molecules), measure and range, its **`r params$control_setpoint_metric`** is taken from all its reads (or all its molecules) in the range.
 3. **One setpoint per group.** These values are combined across the group's control samples by the **`r params$control_aggregation_method`**, giving one setpoint for each group, unit, measure and range. `control_sd` is the spread between the control samples and `control_n` how many there are.
 
-The read-based setpoint is used for read-based metrics, and the molecule-based setpoint for molecule-based metrics, so a sample is never compared with a control counted a different way. `r if (params$use_manual_controls) "Where the settings file gives a manual control length, it replaces this setpoint for that sample and range (for reads and molecules alike)." else ""`
+The read-based setpoint is used for read-based metrics, and the molecule-based setpoint for molecule-based metrics, so a sample is never compared with a control counted a different way. Where the settings file gives a manual control length, it replaces this setpoint for that sample and range (for reads and molecules alike).
 
 ```{r controls}
 .t <- proc.time()["elapsed"]
@@ -248,7 +248,9 @@ setp <- distribution_summary[, .(file_stem, unit, measure, analysis_range_name, 
 if (nrow(group_controls)) {
   setp <- group_controls[, .(group_label, unit, measure, analysis_range_name, control_setpoint, control_sd, control_n)][setp, on = .(group_label, unit, measure, analysis_range_name)]
 } else setp[, `:=`(control_setpoint = NA_real_, control_sd = NA_real_, control_n = NA_integer_)]
-manual <- as.data.table(range_table)[!is.na(manual_control) & isTRUE(params$use_manual_controls), .(file_stem, measure, analysis_range_name = range_name, manual_control)]
+# A manual control length in the settings file replaces the group control for that sample
+# and range; a blank cell leaves the group control in place
+manual <- as.data.table(range_table)[!is.na(manual_control), .(file_stem, measure, analysis_range_name = range_name, manual_control)]
 setp <- manual[setp, on = .(file_stem, measure, analysis_range_name)]
 setp[, control_source := fifelse(!is.na(manual_control), "manual", fifelse(!is.na(control_setpoint), "group control", NA_character_))]
 setp[!is.na(manual_control), `:=`(control_setpoint = manual_control, control_sd = NA_real_, control_n = NA_integer_)]
@@ -286,7 +288,16 @@ cz <- setp[, .(file_stem, unit, measure, analysis_range_name, own, control_setpo
 instability_metrics <- cz[instability_metrics, on = .(file_stem, unit, measure, analysis_range_name)]
 instability_metrics[setpoint_type == "control_relative" & control_sd > 0, z_score := (own - control_setpoint) / control_sd]
 instability_metrics[, c("own", "control_setpoint", "control_sd") := NULL]
+# Samples and ranges whose control setpoint came from the settings file, listed in the report
+manual_used <- unique(setp[control_source == "manual", .(file_stem, measure, analysis_range_name, manual_control)])
 timings["Instability metrics"] <- proc.time()["elapsed"] - .t
+```
+
+`r if (nrow(manual_used)) sprintf("**Manual control lengths used.** The settings file gives a manual control length for %d sample(s) and %d range(s); there it replaces the group control (setpoint_source = manual in the instability_metrics sheet). Check these are intended: a value left in the settings file from an earlier analysis also overrides the group control.", uniqueN(manual_used$file_stem), uniqueN(manual_used[, .(measure, analysis_range_name)])) else "No manual control lengths are given in the settings file, so every control-relative setpoint comes from the group controls."`
+
+```{r manual_used_table, eval=nrow(manual_used) > 0}
+dt_full(manual_used[, .(sample = short_labels(file_stem), measure, range = analysis_range_name, manual_control)],
+        caption = "Samples and ranges whose control setpoint is the manual control length from the settings file")
 ```
 
 ## Timecourses by group
@@ -305,16 +316,16 @@ hl_labels <- c(modal_length = "Modal length", median_length = "Median length", m
 timecourse_plot <- function(d, title) {
   # One row per metric (each with its own y axis, % ticks for proportions), one column per group
   rows <- lapply(seq_along(hl), function(k) {
-    v <- hl[k]; dd <- d[, .(time, group_label, unit, value = get(v))]
+    v <- hl[k]; dd <- d[, .(time, group_label, unit, value = get(v))][is.finite(value)]
     is_prop <- grepl("^share", v)
     base <- if (has_time) ggplot(dd, aes(time, value, colour = unit)) + geom_point(alpha = 0.6, size = 2.2) +
         stat_summary(aes(group = unit), fun = mean, geom = "line", linewidth = 0.8)
-      else ggplot(dd, aes(group_label, value, colour = unit)) + geom_boxplot(outlier.shape = NA, fill = NA) +
+      else ggplot(dd, aes(group_label, value, colour = unit)) + geom_boxplot(outlier.shape = NA, fill = NA) + scale_x_discrete(labels = display_group) +
         geom_jitter(width = 0.15, height = 0, alpha = 0.6)
-    base + facet_wrap(~ group_label, nrow = 1, scales = if (has_time) "fixed" else "free_x") +
+    base + facet_wrap(~ group_label, nrow = 1, scales = if (has_time) "fixed" else "free_x", labeller = as_labeller(function(x) wrap_label(x, 40))) +
       scale_colour_manual(values = unit_cols, name = NULL, drop = TRUE) +
       (if (is_prop) scale_y_continuous(labels = pct_axis()) else scale_y_continuous()) +
-      labs(x = if (k == length(hl)) (if (has_time) "Time" else NULL) else NULL, y = if (v %in% names(hl_labels)) hl_labels[[v]] else v) +
+      labs(x = if (k == length(hl)) (if (has_time) params$time_label else NULL) else NULL, y = if (v %in% names(hl_labels)) hl_labels[[v]] else v) +
       theme_bw(base_size = 13) + theme(legend.position = if (k == 1) "top" else "none",
                          strip.text = if (k == 1) element_text(size = 11) else element_blank(),
                          strip.background = if (k == 1) element_rect() else element_blank(),
@@ -333,7 +344,8 @@ The headline metrics for each group, plotted against time: one column per group,
 .t <- proc.time()["elapsed"]
 for (m in measures$measure) for (rg in sort(unique(range_table$range_name[range_table$measure == m]))) {
   d <- instability_metrics[measure == m & analysis_range_name == rg & setpoint_type == hl_type]
-  if (!nrow(d)) next
+  # A range with no reads in any sample has no metric to draw
+  if (!nrow(d) || !any(vapply(hl, function(v) any(is.finite(d[[v]])), logical(1)))) next
   lab <- range_table$range_text[range_table$measure == m & range_table$range_name == rg][1]
   p <- timecourse_plot(d, sprintf("%s, %s (%s)", m, rg, lab))
   save_plot(p, file.path(plots_dir, "timecourse", safe_path(m), paste0(safe_path(m), "-", rg, ".png")), tc_w, tc_h)
@@ -346,7 +358,7 @@ timings["Timecourse plots"] <- proc.time()["elapsed"] - .t
 
 **How to read this.** The `r primary` instability index (`r gsub("_", " ", hl_type)`) of every sample in every range, one panel per group: the x-axis is the range (as defined in the settings file), each point one sample`r if ("molecules" %in% names(units)) ", read-based in grey and molecule-based in teal" else ""`, with a box for the spread across samples. **What it shows.** How much the result depends on the range chosen. Where a range cuts through an allele's peak, or takes in a smear of short PCR products, its index moves away from the neighbouring ranges; a range that agrees with its neighbours, and where reads and molecules agree, is a safer headline.
 
-```{r ii_by_range, fig.height=min(30, 1.5 + 3 * ceiling(uniqueN(instability_metrics$group_label) / 2))}
+```{r ii_by_range, fig.height=min(30, 1.5 + 2.4 * uniqueN(instability_metrics$group_label))}
 ir <- instability_metrics[measure == primary & setpoint_type == hl_type & !is.na(instability_index)]
 if (nrow(ir)) {
   # One label per range; a range whose bounds differ between samples is labelled as such
@@ -357,13 +369,13 @@ if (nrow(ir)) {
   p_ir <- ggplot(ir, aes(xlab, instability_index, colour = unit)) + geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
     geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
     geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.5, size = 1) +
-    facet_wrap(~ group_label, ncol = 2, labeller = as_labeller(wrap_label)) +
+    facet_wrap(~ group_label, ncol = 1, labeller = as_labeller(function(x) wrap_label(x, 80))) +
     scale_colour_manual(values = unit_cols, name = NULL) +
     labs(x = "Analysis range", y = "Instability index (units)", title = paste("Instability index by range:", primary),
          subtitle = paste("Each point is one sample;", gsub("_", " ", hl_type))) +
     theme_bw() + theme(axis.text.x = if (uniqueN(ir$analysis_range_name) > 6) element_text(angle = 90, vjust = 0.5, hjust = 1, size = 7) else element_text(size = 8),
                        legend.position = "top")
-  print(p_ir); save_plot(p_ir, file.path(plots_dir, "instability_index_by_range.png"), min(40, 4 + 0.7 * uniqueN(ir$analysis_range_name) * 2), min(40, 1.5 + 3 * ceiling(uniqueN(ir$group_label) / 2)))
+  print(p_ir); save_plot(p_ir, file.path(plots_dir, "instability_index_by_range.png"), min(40, 4 + 0.9 * uniqueN(ir$analysis_range_name)), min(40, 1.5 + 2.4 * uniqueN(ir$group_label)))
 }
 ```
 
@@ -426,16 +438,18 @@ pair_stats <- rbindlist(pair_stats); pair_bins <- rbindlist(pair_bins)
 timings["Pairs"] <- proc.time()["elapsed"] - .t
 for (pr in pairs) for (rg in plot_ranges) {
   A <- pr[1]; B <- pr[2]
-  pb <- pair_bins[measure_A == A & measure_B == B & analysis_range_name == rg]
+  # A sample's bin with only a few reads or molecules gives a spike that is noise, so the
+  # sample lines are drawn only where a bin holds at least 5
+  pb <- pair_bins[measure_A == A & measure_B == B & analysis_range_name == rg & n >= 5]
   if (!nrow(pb)) next
   cat(sprintf("\n\n### %s against %s, %s\n\n", B, A, rg))
-  cat(sprintf("For each sample, every %s's change from the sample's median in **%s** (x, rounded, capped at ±15) against its change in **%s** (y). Each thin line is one sample; the thick line is the mean across samples in the group. A flat line at zero means %s does not change with %s; a rising line means reads that expanded in %s also lengthened in %s. Reads and molecules are drawn separately; read-level co-variation can partly reflect PCR and sequencing error on the same read.\n\n",
+  cat(sprintf("For each sample, every %s's change from the sample's median in **%s** (x, rounded, capped at ±15) against its change in **%s** (y). Each thin line is one sample; the thick line is the mean across samples in the group. Each sample's line is drawn only where its bin holds at least 5 reads or molecules. A flat line at zero means %s does not change with %s; a rising line means reads that expanded in %s also lengthened in %s. Reads and molecules are drawn separately; read-level co-variation can partly reflect PCR and sequencing error on the same read.\n\n",
               "read or molecule", A, B, B, A, A, B))
   p <- ggplot(pb, aes(dA_bin, mean_dB, colour = unit)) +
     geom_hline(yintercept = 0, linetype = "dashed") +
     geom_line(aes(group = interaction(file_stem, unit)), alpha = 0.25) +
     stat_summary(aes(group = unit), fun = mean, geom = "line", linewidth = 1.1) +
-    facet_wrap(~ group_label) + scale_colour_manual(values = unit_cols, name = NULL) +
+    facet_wrap(~ group_label, labeller = as_labeller(function(x) wrap_label(x, 60))) + scale_colour_manual(values = unit_cols, name = NULL) +
     labs(x = sprintf("Change in %s from the sample median", A), y = sprintf("Mean change in %s", B),
          title = sprintf("%s change against %s change, %s", B, A, rg)) + theme_bw() + theme(legend.position = "top")
   print(p); save_plot(p, file.path(plots_dir, paste0("pair_", A, "_vs_", B, "_", rg, ".png")), 11, 5.5)
@@ -444,8 +458,9 @@ for (pr in pairs) for (rg in plot_ranges) {
     geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
     geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.7) +
     scale_colour_manual(values = unit_cols, name = NULL) +
+    scale_x_discrete(labels = function(x) wrap_label(x, 25)) +
     labs(x = NULL, y = "Spearman correlation", title = sprintf("Per-sample correlation of %s and %s lengths, %s", A, B, rg)) +
-    theme_bw() + theme(axis.text.x = element_text(angle = 30, hjust = 1))
+    theme_bw()
   print(p2); save_plot(p2, file.path(plots_dir, paste0("pair_correlation_", A, "_vs_", B, "_", rg, ".png")), 10, 5)
 }
 ```
@@ -460,7 +475,7 @@ module6_output <- list(settings = settings, range_table = range_table, distribut
                        pair_stats = if (has_pairs) pair_stats else NULL, pair_bins = if (has_pairs) pair_bins else NULL,
                        excluded = st$excluded, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "06_instability.RData")
-save(module6_output, file = output_path)
+save(module6_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
 write_excel_function(list(definitions = metric_definitions(params$expansion_thresholds), range_table = range_table, distribution_summary = distribution_summary, modal_peaks = modal_peaks,
                           group_controls = group_controls, instability_metrics = instability_metrics, 
                           pair_stats = module6_output$pair_stats, excluded_samples = st$excluded), xlsx_path)

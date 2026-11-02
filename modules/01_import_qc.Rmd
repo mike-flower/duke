@@ -152,7 +152,7 @@ save_plot(p_pacbio, file.path(plots_dir, "pacbio_np_rq.png"), 10, 5)
 
 ## Pass count against read length
 
-Each point is one read (a random subset of at most `r format(params$pacbio_scatter_downsample, big.mark = ",")` across the cohort). Longer inserts take longer to read, so fewer passes fit in the movie: a negative slope is expected, and the fitted line shows how many fewer passes an expanded allele gets than a short one. The flat line at the top is PacBio's cap on the reported pass count.
+Each point is one read (a random subset of at most `r format(params$pacbio_scatter_downsample, big.mark = ",")` across the cohort). Longer inserts take longer to read, so fewer passes fit in the movie: a downward trend is expected, and the gap between the clouds of short and long reads shows how many fewer passes an expanded allele gets than a short one. The flat line at the top is PacBio's cap on the reported pass count.
 
 ```{r pacbio_np_length, eval=any_pacbio, fig.height=5}
 np_len <- dplyr::bind_rows(lapply(names(read_metadata), function(fs) {
@@ -162,10 +162,9 @@ if (!is.na(params$pacbio_scatter_downsample) && nrow(np_len) > params$pacbio_sca
   set.seed(123); np_len <- np_len[sample(nrow(np_len), params$pacbio_scatter_downsample), ]
 }
 p_np_len <- ggplot(np_len, aes(read_length, np)) + geom_point(alpha = 0.15, size = 0.5) +
-  geom_smooth(method = "lm", formula = y ~ x, colour = "#377eb8") +
   scale_x_continuous(labels = comma) +
   labs(x = "Read length (bp)", y = "Pass count (np)", title = "PacBio pass count against read length",
-       subtitle = sprintf("%s reads shown; blue line = linear fit", comma(nrow(np_len)))) + theme_bw()
+       subtitle = sprintf("%s reads shown", comma(nrow(np_len)))) + theme_bw()
 print(p_np_len)
 save_plot(p_np_len, file.path(plots_dir, "pacbio_np_vs_length.png"), 10, 5)
 ```
@@ -307,7 +306,7 @@ module1_output <- list(sequences = seq, file_details = file_details, stage_count
                        trim_summary = trim_summary, duplicate_summary = dup_summary, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
 dir.create(dirname(output_path), showWarnings = FALSE)
-save(module1_output, file = output_path)
+save(module1_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
 write_excel_function(list(file_details = file_details, stage_counts = stage_counts, qc_summary = qc_summary,
                           pacbio_summary = pacbio_summary, trim_summary = trim_summary), xlsx_path)
 ```

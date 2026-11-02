@@ -145,11 +145,11 @@ params <- list(
   # top_cluster: share of the molecule's reads the window must also hold (0 = only
   # umi_top_cluster_k reads needed)
   umi_top_cluster_min_share = 0.2,
-  # Drop molecules where at least umi_long_read_share of the reads are at least
-  # umi_long_read_units longer than the molecule (a longer template shortened in PCR)
-  umi_long_read_filter = TRUE,
-  umi_long_read_units = 20,
-  umi_long_read_share = 0.2,
+  # Drop molecules where at least umi_shortened_min_share of the reads are at least
+  # umi_shortened_min_units longer than the molecule (a longer template shortened in PCR)
+  umi_shortened_filter = TRUE,
+  umi_shortened_min_units = 20,
+  umi_shortened_min_share = 0.2,
 
   # --- Allele structure --------------------------------------------------------
   # Cluster reads into alleles, build consensus sequences and call variants
@@ -209,13 +209,11 @@ params <- list(
   control_setpoint_metric = "median_length",
   # 'mean', 'median' or 'trimmed_mean' across control samples
   control_aggregation_method = "median",
-  # Use manual_control_repeat_length from the settings file as the control
-  # setpoint (replacing the group control) for those samples and ranges
-  use_manual_controls = FALSE,
   # k for proportion of reads at least k units above / below the setpoint
   expansion_thresholds = c(5L, 10L),
   # Dimensions for cohort plots: group, time
   cohort_plot_by = c("group", "time"),
+  time_label = "Time (days)",   # axis label for the settings file's time column
   # Metrics drawn as timecourses by group
   headline_metrics = c("modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "contraction_index", "share_5plus_above_setpoint", "share_5plus_below_setpoint"),
   # Setpoint type for headline plots: 'control_relative' or 'sample_relative'

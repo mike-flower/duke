@@ -17,12 +17,38 @@ cluster_by_repeat_length <- function(values, cluster_max = 6L, min_prop = 0.05, 
   if (length(unique(v)) < 2) { out[ok] <- 1L; return(out) }
   set.seed(123)
   opt_v <- if (length(v) > downsample) sample(v, downsample) else v
-  k <- tryCatch({
-    utils::capture.output(g <- mclust::Mclust(opt_v, G = 1:cluster_max, verbose = FALSE))
-    g$G
-  }, error = function(e) 2L)
-  k <- min(k, length(unique(v)))
-  cl <- if (k <= 1) rep(1L, length(v)) else { set.seed(123); stats::kmeans(v, centers = k, nstart = 10)$cluster }
+  # Lengths are whole units, so a component can sit on a single value with no variance and
+  # the unequal-variance mixtures fail to fit beyond two components; spreading each value
+  # evenly over its unit (+/- 0.5) lets them fit without moving any value to another unit
+  opt_v <- opt_v + stats::runif(length(opt_v), -0.5, 0.5)
+  g <- tryCatch({ utils::capture.output(g <- mclust::Mclust(opt_v, G = 1:cluster_max, verbose = FALSE)); g },
+                error = function(e) NULL)
+  k <- if (is.null(g)) 1L else min(g$G, length(unique(v)))
+  # Reads are assigned by the mixture itself, which gives each cluster its own width, so a
+  # narrow peak (a normal allele) and a broad smear (an expanded allele) are each found as
+  # they are. k-means, used before v3.3.1, minimises the squared distance to a centre, so it
+  # preferred to cut a wide expanded smear in two over separating two narrow short alleles a
+  # few units apart (14 and 20 merged, 124 cut at 138). Two kinds of component are left out
+  # of the assignment, so that their reads go to whichever allele component explains them
+  # best instead of forming a cluster of their own: those holding under min_prop of the
+  # reads, and broad ones whose spread is more than a fifth of their length (the smear of
+  # PCR-shortened reads between the alleles, which has no peak of its own; an allele, even a
+  # broad expanded one, has a spread of well under a fifth of its length). The assignment is made on the distinct lengths, and each run of
+  # consecutive lengths given one component becomes one cluster, so every cluster is a
+  # contiguous length interval.
+  cl <- if (k <= 1) rep(1L, length(v)) else {
+    u <- sort(unique(v))
+    cu <- tryCatch({
+      mu <- g$parameters$mean; pro <- g$parameters$pro
+      sdv <- rep_len(sqrt(g$parameters$variance$sigmasq), length(mu))
+      keep <- which(pro >= min_prop & sdv <= 0.2 * pmax(abs(mu), 1)); if (!length(keep)) keep <- which.max(pro)
+      ld <- vapply(keep, function(j) log(pro[j]) + stats::dnorm(u, mu[j], sdv[j], log = TRUE), numeric(length(u)))
+      if (is.null(dim(ld))) ld <- matrix(ld, nrow = length(u))
+      keep[max.col(ld, ties.method = "first")]
+    }, error = function(e) NULL)
+    if (is.null(cu)) { set.seed(123); stats::kmeans(v, centers = k, nstart = 10)$cluster }
+    else { runs <- rle(cu); run_id <- rep(seq_along(runs$lengths), runs$lengths); run_id[match(v, u)] }
+  }
   repeat {
     tab <- table(cl); props <- tab / sum(tab)
     if (length(tab) <= 1 || min(props) >= min_prop) break
@@ -522,12 +548,12 @@ write_allele_bam <- function(d, ref, path, preset = "-x map-hifi", threads = 1L,
 # marked (filled = in the consensus, open = carried by a minority of the reads) and
 # labelled with the share of the allele's reads that carry it. Middle panel: the allele's
 # repeat region written out in repeat notation.
-allele_map_plot <- function(al, vars, ref, title, tract_names = NULL) {
+allele_map_plot <- function(al, vars, ref, title, tract_names = NULL, primary = tract_names[1]) {
   al <- data.table::as.data.table(al)[order(allele)]
   # Each row is labelled with the allele's modal length of every tract (e.g. CAG 14, CCG 9)
   tn <- intersect(paste0("modal_", tract_names), names(al))
   len_txt <- if (length(tn)) apply(al[, tn, with = FALSE], 1, function(x) paste(sprintf("%s %s", sub("^modal_", "", tn), x), collapse = ", ")) else rep("", nrow(al))
-  rl <- sprintf("Allele %s%s\n%s\n%s reads (%s)", al$allele, ifelse(al$allele == 1, " (shorter)", ifelse(al$allele == 2, " (longer)", "")),
+  rl <- sprintf("Allele %s%s\n%s\n%s reads (%s)", al$allele, ifelse(al$allele == 1, sprintf(" (shorter %s)", primary), ifelse(al$allele == 2, sprintf(" (longer %s)", primary), "")),
                 len_txt, format(al$reads, big.mark = ","), scales::percent(al$proportion, 1))
   al[, row := factor(rl, levels = rev(rl))]
   org <- if ("origin" %in% names(al)) al[allele > 2 & !is.na(origin), sprintf("Allele %s: %s", allele, origin)] else character(0)
