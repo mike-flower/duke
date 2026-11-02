@@ -170,7 +170,7 @@ cat(sprintf("\n\nTracts come from %d references. %s of %s reads (%.1f%%) aligned
 
 # Flank length
 
-**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the tract. Every read in a sample comes from the same amplicon, so it should be almost the same in every read; the commonest value in a sample is its *usual* flank length. A sample can have two usual lengths, when one allele carries an insertion or deletion in its flank: every length carried by at least 20% of the sample's reads counts as usual, and each read is judged against the nearest one. One bar per sample, sorted by the share of reads at exactly the usual length: each bar is split into the reads at that length (darkest), 1 base off, 2–5, 6–10, 11–50 and more than 50 bases off (lightest). A sample whose bar is mostly dark has clean flanks; a light block in one sample, or a group of samples, is where to look.
+**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the repeat tracts (the primary tract and any other tract on the same reference, such as CCG). Every read in a sample comes from the same amplicon, so it should be almost the same in every read; the commonest value in a sample is its *usual* flank length. A sample can have two usual lengths, when one allele carries an insertion or deletion in its flank: every length carried by at least 5% of the sample's reads counts as usual (up to four), so an expanded allele with its own flank structure is included, and each read is judged against the nearest one. One bar per sample, sorted by the share of reads at exactly the usual length: each bar is split into the reads at that length (darkest), 1 base off, 2–5, 6–10, 11–50 and more than 50 bases off (lightest). A sample whose bar is mostly dark has clean flanks; a light block in one sample, or a group of samples, is where to look.
 
 This check comes straight after tract detection because the optional flank filter (`rm_flank_length_outliers`, `r if (isTRUE(params$rm_flank_length_outliers)) "on in this run" else "off in this run"`) acts here: `r if (isTRUE(params$rm_flank_length_outliers)) "reads it removes are left out of every later section and module" else "with it off, every read is kept"`.
 
@@ -178,16 +178,27 @@ This check comes straight after tract detection because the optional flank filte
 
 ```{r flank_qc, fig.height=min(30, 2.2 + 0.16 * uniqueN(read_tracts$file_stem))}
 fq <- read_tracts[!is.na(left), .(file_stem, qname, flank_total = nchar(left) + nchar(right))]
+# Other tracts on the same reference (e.g. CCG next to CAG) sit inside the primary tract's
+# flanks and vary in length between alleles, so their length is taken out: what is left is
+# the sequence outside every tract
+pg <- tracts$ref_group[tracts$tract == primary][1]
+for (t in setdiff(tracts$tract[tracts$ref_group == pg], primary)) {
+  s_col <- paste0(t, "_start"); e_col <- paste0(t, "_end")
+  if (all(c(s_col, e_col) %in% names(read_tracts))) {
+    tl <- read_tracts[!is.na(left), fifelse(is.na(get(e_col)) | is.na(get(s_col)), 0L, as.integer(get(e_col) - get(s_col) + 1L))]
+    fq[, flank_total := flank_total - tl]
+  }
+}
 # A sample can have two usual flank lengths (e.g. an indel in one allele's flank): every value
 # carrying at least 20% of the sample's reads counts as usual (at most 3, always the commonest),
 # and each read is judged against the nearest of them
 fq[, modal := { tb <- sort(table(flank_total), decreasing = TRUE); as.numeric(names(tb)[1]) }, by = file_stem]
-fq[, dev := { tb <- sort(table(flank_total), decreasing = TRUE); u <- as.numeric(names(tb)[seq_len(min(3, max(1, sum(tb / sum(tb) >= 0.2))))])
+fq[, dev := { tb <- sort(table(flank_total), decreasing = TRUE); u <- as.numeric(names(tb)[seq_len(min(4, max(1, sum(tb / sum(tb) >= 0.05))))])
               do.call(pmin, lapply(u, function(v) abs(flank_total - v))) }, by = file_stem]
-fq[, band := cut(dev, c(-1, 0, 1, 5, 10, 50, Inf), labels = c("exactly modal", "1 bp off", "2-5 bp off", "6-10 bp off", "11-50 bp off", ">50 bp off"))]
+fq[, band := cut(dev, c(-1, 0, 1, 5, 10, 50, Inf), labels = c("at a usual length", "1 bp off", "2-5 bp off", "6-10 bp off", "11-50 bp off", ">50 bp off"))]
 fband <- fq[, .N, by = .(file_stem, band)][, prop := N / sum(N), by = file_stem]
 lab_f <- short_labels(fband$file_stem)
-ord_f <- fband[band == "exactly modal"][order(prop), file_stem]
+ord_f <- fband[band == "at a usual length"][order(prop), file_stem]
 ord_f <- c(setdiff(unique(fband$file_stem), ord_f), ord_f)
 fband[, sample := factor(lab_f[file_stem], levels = lab_f[ord_f])]
 fband[, band := factor(band, levels = rev(levels(fq$band)))]
@@ -200,7 +211,7 @@ p_flank <- ggplot(fband, aes(prop, sample, fill = band)) + geom_col(width = 0.85
        subtitle = "Each bar is one sample; dark = reads at the sample's usual flank length, orange = more than 10 bases off") +
   theme_bw() + theme(axis.text.y = element_text(size = if (n_f > 60) 5 else 7))
 print(p_flank); save_plot(p_flank, file.path(plots_dir, "flank_length.png"), 10, min(40, 2.2 + 0.16 * n_f))
-dt_compact(dcast(fband, file_stem ~ band, value.var = "prop", fill = 0)[, .(samples = .N, exactly_modal = median(`exactly modal`), within_1 = median(`exactly modal` + `1 bp off`),
+dt_compact(dcast(fband, file_stem ~ band, value.var = "prop", fill = 0)[, .(samples = .N, at_usual_length = median(`at a usual length`), within_1 = median(`at a usual length` + `1 bp off`),
            over_10 = median(`11-50 bp off` + `>50 bp off`))], caption = "Median share of reads per sample: at the usual flank length, within 1 base of it, and more than 10 bases off", digits = 3)
 if (isTRUE(params$rm_flank_length_outliers)) {
   fe <- fq[, .(q1 = quantile(flank_total, 0.25), q3 = quantile(flank_total, 0.75)), by = file_stem][, iqr := q3 - q1]
@@ -468,6 +479,8 @@ dt_full(modal_method, caption = "Modal tract length per sample by counting metho
 
 # Sequence between tracts
 
+`r if (any(grepl("^between_", names(read_tracts)))) "**How to read this.** For each pair of consecutive tracts, the sequence between them in each read, as the share of each sample's reads (the six commonest sequences across the cohort are named and the rest pooled as other). The commonest sequence is usually the reference structure. A sequence carried by a large share of some samples' reads and few of the others' is an allele with a different interruption structure (at HTT, for example, a duplicated CAACAG or the loss of the CAA and CCA interruptions, which leaves the tracts adjacent); one at a low share in every sample is sequencing error at the junction. The table lists every sequence, including those pooled as other; per-sample shares are in the between_tracts sheet of repeat_detection.xlsx and the cohort list in between_tracts_cohort." else ""`
+
 ```{r between, eval=any(grepl("^between_", names(read_tracts))), fig.height=5}
 bcols <- grep("^between_", names(read_tracts), value = TRUE)
 between <- rbindlist(lapply(bcols, function(b) {
@@ -491,7 +504,6 @@ setcolorder(between_cohort, c("junction", "sequence", "in_plot", "reads", "share
 dt_full(between_cohort, caption = "Every sequence found between consecutive tracts, across the cohort (those not named in the plot are pooled there as other)", digits = 4)
 ```
 
-`r if (any(grepl("^between_", names(read_tracts)))) "**How to read this.** For each pair of consecutive tracts, the sequence between them in each read, as the share of each sample's reads (the six commonest sequences across the cohort are named and the rest pooled as other). The commonest sequence is usually the reference structure. A sequence carried by a large share of some samples' reads and few of the others' is an allele with a different interruption structure (at HTT, for example, a duplicated CAACAG or the loss of the CAA and CCA interruptions, which leaves the tracts adjacent); one at a low share in every sample is sequencing error at the junction. The table lists every sequence, including those pooled as other; per-sample shares are in the between_tracts sheet of repeat_detection.xlsx and the cohort list in between_tracts_cohort." else ""`
 
 ---
 

@@ -4,7 +4,7 @@
 
 # Wrap a long label for a facet strip, breaking after "-", "_", "." or space
 # where possible, so that names such as "compare_gt-QS5---ipsc-cell" stay legible.
-wrap_label <- function(x, width = 14) {
+wrap_label <- function(x, width = 24) {
   vapply(x, function(s) {
     s <- if (exists("display_group")) display_group(s) else s
     tok <- regmatches(s, gregexpr("[^-_. ]*[-_. ]*", s))[[1]]; tok <- tok[nzchar(tok)]

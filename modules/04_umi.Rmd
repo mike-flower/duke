@@ -542,10 +542,18 @@ dt_compact(we_sum, caption = "Within-molecule read error per measure: share of r
 **What it shows.** How much PCR and sequencing change a read from the molecule it came from, at each length. PCR slippage grows with tract length and mostly loses repeats, so for a CAG tract the bands widen and sit below zero as length increases, and fewer reads are exactly right. At lengths above the common ones, a median well below zero means most of a molecule's reads are much shorter than the length it was given: the length is then being set by a minority of long reads (see *Molecule repeat length*).
 
 ```{r within_error_length, fig.height=7}
-p_wb <- ggplot(we_len, aes(length_bin)) + geom_ribbon(aes(ymin = q10, ymax = q90, fill = "Middle 80% of reads")) +
-  geom_ribbon(aes(ymin = q25, ymax = q75, fill = "Middle 50% of reads")) + geom_line(aes(y = median, colour = "Median read")) +
+# A short tract (e.g. CCG, a handful of lengths) is drawn as a bar per length rather than a
+# ribbon, which would join a few whole-unit values into misleading diagonal shapes
+we_len[, few := uniqueN(length_bin) < 15, by = measure]
+p_wb <- ggplot(we_len, aes(length_bin)) +
+  geom_ribbon(data = we_len[few == FALSE], aes(ymin = q10, ymax = q90, fill = "Middle 80% of reads")) +
+  geom_ribbon(data = we_len[few == FALSE], aes(ymin = q25, ymax = q75, fill = "Middle 50% of reads")) +
+  geom_line(data = we_len[few == FALSE], aes(y = median, colour = "Median read")) +
+  geom_linerange(data = we_len[few == TRUE], aes(ymin = q10, ymax = q90, colour = "Middle 80% of reads"), linewidth = 3) +
+  geom_linerange(data = we_len[few == TRUE], aes(ymin = q25, ymax = q75, colour = "Middle 50% of reads"), linewidth = 3) +
+  geom_point(data = we_len[few == TRUE], aes(y = median, colour = "Median read"), size = 2) +
   scale_fill_manual(values = c(`Middle 80% of reads` = "#cce6e8", `Middle 50% of reads` = "#80c1c7"), name = NULL) +
-  scale_colour_manual(values = c(`Median read` = "#00838f"), name = NULL) +
+  scale_colour_manual(values = c(`Median read` = "#00838f", `Middle 50% of reads` = "#80c1c7", `Middle 80% of reads` = "#cce6e8"), breaks = "Median read", name = NULL) +
   geom_hline(yintercept = 0, linetype = "dashed") + facet_wrap(~ measure, scales = "free", nrow = 1) + theme(legend.position = "top") +
   labs(x = NULL, y = "Read's repeat length minus its molecule's\n(units; below 0 = read shorter)", title = "How far each read's repeat length is from its molecule's, by the molecule's repeat length") + theme_bw() + theme(legend.position = "top")
 p_wx <- ggplot(we_len, aes(length_bin, exact)) + geom_line(colour = "#00838f") + geom_point(colour = "#00838f", size = 0.8) +
