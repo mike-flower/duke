@@ -15,7 +15,10 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 11, fig.height = 6)
+# Report figures use ragg when it is installed (fast, no X11 needed), otherwise cairo
+.ragg <- requireNamespace("ragg", quietly = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 11, fig.height = 6,
+                      dev = if (.ragg) "ragg_png" else "png", dev.args = if (.ragg) list() else list(type = "cairo"))
 ```
 
 ```{r set_tab_title, echo=FALSE, results='asis'}

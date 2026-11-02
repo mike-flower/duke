@@ -15,7 +15,10 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6)
+# Report figures use ragg when it is installed (fast, no X11 needed), otherwise cairo
+.ragg <- requireNamespace("ragg", quietly = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6,
+                      dev = if (.ragg) "ragg_png" else "png", dev.args = if (.ragg) list() else list(type = "cairo"))
 ```
 
 ```{r set_tab_title, echo=FALSE, results='asis'}
@@ -325,7 +328,10 @@ allele_origin <- function(cs, sa, tc = NULL) {
               else if (any(side$cl == "other")) "flanks unlike either allele (they match allele 1 at some variants and allele 2 at others)"
               else "flanks mixed between the two alleles"
     len_a <- if (sum(len_like) == 1) which(len_like) else NA_integer_
-    verdict <- if (!is.na(len_a) && !is.na(fl_a) && len_a != fl_a) " \u2013 likely PCR chimera"
+    # The other tract and the flanks point to different alleles: a combination neither allele
+    # carries, most likely an allele of another sample (contamination)
+    verdict <- if (!is.na(tr_a) && !is.na(fl_a) && tr_a != fl_a) " \u2013 its other tract and its flanks point to different alleles: likely from another sample (contamination)"
+               else if (!is.na(len_a) && !is.na(fl_a) && len_a != fl_a) " \u2013 likely PCR chimera"
                else if (!is.na(len_a) && !is.na(fl_a)) sprintf(" \u2013 part of allele %d", len_a)
                else if (is.na(len_a) && !is.na(fl_a)) " \u2013 a different length on that allele (subclone, smear or contamination)"
                else if (all(!is.na(num)) && length(unique(num)) > 1) " \u2013 likely PCR chimera (each flank from a different allele)"
@@ -343,8 +349,9 @@ var_summary <- variants[, .(alleles_in_consensus = sum(in_consensus), alleles_mi
 timings["Variants"] <- proc.time()["elapsed"] - .t
 ```
 
-```{asis, echo=params$cluster}
-**How the alleles are described.** Each sample's two largest clusters are its alleles 1 and 2, numbered by the length of the primary tract, `r primary` (allele 1 is the shorter), so the same number means the same kind of allele in every sample; further clusters are numbered 3 upwards. For each allele: its modal length for every measure, and the region between the reference flanks written out in repeat notation from its consensus, e.g. (CAG)17 CAACAGCCGCCA (CCG)7, so the tract lengths and interruptions can be read directly. `r if (params$cluster && params$call_variants) sprintf("Variants are the differences between an allele's flank consensus and the reference, so each belongs to one allele (they are phased). Each carries its read support: the share of that allele's reads (up to %s per allele) that contain the variant with at least %d bases of its consensus either side, out of those reads that contain either the variant or the reference in that context (the context is widened, up to 60 bases, until the two cannot be confused, which matters for an insertion or deletion in repetitive sequence; a read matching both is not counted). Variants not in an allele's consensus are reported when at least %s of its reads carry them (substitutions only; found in the reads aligned for the consensus and confirmed by the read count). A consensus variant that fewer than half of the counted reads carry is marked not confirmed (column confirmed; FILTER LowSupport in the VCF): it usually comes from a consensus misaligned around an indel or inside a repeat, so check it in the BAM before relying on it.", format(params$allele_support_reads, big.mark = ","), 8L, if (is.na(params$allele_minor_share)) "-" else percent(params$allele_minor_share)) else ""`
+```{r alleles_described, results='asis', eval=params$cluster}
+# Built in R (an asis block does not evaluate inline R code)
+cat(paste0("**How the alleles are described.** Each sample's two largest clusters are its alleles 1 and 2, numbered by the length of the primary tract, ", (primary), " (allele 1 is the shorter), so the same number means the same kind of allele in every sample; further clusters are numbered 3 upwards. For each allele: its modal length for every measure, and the region between the reference flanks written out in repeat notation from its consensus, e.g. (CAG)17 CAACAGCCGCCA (CCG)7, so the tract lengths and interruptions can be read directly. ", (if (params$cluster && params$call_variants) sprintf("Variants are the differences between an allele's flank consensus and the reference, so each belongs to one allele (they are phased). Each carries its read support: the share of that allele's reads (up to %s per allele) that contain the variant with at least %d bases of its consensus either side, out of those reads that contain either the variant or the reference in that context (the context is widened, up to 60 bases, until the two cannot be confused, which matters for an insertion or deletion in repetitive sequence; a read matching both is not counted). Variants not in an allele's consensus are reported when at least %s of its reads carry them (substitutions only; found in the reads aligned for the consensus and confirmed by the read count). A consensus variant that fewer than half of the counted reads carry is marked not confirmed (column confirmed; FILTER LowSupport in the VCF): it usually comes from a consensus misaligned around an indel or inside a repeat, so check it in the BAM before relying on it.", format(params$allele_support_reads, big.mark = ","), 8L, if (is.na(params$allele_minor_share)) "-" else percent(params$allele_minor_share)) else "")), "\n\n")
 ```
 
 `r if (params$cluster) sprintf("Variants can only be called where the reads give flank sequence: the allele consensuses cover a median of %s of the %s bp of the left reference flank and %s of the %s bp of the right (%s, N block at %d–%d); any sequence between the tract and a flank, such as the rest of an N block, is written in the repeat notation instead.", format(as.integer(stats::median(ref$n_start - cons$left_from, na.rm = TRUE)), big.mark = ","), format(ref$n_start - 1, big.mark = ","), format(as.integer(stats::median(cons$right_to - ref$n_end, na.rm = TRUE)), big.mark = ","), format(nchar(ref$full) - ref$n_end, big.mark = ","), ref$ref_id, ref$n_start, ref$n_end) else ""`

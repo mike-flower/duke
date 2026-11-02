@@ -254,8 +254,15 @@ dt_compact <- function(df, caption = NULL, digits = NULL) {
 save_plot <- function(p, path, width = 10, height = 6, dpi = NULL) {
   dpi <- dpi %||% tryCatch(get("params", envir = parent.frame())$plot_dpi, error = function(e) 150)
   dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
-  ggplot2::ggsave(path, p, width = min(width, 49), height = min(height, 49),
-                  dpi = dpi, bg = "white", limitsize = FALSE)
+  # ragg when it is installed (several times faster, and needs no X11), otherwise the cairo
+  # PNG device: the default device on an HPC node without X11 can take a minute or more
+  # over one large figure
+  if (requireNamespace("ragg", quietly = TRUE))
+    ggplot2::ggsave(path, p, width = min(width, 49), height = min(height, 49),
+                    dpi = dpi, bg = "white", limitsize = FALSE, device = ragg::agg_png)
+  else
+    ggplot2::ggsave(path, p, width = min(width, 49), height = min(height, 49),
+                    dpi = dpi, bg = "white", limitsize = FALSE, device = "png", type = "cairo")
   invisible(path)
 }
 
@@ -321,3 +328,4 @@ md_path <- function(path) {
 # group made by joining settings columns, some blank, can end in "----"). The group itself is
 # unchanged, since it is the key for group controls and ranges.
 display_group <- function(x) gsub("^[-_ ]+|[-_ ]+$", "", as.character(x))
+
