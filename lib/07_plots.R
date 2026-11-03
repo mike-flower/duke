@@ -2,12 +2,13 @@
 # Duke - repeat-length figures (Module 7)
 # ==============================================================================
 
-# Wrap a long label for a facet strip, breaking after "-", "_", "." or space
+# Wrap a long label for a facet strip, breaking after "-", "_" or space (not after
+# "." , which would split a number such as 0.01uM)
 # where possible, so that names such as "compare_gt-QS5---ipsc-cell" stay legible.
 wrap_label <- function(x, width = 24) {
   vapply(x, function(s) {
     s <- if (exists("display_group")) display_group(s) else s
-    tok <- regmatches(s, gregexpr("[^-_. ]*[-_. ]*", s))[[1]]; tok <- tok[nzchar(tok)]
+    tok <- regmatches(s, gregexpr("[^-_ ]*[-_ ]*", s))[[1]]; tok <- tok[nzchar(tok)]
     lines <- character(0); cur <- ""
     for (t in tok) {
       while (nchar(t) > width) { if (nzchar(cur)) { lines <- c(lines, cur); cur <- "" }; lines <- c(lines, substr(t, 1, width)); t <- substring(t, width + 1) }
@@ -118,23 +119,33 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
     ggplot2::geom_ribbon(data = rdn, ggplot2::aes(x, ymin = base, ymax = top, group = label), fill = "grey90", colour = NA) +
     ggplot2::geom_point(data = dots, ggplot2::aes(length, y), size = 0.35, alpha = 0.35, colour = "black", stroke = 0) +
     ggplot2::geom_line(data = rdn, ggplot2::aes(x, top, group = label, colour = main_unit), linewidth = 0.3)
+  mmodal <- NULL
   if (!is.null(md) && nrow(md)) {
     md <- data.table::as.data.table(md)[is.finite(length) & label %in% L]
-    if (nrow(md)) p <- p + ggplot2::geom_line(data = dens(md), ggplot2::aes(x, top, group = label, colour = "Molecules"), linewidth = 0.5)
+    if (nrow(md)) {
+      p <- p + ggplot2::geom_line(data = dens(md), ggplot2::aes(x, top, group = label, colour = "Molecules"), linewidth = 0.5)
+      mmodal <- md[, .(modal = { tb <- table(round(length)); as.numeric(names(tb)[which.max(tb)]) }), by = label][, base := idx[as.character(label)]]
+    }
   }
   lab <- if (main_unit == "Molecules") c(Molecules = "Molecules (UMI-collapsed; grey fill, dots)") else
     c(Reads = "Reads (grey fill, dots)", Molecules = "Molecules (UMI-collapsed)")
   p <- p + ggplot2::scale_colour_manual(values = c(Reads = "grey25", Molecules = "#00838f"), breaks = names(lab), labels = lab, name = NULL)
+  # Modal lengths: the main unit's in red, labelled to the right; the molecules' (when drawn
+  # over reads) in teal, labelled to the left, so the two can be read side by side
+  if (!is.null(mmodal) && nrow(mmodal))
+    p <- p + ggplot2::geom_segment(data = mmodal, ggplot2::aes(x = modal, xend = modal, y = base, yend = base + 0.9), colour = "#00838f", linetype = "dashed", linewidth = 0.4) +
+      ggplot2::geom_text(data = mmodal, ggplot2::aes(x = modal, y = base + 0.9, label = round(modal)), colour = "#00838f", size = 2.6, hjust = 1.15, vjust = 1)
   p + ggplot2::geom_segment(data = modal, ggplot2::aes(x = modal, xend = modal, y = base, yend = base + 0.9), colour = "red", linetype = "dashed", linewidth = 0.4) +
     ggplot2::geom_text(data = modal, ggplot2::aes(x = modal, y = base + 0.9, label = round(modal)), colour = "red", size = 2.6, hjust = -0.15, vjust = 1) +
     ggplot2::scale_y_continuous(breaks = unname(idx), labels = names(idx), expand = ggplot2::expansion(add = c(0.45, 0.25))) +
     ggplot2::coord_cartesian(xlim = xlim) +
     ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(10)) +
     ggplot2::labs(x = xlab, y = NULL, title = title,
-                  subtitle = subtitle %||% sprintf("Grey = %s: density, scaled to each sample's height%s\nDots inside each ridge = %s %s; red = the %s' modal length",
+                  subtitle = subtitle %||% sprintf("Grey = %s: density, scaled to each sample's height%s\nDots inside each ridge = %s %s; red = the %s' modal length%s",
                                                    if (mu == "molecules") "molecules (UMI-collapsed)" else "reads",
                                                    if (!is.null(md) && nrow(md)) ", teal line = molecules (UMI-collapsed)" else "",
-                                                   if (rd[, max(.N), by = label][, max(V1)] > dots_max) paste("up to", format(dots_max, big.mark = ","), "random") else "all", mu, mu)) +
+                                                   if (rd[, max(.N), by = label][, max(V1)] > dots_max) paste("up to", format(dots_max, big.mark = ","), "random") else "all", mu, mu,
+                                                   if (!is.null(mmodal) && nrow(mmodal)) ", teal = the molecules'" else "")) +
     ggplot2::theme_bw() + ggplot2::theme(legend.position = "top", panel.grid.minor = ggplot2::element_blank())
 }
 

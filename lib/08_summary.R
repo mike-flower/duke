@@ -42,14 +42,22 @@ write_run_summary <- function(p) {
     setnames(dw, names(dw), sub("^with_tract_(.*)$", "reads_with_\\1", sub("^detection_rate_(.*)$", "\\1_detection_rate", names(dw))))
     s <- dw[s, on = "file_stem"]
   }
-  if (!is.null(umi)) s <- umi[, intersect(c("file_stem", "molecules", "kept", "reads_in_kept", "median_reads_per_kept"), names(umi)), with = FALSE][s, on = "file_stem"]
-  if (!is.null(umi)) setnames(s, c("molecules", "kept", "reads_in_kept", "median_reads_per_kept"),
-                              c("umi_molecules", "molecules_kept", "share_of_reads_in_kept_molecules", "median_reads_per_kept_molecule"), skip_absent = TRUE)
+  if (!is.null(umi)) {
+    u <- umi[, intersect(c("file_stem", "n_reads_with_umi", "molecules", "kept", "reads_in_kept", "median_reads_per_kept"), names(umi)), with = FALSE]
+    if (all(c("reads_in_kept", "n_reads_with_umi") %in% names(u))) u[, share_of_umi_reads_in_kept_molecules := reads_in_kept / n_reads_with_umi]
+    setnames(u, c("n_reads_with_umi", "molecules", "kept", "reads_in_kept", "median_reads_per_kept"),
+             c("reads_with_umi", "umi_molecules", "molecules_kept", "reads_in_kept_molecules", "median_reads_per_kept_molecule"), skip_absent = TRUE)
+    s <- u[s, on = "file_stem"]
+  }
   mc <- paste0("modal_", primary)
   if (!is.null(al) && mc %in% names(al)) {
     a12 <- al[allele %in% 1:2]
-    aw <- dcast(a12, file_stem ~ allele, value.var = c(mc, "proportion", "repeat_notation"))
-    setnames(aw, names(aw), sub(paste0("^", mc, "_(\\d)$"), paste0("allele\\1_", primary), sub("^proportion_(\\d)$", "allele\\1_share", sub("^repeat_notation_(\\d)$", "allele\\1_notation", names(aw)))))
+    vv <- intersect(c(mc, "proportion", "molecule_proportion", "repeat_notation"), names(a12))
+    aw <- dcast(a12, file_stem ~ allele, value.var = vv)
+    if (length(vv) == 1) setnames(aw, c("1", "2"), paste0(vv, "_", 1:2), skip_absent = TRUE)
+    setnames(aw, names(aw), sub(paste0("^", mc, "_(\\d)$"), paste0("allele\\1_", primary),
+                                sub("^molecule_proportion_(\\d)$", "allele\\1_molecule_share",
+                                    sub("^proportion_(\\d)$", "allele\\1_read_share", sub("^repeat_notation_(\\d)$", "allele\\1_notation", names(aw))))))
     s <- aw[s, on = "file_stem"]
     s <- al[allele > 2, .(other_clusters = .N), by = file_stem][s, on = "file_stem"]
     s[is.na(other_clusters) & file_stem %in% al$file_stem, other_clusters := 0L]
@@ -58,7 +66,7 @@ write_run_summary <- function(p) {
   ord <- c("sample", "file_stem", "group", "time", "is_control", "reads_imported", "reads_after_qc",
            "median_read_length_bp", "median_np", "median_qv", "reads_aligned",
            grep("^reads_with_", names(s), value = TRUE), grep("_detection_rate$", names(s), value = TRUE),
-           "umi_molecules", "molecules_kept", "share_of_reads_in_kept_molecules", "median_reads_per_kept_molecule",
+           "reads_with_umi", "umi_molecules", "molecules_kept", "reads_in_kept_molecules", "share_of_umi_reads_in_kept_molecules", "median_reads_per_kept_molecule",
            grep("^allele1_", names(s), value = TRUE), grep("^allele2_", names(s), value = TRUE), "other_clusters")
   ord <- intersect(ord, names(s))
   setcolorder(s, c(ord, setdiff(names(s), ord)))
@@ -100,13 +108,14 @@ write_run_summary <- function(p) {
              "Alleles: clusters, consensus sequences (FASTA), phased variants (VCF), allele BAMs, waterfalls (allele_structure.xlsx)",
              "Instability metrics for every sample, measure, range and unit, with definitions (instability.xlsx)",
              "The same metrics as plain text, for R, Python or Prism",
-             "Length distribution figures for every group, range and sample (sample_cards/ = one page per sample)",
+             "Length distribution figures for every group, range and sample (plots/sample_card/ = one page per sample)",
              "Every figure in a report is saved as a PNG under that module's plots/ folder"))
   cols <- data.table(column = c("sample", "file_stem", "group, time, is_control", "reads_imported, reads_after_qc",
                                 "median_read_length_bp, median_np, median_qv", "reads_aligned",
-                                "reads_with_<tract>, <tract>_detection_rate", "umi_molecules, molecules_kept",
-                                "share_of_reads_in_kept_molecules, median_reads_per_kept_molecule",
-                                sprintf("allele1_%s, allele2_%s", primary, primary), "allele1_share, allele2_share",
+                                "reads_with_<tract>, <tract>_detection_rate", "reads_with_umi, umi_molecules, molecules_kept",
+                                "reads_in_kept_molecules, share_of_umi_reads_in_kept_molecules, median_reads_per_kept_molecule",
+                                sprintf("allele1_%s, allele2_%s", primary, primary), "allele1_read_share, allele2_read_share",
+                                "allele1_molecule_share, allele2_molecule_share",
                                 "allele1_notation, allele2_notation", "other_clusters"),
                      meaning = c("Short sample label: the part of the file name that differs between samples (as in the reports)",
                                  "The sample's file name without extension, as in every table",
@@ -114,10 +123,11 @@ write_run_summary <- function(p) {
                                  "Median read length, pass count and read quality (QV; PacBio only)",
                                  "Reads with both flanks aligned in the right order (Module 2)",
                                  "Reads in which each tract was found, and as a share of aligned reads (Module 3)",
-                                 "UMI molecules found, and kept (enough reads and not flagged as shortened; Module 4)",
-                                 "Share of UMI reads in kept molecules, and their median depth",
+                                 "Reads holding a UMI, the UMI molecules (families) found, and those kept (enough reads and not flagged as shortened; Module 4)",
+                                 "Reads in kept molecules, as a count and as a share of the reads with a UMI, and the kept molecules' median depth",
                                  sprintf("Modal %s length of the shorter (1) and longer (2) allele (Module 5)", primary),
                                  "Share of the sample's clustered reads in each allele",
+                                 "Share of the sample's clustered molecules in each allele (UMI runs clustered on molecules; the better measure of allele balance, as each molecule counts once)",
                                  "Each allele's consensus repeat region in repeat notation",
                                  "Clusters beyond the two alleles (a subclone, PCR chimeras or contamination; see Module 5)"))
   out <- list(samples = s, headline_metrics = hl, columns = cols, files = files)

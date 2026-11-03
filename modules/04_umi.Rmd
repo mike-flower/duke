@@ -408,7 +408,7 @@ timings["Shortened-molecule filter"] <- proc.time()["elapsed"] - .t
 
 # Molecules kept
 
-What is left after the two steps that remove molecules: those with fewer than `umi_min_reads` = `r params$umi_min_reads` reads, and those `r if (isTRUE(params$umi_shortened_filter)) "removed" else "flagged"` by the shortened-molecule filter. The table gives the counts per sample: UMI families formed, molecules with enough reads, molecules flagged by the filter (column `long_read_flag`), molecules kept, the reads they hold and their median depth.
+What is left after the two steps that remove molecules: those with fewer than `umi_min_reads` = `r params$umi_min_reads` reads, and those `r if (isTRUE(params$umi_shortened_filter)) "removed" else "flagged"` by the shortened-molecule filter. The table gives the counts per sample: UMI families formed, molecules with enough reads, molecules flagged by the filter (column `shortened_flag`), molecules kept, the reads they hold and their median depth.
 
 ```{r kept_table}
 summary_tab <- molecules[, .(molecules = .N, enough_reads = sum(kept_depth), shortened_flag = sum(long_flag), kept = sum(kept),

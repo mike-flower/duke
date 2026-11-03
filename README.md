@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.2** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.3.3** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -381,7 +381,7 @@ Every saved figure is named **`{plot type}_{sample, group or measure}_{measure}_
 | `reads_far_from_molecule` | 4 | one for the run | – | yes | Reads far from their molecule's length per sample |
 | `reads_vs_molecules_cohort` | 4 | one for the run | – | yes | Read and molecule length distributions for the run |
 | `reads_vs_molecules` | 4 | one per sample | – | yes | Read and molecule length distributions (one per sample) |
-| `clusters_per_sample` | 5 | one for the run | – | yes | Number of clusters per sample |
+| `allele_shares` | 5 | one for the run | – | yes | Each sample's reads and molecules split between its alleles |
 | `clusters_overview` | 5 | one for the run | – | yes | Clusters in every sample |
 | `clusters` | 5 | one per sample | – | yes | One sample's reads by cluster |
 | `variants_by_sample` | 5 | one for the run | – | yes | Variants in alleles 1 and 2 of every sample |
@@ -515,12 +515,14 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 | `haplotype_trim_length` | `auto` | text | `auto`, a number of bases, or `NA` for no trimming |
 | `consensus_threshold` | `0.5` | number | Minimum agreement for a consensus base |
 | `consensus_downsample` | `50` | whole number | Maximum reads per consensus alignment |
+| `consensus_parts` | `FALSE` | TRUE / FALSE | Also write each allele's left flank, repeat region and right flank as `alleles_left.fasta`, `alleles_mid.fasta` and `alleles_right.fasta` beside `alleles.fasta` |
 | `call_variants` | `TRUE` | TRUE / FALSE | Call variants in each cluster consensus against the reference |
 | `allele_minor_share` | `0.2` | number | Also report a substitution carried by at least this share of an allele`s reads when it is not in the allele`s consensus (NA = off) |
 | `allele_support_reads` | `5000` | whole number | Maximum reads per allele used to count each variant's read support |
 | `allele_bam` | `TRUE` | TRUE / FALSE | Write a BAM per sample of reads aligned to the whole reference, tagged by allele (HP) |
 | `allele_bam_reads` | `2000` | whole number | Maximum reads per allele in the allele BAMs |
-| `allele_bam_minimap2` | `-x map-hifi` | text | minimap2 options for the allele BAMs (e.g. -x map-ont for nanopore reads) |
+| `allele_bam_method` | `auto` | auto / flanks / minimap2 | How reads are placed on the reference in the allele BAMs: `flanks` aligns each read's left and right flank to the reference flanks and writes the repeat region as one insertion at the N block (for short amplicons, which minimap2 leaves unmapped); `minimap2` aligns whole reads; `auto` uses flanks when the reads' flanks total under 1,000 bp |
+| `allele_bam_minimap2` | `-x map-hifi` | text | minimap2 options for the allele BAMs when minimap2 is used (e.g. -x map-ont for nanopore reads) |
 | `waterfall` | `TRUE` | TRUE / FALSE | Write per-sample waterfall plots |
 | `waterfall_downsample` | `1000` | whole number | Maximum reads per waterfall |
 | `waterfall_flank_bp` | `60` | whole number | Bases of flank drawn either side of the tract in waterfalls |
@@ -723,6 +725,20 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - Module 5 haplotype clustering: the left and right flanks are no longer joined into one sequence for k-mer counting, so no k-mer spans the junction. Junction k-mers combined the bases either side of the tract, so jitter where the tract ends changed ~15 k-mers in the same reads at once, which looks like a real variant; on the jasmine CAG + CCG run this split ~10% of the expanded allele into a second "haplotype" (H2) in 45 of 66 samples, with the same length distribution and a consensus that differed only in the bases next to the tract. On simulated reads the old code split off 9% of reads on boundary jitter alone and missed a real SNP carried by 30% of reads; the new code keeps one cluster for jitter and splits on the SNP. A real variant within ~7 bp of the tract is no longer used for haplotypes.
 - Module 5 report: the variants section says how much flank sequence the consensuses cover (on a UMI amplicon this is ~50 bp left and ~80 bp right of the tract, not the whole reference flank), and says plainly when no consensus differs from the reference, rather than introducing a table that is not there.
 
+**v3.3.3** – allele BAMs that show in IGV, cluster figures on molecules, run summary fixes
+
+- Module 5 allele BAMs: on a short UMI amplicon (a few hundred bp, mostly repeat) minimap2 left every read unmapped, so the BAMs showed nothing in IGV. New `allele_bam_method` (default `auto`): reads with short flanks are placed from their flanks – each flank aligned locally to the reference beside the N block, the repeat region written as one insertion and the N block as a deletion – so every read is mapped across the repeat with its flank mismatches and indels shown; long reads still use minimap2. The report gives the locus to paste into IGV.
+- Module 5 figures: the per-sample cluster figures draw what was clustered – one length per molecule when clustering on molecules (they drew every read, so PCR-shortened reads smeared allele 2 down to zero) – with all the sample's lengths in grey behind each cluster, so the split can be checked. *Clusters per sample* (one bar saying how many samples had two clusters) is replaced by `allele_shares`: each sample's reads, and molecules, split between allele 1, allele 2 and extra clusters, with the cluster counts in the subtitle. In *Clusters in every sample* the point size is the molecule share when clustering on molecules.
+- Module 5 consensus: only `alleles.fasta` is written by default; the separate left, repeat and right parts are written with the new `consensus_parts = TRUE`.
+- Module 5 with UMIs: each allele's modal lengths (every tract and combined measure) are taken over its molecules, as the cluster table's are, instead of over its reads; the allele table also gives each allele's molecules and molecule share. The tract consensus is made from reads at the allele's modal molecule length.
+- Module 5 tract consensus: reads of one length are now combined column by column instead of being aligned first. Aligning hundreds of bases of pure CAG could shift some reads by a unit and leave columns with no majority, so an expanded allele came out as, for example, *(CAG)70 CANNG (CAG)63*.
+- Module 5 waterfalls with UMIs: one read per kept molecule, so each allele takes up its share of molecules; before, a 90:10 read split made the expanded allele a thin strip at the top.
+- Run summary: the column called `share_of_reads_in_kept_molecules` held a count of reads; it is now `reads_in_kept_molecules`, with the share in `share_of_umi_reads_in_kept_molecules` (of the reads with a UMI) and `reads_with_umi` beside it. Allele shares are given for reads (`allele1_read_share`) and molecules (`allele1_molecule_share`).
+- Module 6: *Count per range* labels each range with its bounds, as the other range figures do, and the report says when two analysis ranges in the settings file are identical (their results are then the same).
+- Group names in facet strips are no longer wrapped after a full stop, which split numbers such as `0.01uM`.
+- Module 4: the *Molecules kept* text names the `shortened_flag` column correctly.
+- Module 7 per-sample density figures (`sample_density`): the molecules' modal length is marked too (teal, labelled on the left; the reads' stays red, on the right), and the title uses the short sample label so it fits. The *Every range* figures (`sample_ranges`) carry the sample's read accounting, as the sample cards do, and both say in a caption what the red, purple and orange dashed lines are.
+
 **v3.3.2** – allele clustering fixed on expanded alleles, clustering on molecules, a run index and summary, every range saved
 
 - Module 5 clustering: in v3.3.1 every broad mixture component (spread more than a fifth of its length) was left out of the assignment as the PCR smear. The mixture often fits an expanded allele as one broad component (most of all for reads, whose expanded allele is spread by shortened copies), so in 8 of 14 samples of the jasmine UMI run every read went to the normal allele and the sample came out as one cluster from CAG 14 to about 120. A broad component is now left out only when it lies between a narrower peak below it and another component above it (the smear between two alleles); the top component is always kept, as it is the expanded allele. All 14 jasmine samples now give a CAG 14 allele and an expanded allele (CAG 128–139), on reads and on molecules, and the PacBio and simulated test sets give the same alleles as before with tighter boundaries (two alleles a few units apart, such as 14 and 20 beside an expansion, are now also separated).
@@ -730,7 +746,7 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - Run summary: `run_summary.xlsx` at the top of the output folder (and `run_summary_samples.tsv`, `run_summary_headline_metrics.tsv`) brings every module together, one row per sample: group, time and control status, reads at each step (imported, after QC, aligned, with each tract), read length and quality, UMI molecules found and kept, the two alleles' lengths, shares and repeat notation, and the number of extra clusters; a second sheet has the headline metrics for the primary measure for every range and unit, and two more describe the columns and where every output is. It is rebuilt at the end of every run, so it is current even when modules were resumed.
 - Module 6 saves the tract comparison for every range, not only `plot_ranges` (which are still the ones shown in the report), and the folder is tidier: `plots/pairs/{A}_vs_{B}/trend_{range}.png`, `correlation_{range}.png`, and `by_sample/{reads,molecules}/{sample}.png`, one figure per sample with one panel per range (instead of one file per sample and range). `instability_metrics.tsv` and `distribution_summary.tsv` are also written as plain text for R, Python or Prism.
 - `index.html` at the top of the output folder, written at the end of every run: links every report and table, then every figure arranged by what it shows – a table with one row per sample and a column for each kind of per-sample figure, one row per range (Module 6 timecourses and tract comparison, Module 7 group figures), one row per group, and thumbnails of the whole-run figures by module. Figures are found by file name, so the page works when copied with the folder (it needs the PNGs, not the BAMs).
-- Module 7: new *Every range, sample by sample* figures, `plots/sample_ranges/reads/{sample}.png` and `plots/sample_ranges/molecules/{sample}.png`: the sample's primary length for all lengths and in every analysis range, one panel each, with the range's count, modal, median and mean from Module 6. The sample cards still show every measure for the ranges drawn in the report.
+- Module 7: new *Every range, sample by sample* figures, `plots/sample_ranges/sample_ranges_{sample}_{measure}_{unit}.png`: the sample's primary length for all lengths and in every analysis range, one panel each, with the range's count, modal, median and mean from Module 6. The sample cards still show every measure for the ranges drawn in the report.
 - Module 7 saves the by-group density and histogram figures for every range by default (`plot_every_range = TRUE`).
 - Reads and molecules are named the same way in every figure, reads first: *Reads* (grey) and *Molecules (UMI-collapsed)* (teal) in the Module 6 legends and axes, both named in the Module 7 density legend (it used to show only the molecule line), and in Module 5 the cluster figures say whether clusters were made on reads or on molecules and give each cluster's share of molecules when they were.
 - Module 1: *Pass count against read length* is a tile plot of every read (coloured by the number of reads, log scale) with the median pass count at each length, instead of a scatter of up to 50,000 points that showed as a solid black block; its counts are in `pacbio_np_by_length.tsv`. `pacbio_scatter_downsample` is no longer used.
@@ -789,7 +805,7 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - **Review view in the report**: a table of every allele in every sample (lengths, repeat notation, variants), a map of every variant's read support in alleles 1 and 2 of every sample, and one figure per sample showing its alleles, their repeat notation and their flank variants on reference coordinates (`plots/alleles/`).
 - **Standard files** replace the per-cluster VCF and FASTA:
   - `variants/alleles.vcf` – one column per sample, phased (GT allele 1 | allele 2, PS). The region between the reference flanks is one record (REF is the reference N block; ALT the allele sequences in the cohort) with MC (motif count of each tract per haplotype), AL (length) and HDP (reads); flank variants carry HDP and HAF (read support per haplotype). Also bgzipped and tabix-indexed where `bgzip` and `tabix` are installed.
-  - `consensus/alleles.fasta` – one full-length sequence per allele, with sample, allele, reads and repeat notation in the header (and the left, tract and right parts in their own files).
+  - `consensus/alleles.fasta` – one full-length sequence per allele, with sample, allele, reads and repeat notation in the header (with `consensus_parts = TRUE`, the left, tract and right parts in their own files too).
   - `bam/{sample}.bam` – up to `allele_bam_reads` reads per allele aligned to the whole reference with minimap2, tagged `HP` (allele), `XR` (primary repeat length) and, with UMIs, `MI` (molecule). In IGV, group or colour the reads by tag HP.
 - `allele_structure.xlsx` has the sheets `alleles`, `variants`, `variant_support` (every variant in both alleles) and `variants_cohort`.
 

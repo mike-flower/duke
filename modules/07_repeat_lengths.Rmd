@@ -89,6 +89,7 @@ plot_ranges <- if (length(params$plot_ranges)) params$plot_ranges else if (have_
 group_ranges <- if (have_m6 && isTRUE(params$plot_every_range)) sort(unique(range_table$range_name[range_table$measure == primary])) else plot_ranges
 acc_path <- file.path(params$dir_out, "02_alignment", "alignment.xlsx")
 funnel <- if (file.exists(acc_path)) as.data.table(readxl::read_excel(acc_path, "read_accounting")) else NULL
+stat_key <- "Dashed lines in each range: red = modal, purple = median, orange = mean length (Module 6), with their values in the panel header"
 # Each sample's reads and molecules, split once (scanning the whole run for every figure was the slow part)
 rl_s <- split(lengths, by = "file_stem", keep.by = FALSE)
 ml_s <- if (!is.null(mol)) split(mol, by = "file_stem", keep.by = FALSE) else list()
@@ -208,7 +209,8 @@ invisible(apply_fn(meta$file_stem, function(s) {
     for (u in pu) {
       v <- unit_version(fd$rd, fd$md, u)
       if (is.null(v$rd) || !nrow(v$rd)) next
-      ttl <- sprintf("%s: %s%s, %s", s, primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg), unit_title[[u]])
+      # the short sample label: the full file name does not fit the width of these figures
+      ttl <- sprintf("%s: %s%s, %s", short_labels(meta$file_stem)[[s]], primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg), unit_title[[u]])
       if (want_plot("sample_density", params))
         save_plot(ridge_dots_plot(v$rd, v$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max, main_unit = v$main),
                   plot_path(plots_dir, "sample_density", s, primary, f, unit = u), 10, 3)
@@ -259,10 +261,14 @@ make_range_grid <- function(s, u) {
   }
   if (!length(panels)) return(NULL)
   g <- meta[file_stem == s, group_label]; tm <- meta[file_stem == s, time]
+  fn <- if (!is.null(funnel)) funnel[file_stem == s][1] else NULL
+  acc <- if (!is.null(fn) && nrow(fn)) sprintf("\nReads: %s input, %s spanning both flanks, %s analysed%s", comma(fn$input), comma(fn$both_flanks), comma(fn$final),
+                                               if (!is.null(ml_s[[s]])) sprintf("; %s molecules", comma(uniqueN(ml_s[[s]]$molecule_id))) else "") else ""
   nc <- min(4, length(panels))
   list(plot = patchwork::wrap_plots(panels, ncol = nc) +
          patchwork::plot_annotation(title = sprintf("%s: %s, %s", s, primary, unit_title[[u]]),
-                                    subtitle = paste0(display_group(g), if (!is.na(tm)) paste0(", time ", tm) else "", "; all lengths, then every analysis range")),
+                                    subtitle = paste0(display_group(g), if (!is.na(tm)) paste0(", time ", tm) else "", "; all lengths, then every analysis range", acc),
+                                    caption = stat_key),
        w = 4.2 * nc, h = 1.2 + (if (length(tabs) > 1) 4.4 else 2.6) * ceiling(length(panels) / nc))
 }
 invisible(apply_fn(meta$file_stem, function(s) {
@@ -313,7 +319,8 @@ make_card <- function(s, ms = measures$measure, u = "combined") {
                                                if (!is.null(ml_s[[s]])) sprintf("; %s molecules", comma(uniqueN(ml_s[[s]]$molecule_id))) else "") else NULL
   g <- meta[file_stem == s, group_label]; tm <- meta[file_stem == s, time]
   patchwork::wrap_plots(panels, ncol = 1 + length(plot_ranges)) +
-    patchwork::plot_annotation(title = sprintf("%s: %s", s, unit_title[[u]]), subtitle = paste0(display_group(g), if (!is.na(tm)) paste0(", time ", tm) else "", if (!is.null(sub)) paste0("\n", sub) else ""))
+    patchwork::plot_annotation(title = sprintf("%s: %s", s, unit_title[[u]]), subtitle = paste0(display_group(g), if (!is.na(tm)) paste0(", time ", tm) else "", if (!is.null(sub)) paste0("\n", sub) else ""),
+                               caption = stat_key)
 }
 row_h_of <- function(u) if (length(unit_members(u)) > 1) 5 else 3.2
 card_w <- 5.5 * (1 + length(plot_ranges))

@@ -387,9 +387,9 @@ within_molecule_error_hist,4,run,FALSE,TRUE,Read length minus molecule length (h
 reads_far_from_molecule,4,run,FALSE,TRUE,Reads far from their molecule's length per sample
 reads_vs_molecules_cohort,4,run,FALSE,TRUE,Read and molecule length distributions for the run
 reads_vs_molecules,4,sample,FALSE,TRUE,Read and molecule length distributions (one per sample)
-clusters_per_sample,5,run,FALSE,TRUE,Number of clusters per sample
+allele_shares,5,run,FALSE,TRUE,Each sample's reads and molecules split between its alleles
 clusters_overview,5,run,FALSE,TRUE,Clusters in every sample
-clusters,5,sample,FALSE,TRUE,One sample's reads by cluster
+clusters,5,sample,FALSE,TRUE,One sample's lengths by cluster
 variants_by_sample,5,run,FALSE,TRUE,Variants in alleles 1 and 2 of every sample
 alleles,5,sample,FALSE,TRUE,One sample's alleles and variants
 waterfall,5,sample,FALSE,TRUE,Reads stacked by length with each base coloured
@@ -421,6 +421,11 @@ resolve_plot_types <- function(p) {
   req <- p$plots %||% "all"
   if (!length(req)) req <- "all"
   add <- req[!startsWith(req, "-")]; drop <- sub("^-", "", req[startsWith(req, "-")])
+  renamed <- c(clusters_per_sample = "allele_shares")   # plot types renamed since they were added
+  for (old in intersect(names(renamed), c(add, drop))) {
+    message("Plot type '", old, "' is now called '", renamed[[old]], "'")
+    add[add == old] <- renamed[[old]]; drop[drop == old] <- renamed[[old]]
+  }
   bad <- setdiff(c(add, drop), c("all", "none", cat_$type))
   if (length(bad)) stop("Unknown plot type(s) in plots: ", paste(bad, collapse = ", "), ". Known types: ", paste(cat_$type, collapse = ", "))
   out <- unique(c(if ("all" %in% add) cat_$type[cat_$default], setdiff(add, c("all", "none"))))

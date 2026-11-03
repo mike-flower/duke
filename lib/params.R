@@ -104,13 +104,15 @@ duke_param_spec <- function() {
     .p("haplotype_trim_length", "auto", "chr", "Allele structure", "'auto', a number of bases, or 'NA' for no trimming"),
     .p("consensus_threshold", 0.5, "num", "Allele structure", "Minimum agreement for a consensus base"),
     .p("consensus_downsample", 50L, "int", "Allele structure", "Maximum reads per consensus alignment"),
+    .p("consensus_parts", FALSE, "lgl", "Allele structure", "Also write each allele's left flank, repeat region and right flank consensus as their own FASTA files (alleles_left.fasta, alleles_mid.fasta, alleles_right.fasta) beside alleles.fasta"),
     .p("call_variants", TRUE, "lgl", "Allele structure", "Call variants in each cluster consensus against the reference"),
     .p("allele_minor_share", 0.2, "num", "Allele structure",
        "Also report a substitution carried by at least this share of an allele's reads when it is not in the allele's consensus (NA = off)"),
     .p("allele_support_reads", 5000L, "int", "Allele structure", "Maximum reads per allele used to count each variant's read support"),
     .p("allele_bam", TRUE, "lgl", "Allele structure", "Write a BAM per sample of reads aligned to the whole reference, tagged by allele (HP)"),
     .p("allele_bam_reads", 2000L, "int", "Allele structure", "Maximum reads per allele in the allele BAMs"),
-    .p("allele_bam_minimap2", "-x map-hifi", "chr", "Allele structure", "minimap2 options for the allele BAMs (e.g. -x map-ont for nanopore reads)"),
+    .p("allele_bam_method", "auto", "chr", "Allele structure", "How reads are placed on the reference in the allele BAMs: 'flanks' (each flank aligned to its reference flank, the repeat as one insertion at the N block; for short amplicons), 'minimap2', or 'auto' (flanks when the reads' flanks are under 1,000 bp in total, as on a short UMI amplicon, otherwise minimap2)"),
+    .p("allele_bam_minimap2", "-x map-hifi", "chr", "Allele structure", "minimap2 options for the allele BAMs when minimap2 is used (e.g. -x map-ont for nanopore reads)"),
     .p("waterfall", TRUE, "lgl", "Allele structure", "Write per-sample waterfall plots"),
     .p("waterfall_downsample", 1000L, "int", "Allele structure", "Maximum reads per waterfall"),
     .p("waterfall_flank_bp", 60L, "int", "Allele structure", "Bases of flank drawn either side of the tract in waterfalls"),
@@ -229,6 +231,7 @@ resolve_params <- function(user = list()) {
   if (isTRUE(p$umi) && p$umi_min_reads <= p$umi_top_cluster_k && p$umi_collapse_stat == "top_cluster")
     stop("umi_min_reads (", p$umi_min_reads, ") must exceed umi_top_cluster_k (", p$umi_top_cluster_k,
          "): with exactly k reads top_cluster returns their median, which at k = 2 is their mean")
+  if (!p$allele_bam_method %in% c("auto", "flanks", "minimap2")) stop("allele_bam_method must be 'auto', 'flanks' or 'minimap2'")
   if (!p$cluster_unit %in% c("auto", "molecules", "reads")) stop("cluster_unit must be 'auto', 'molecules' or 'reads'")
   if (identical(p$cluster_unit, "molecules") && !isTRUE(p$umi)) stop("cluster_unit = 'molecules' needs umi = TRUE")
   if (!p$umi_cluster_max_dist %in% 0:2) stop("umi_cluster_max_dist must be 0, 1 or 2")

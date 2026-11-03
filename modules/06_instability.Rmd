@@ -122,7 +122,7 @@ range_table <- build_range_table(settings, measures$measure, primary)
 timings["Load"] <- proc.time()["elapsed"] - .t
 ```
 
-`r nrow(settings)` samples have settings and are analysed. `r if (length(st$missing)) sprintf("%d samples in the data have no settings row and are left out: %s.", length(st$missing), paste(head(st$missing, 5), collapse = ", ")) else "Every sample in the data has a settings row."` `r if (nrow(st$excluded)) sprintf("%d samples are marked exclude and are left out of every analysis.", nrow(st$excluded)) else ""` Units analysed: **`r paste(names(units), collapse = " and ")`**.
+`r nrow(settings)` samples have settings and are analysed. `r if (length(st$missing)) sprintf("%d samples in the data have no settings row and are left out: %s.", length(st$missing), paste(head(st$missing, 5), collapse = ", ")) else "Every sample in the data has a settings row."` `r if (nrow(st$excluded)) sprintf("%d samples are marked exclude and are left out of every analysis.", nrow(st$excluded)) else ""` Units analysed: **`r paste(names(units), collapse = " and ")`**. `r dup_r <- unique(as.data.table(range_table)[measure == primary, .(range_name, lo, hi, floor, max_peaks, manual_control)], by = "range_name")[, key := paste(lo, hi, floor, max_peaks, manual_control)][, if (.N > 1) .(names = paste(range_name, collapse = ", ")), by = key]; if (nrow(dup_r)) sprintf("**Duplicate ranges:** %s have the same bounds and settings in the settings file, so their results are identical; remove one of each set, or give it different bounds.", paste(dup_r$names, collapse = "; ")) else ""`
 
 How each measure's ranges are defined: a measure with its own `analysis_ranges_<measure>` column uses ranges on its own scale; otherwise reads are selected by their **`r primary`** length using the primary ranges, and the metrics are calculated on that measure. The selection is not applied to the other measure's own length: in a `r primary` range of 40–50, a combined measure such as a sum can run above 50. Every length is in units of that measure's motif (a pentanucleotide tract in 5 bp units), and a combined measure whose tracts have motifs of different lengths is in bp.
 
@@ -204,14 +204,18 @@ Each point is one sample: how many reads (and molecules) fall in each range of t
 draw_units(function(us, u) {
 rc <- distribution_summary[measure == primary & unit %in% us]
 if (!nrow(rc)) return(NULL)
-ggplot(rc, aes(analysis_range_name, pmax(n_total, 1), colour = unit)) +
+# Each range labelled with its bounds, as in the other range figures
+rl <- as.data.table(range_table)[measure == primary, .(range_text = if (uniqueN(range_text) == 1) range_text[1] else "varies by sample"), by = .(analysis_range_name = range_name)]
+rc <- rl[rc, on = "analysis_range_name"][, unit := factor(unit, levels = c("reads", "molecules"))]
+rc[, xlab := factor(paste0(analysis_range_name, "\n", range_text), levels = unique(paste0(rl$analysis_range_name, "\n", rl$range_text)[order(rl$analysis_range_name)]))]
+ggplot(rc, aes(xlab, pmax(n_total, 1), colour = unit)) +
   geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
   geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.6, size = 1.2) +
   geom_hline(yintercept = params$range_min_n, linetype = "dashed", colour = "grey30") +
   scale_y_log10(labels = comma) + scale_colour_manual(values = unit_cols, breaks = names(unit_cols), labels = unit_labs, name = NULL) +
   labs(x = "Analysis range", y = "Count in range (log scale)", title = sprintf("Count per range, %s: %s", unit_title[[u]], primary),
        subtitle = sprintf("Dashed line = range_min_n (%d): below it a range gets no statistics or metrics", params$range_min_n)) +
-  theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme_bw() + theme(axis.text.x = element_text(size = 7))
 }, function(u) plot_path(plots_dir, "counts_per_range", primary, unit = u), 11, 5)
 ```
 

@@ -279,6 +279,16 @@ consensus_function <- function(seqs, threshold = 0.5, sample_size = 50L, minor_s
   if (length(seqs) == 0) return(list(consensus = NA_character_, n = 0L, minor = NULL))
   if (!is.na(sample_size) && length(seqs) > sample_size) { set.seed(123); seqs <- sample(seqs, sample_size) }
   if (length(seqs) == 1) return(list(consensus = seqs, n = 1L, minor = NULL))
+  # Reads of one length (the tract consensus is made from reads at the allele's modal
+  # length) are already in register: take the commonest base in each column. Aligning
+  # them instead can shift a long pure repeat by a unit in some reads, which leaves
+  # columns with no majority (N) in the middle of a pure tract.
+  if (is.na(minor_share) && length(unique(nchar(seqs))) == 1) {
+    cm <- Biostrings::consensusMatrix(Biostrings::DNAStringSet(seqs), as.prob = TRUE)[c("A", "C", "G", "T"), , drop = FALSE]
+    best <- apply(cm, 2, which.max)
+    cons <- ifelse(cm[cbind(best, seq_along(best))] >= threshold, c("A", "C", "G", "T")[best], "N")
+    return(list(consensus = paste(cons, collapse = ""), n = length(seqs), minor = NULL))
+  }
   dss <- Biostrings::DNAStringSet(seqs)
   aln <- suppressMessages(DECIPHER::AlignSeqs(dss, processors = 1, verbose = FALSE))
   cons_g <- as.character(suppressMessages(DECIPHER::ConsensusSequence(aln, threshold = threshold, ambiguity = FALSE,
@@ -543,6 +553,98 @@ write_allele_vcf <- function(alleles, variants, ref, motifs_txt, path) {
 # Reads of one sample aligned to the whole reference (minimap2), with HP = allele
 # (1 shorter, 2 longer, 3+ other clusters), XR = primary repeat length and, with UMIs,
 # MI = molecule. In IGV, group or colour reads by the HP tag to see each allele's reads.
+# Allele BAMs for short amplicons, written without a general aligner. Each read is already
+# split into its left flank, repeat region and right flank (Module 3), so its alignment to
+# the reference is built from those parts: each flank is aligned to its reference flank
+# (local alignment, so mismatches and small indels show as such), and the repeat region is
+# one insertion at the reference's N block, with the N block itself a deletion. Read bases
+# outside the flank alignments are soft-clipped at the read ends, and those between a flank
+# alignment and the repeat are part of the insertion. A general long-read aligner splits
+# such reads (a ~50 bp flank, then a long repeat the reference does not hold) into pieces
+# or leaves them unmapped; this gives one record per read across the whole repeat.
+.cigar_from_alignment <- function(pat, sub) {
+  # pat, sub: aligned strings with "-" for gaps; returns run-length encoded M / I / D
+  a <- strsplit(pat, "", fixed = TRUE)[[1]]; b <- strsplit(sub, "", fixed = TRUE)[[1]]
+  op <- ifelse(a == "-", "D", ifelse(b == "-", "I", "M"))
+  r <- rle(op); list(len = r$lengths, op = r$values)
+}
+.join_cigar <- function(len, op) {
+  keep <- len > 0; len <- len[keep]; op <- op[keep]
+  if (!length(len)) return("*")
+  r <- rle(op); grp <- rep(seq_along(r$lengths), r$lengths)
+  paste0(tapply(len, grp, sum), r$values, collapse = "")
+}
+# Local alignments of reads to one flank: where each aligns in the read and the reference, and
+# its operations as a run-length list (M / I / D), built from the indel positions Biostrings
+# reports (reading back the aligned strings is ~50 ms a read, far too slow for thousands).
+# An insertion is reported by the reference position that follows it and a deletion by the
+# read position that follows it, each counted from the start of the alignment (checked against
+# the aligned strings on simulated reads with mismatches, insertions and deletions).
+flank_alignments <- function(reads, flank_ref) {
+  pa <- Biostrings::pairwiseAlignment(Biostrings::DNAStringSet(reads), Biostrings::DNAString(flank_ref), type = "local",
+                                      substitutionMatrix = Biostrings::nucleotideSubstitutionMatrix(match = 2, mismatch = -3, baseOnly = FALSE),
+                                      gapOpening = 5, gapExtension = 2)
+  ps <- Biostrings::start(Biostrings::pattern(pa)); pe <- Biostrings::end(Biostrings::pattern(pa))
+  ins <- Biostrings::insertion(pa); del <- Biostrings::deletion(pa)
+  ops <- lapply(seq_along(ps), function(i) {
+    n <- pe[i] - ps[i] + 1L
+    if (n < 1) return(list(len = integer(0), op = character(0)))
+    ii <- ins[[i]]; dd <- del[[i]]
+    # An insertion is placed by the reference base that follows it, and a deletion by the read
+    # base that follows it, both counted from the start of the alignment; walking the two
+    # counters along the alignment gives the operations in order
+    ev <- rbind(data.frame(at = IRanges::start(ii), w = IRanges::width(ii), op = rep("I", length(ii))),
+                data.frame(at = IRanges::start(dd), w = IRanges::width(dd), op = rep("D", length(dd))))
+    len <- integer(0); op <- character(0); p <- 1L; q <- 1L
+    while (nrow(ev)) {
+      need <- ifelse(ev$op == "I", ev$at - q, ev$at - p)
+      k <- which.min(need); m <- max(0L, need[k])
+      if (m > 0) { len <- c(len, m); op <- c(op, "M"); p <- p + m; q <- q + m }
+      len <- c(len, ev$w[k]); op <- c(op, ev$op[k])
+      if (ev$op[k] == "I") p <- p + ev$w[k] else q <- q + ev$w[k]
+      ev <- ev[-k, , drop = FALSE]
+    }
+    if (p <= n) { len <- c(len, n - p + 1L); op <- c(op, "M") }
+    list(len = len, op = op)
+  })
+  data.table::data.table(p_start = ps, p_end = pe,
+                         s_start = Biostrings::start(Biostrings::subject(pa)), s_end = Biostrings::end(Biostrings::subject(pa)),
+                         ops = ops, score = Biostrings::score(pa))
+}
+write_allele_bam_flanks <- function(d, ref, path, work_dir = tempdir()) {
+  d <- data.table::as.data.table(d)[!is.na(left) & !is.na(right)]
+  if (!nrow(d)) return(invisible(NULL))
+  d[is.na(mid), mid := ""]
+  left_ref <- substr(ref$full, 1, ref$n_start - 1); right_ref <- substr(ref$full, ref$n_end + 1, nchar(ref$full))
+  n_len <- ref$n_end - ref$n_start + 1
+  L <- flank_alignments(d$left, left_ref); R <- flank_alignments(d$right, right_ref)
+  rec <- character(nrow(d))
+  for (i in seq_len(nrow(d))) {
+    nl <- nchar(d$left[i]); nm <- nchar(d$mid[i]); nr <- nchar(d$right[i])
+    if (!(L$score[i] > 0) || !(R$score[i] > 0)) next
+    cl <- L$ops[[i]]; cr <- R$ops[[i]]
+    if (!length(cl$len) || !length(cr$len)) next
+    len <- c(L$p_start[i] - 1, cl$len,
+             (nl - L$p_end[i]) + nm + (R$p_start[i] - 1),                  # insertion: rest of left, repeat, start of right
+             (nchar(left_ref) - L$s_end[i]) + n_len + (R$s_start[i] - 1),  # deletion: reference to the N block, the N block, to the right alignment
+             cr$len, nr - R$p_end[i])
+    op <- c("S", cl$op, "I", "D", cr$op, "S")
+    cig <- .join_cigar(len, op)
+    tag <- paste0("HP:i:", d$hp[i], "\tXR:i:", round(d$length[i]), if (!is.null(d$molecule_id) && !is.na(d$molecule_id[i])) paste0("\tMI:Z:", d$molecule_id[i]) else "")
+    rec[i] <- paste(d$qname[i], 0, ref$ref_id, L$s_start[i], 60, cig, "*", 0, 0, paste0(d$left[i], d$mid[i], d$right[i]), "*", tag, sep = "\t")
+  }
+  rec <- rec[nzchar(rec)]
+  if (!length(rec)) return(invisible(NULL))
+  stem <- file.path(work_dir, basename(sub("\\.bam$", "", path))); sam <- paste0(stem, ".sam")
+  writeLines(c("@HD\tVN:1.6\tSO:unsorted", sprintf("@SQ\tSN:%s\tLN:%d", ref$ref_id, nchar(ref$full)),
+               "@PG\tID:duke\tPN:duke\tDS:flank alignments with the repeat as one insertion at the N block", rec), sam)
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  system2("samtools", c("sort", "-o", path, sam), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("index", path), stdout = FALSE, stderr = FALSE)
+  unlink(sam)
+  invisible(path)
+}
+
 write_allele_bam <- function(d, ref, path, preset = "-x map-hifi", threads = 1L, work_dir = tempdir()) {
   if (!nrow(d)) return(invisible(NULL))
   stem <- file.path(work_dir, basename(sub("\\.bam$", "", path)))
@@ -652,30 +754,42 @@ waterfall_breaks <- function(len, n_target = 30) {
 # each cluster's modal length and share of reads written above it.
 cluster_length_plot <- function(d, cs, title, xlab = "Repeat length", clustered_on = "reads") {
   # One row per cluster, sharing the length axis, so clusters of the same length (e.g. the
-  # same allele split by flank haplotype) are each visible rather than stacked out of sight
-  d <- data.table::as.data.table(d)[is.finite(length)]
+  # same allele split by flank haplotype) are each visible rather than stacked out of sight.
+  # What is drawn is what was clustered: one length per molecule when clustering was on
+  # molecules (a read's own length can be PCR-shortened, so reads would smear each
+  # cluster down the axis), otherwise each read's length. Behind each row in grey are all
+  # the sample's lengths, so the row shows which part of the distribution the cluster took.
+  d <- data.table::as.data.table(d)
+  mol <- clustered_on == "molecules" && all(c("molecule_id", "mol_length") %in% names(d))
+  if (mol) d <- unique(d[is.finite(mol_length), .(molecule_id, cluster_number, length = mol_length)], by = "molecule_id")
+  d <- d[is.finite(length)]
+  unit_word <- if (mol) "molecules" else "reads"
   cs <- data.table::as.data.table(cs)
   ord <- cs[order(if ("allele" %in% names(cs)) allele else cluster_number), cluster_number]
   hap <- if (data.table::uniqueN(cs$haplotype_cluster) > 1) paste0(", flank haplotype ", cs$haplotype_cluster) else ""
-  cs[, label := sprintf("%sCluster %s: modal %s, %s of reads%s",
+  share <- if (mol && "molecule_proportion" %in% names(cs)) cs$molecule_proportion else cs$proportion
+  cs[, label := sprintf("%sCluster %s: modal %s, %s of %s (%s)%s",
                         if ("allele" %in% names(cs)) paste0("Allele ", allele, " \u2013 ") else "", cluster_number, round(modal_length),
-                        scales::percent(if (clustered_on == "molecules" && "molecule_proportion" %in% names(cs)) molecule_proportion else proportion, 0.1), hap)]
-  if (clustered_on == "molecules") cs[, label := sub(" of reads", " of molecules", label, fixed = TRUE)]
+                        scales::percent(share, 0.1), unit_word, scales::comma(if (mol) molecules else reads), hap)]
   d[, cluster := factor(cluster_number, levels = ord)]
   cs[, cluster := factor(cluster_number, levels = ord)]
   h <- d[, .N, by = .(cluster, length = floor(length + 0.5))]
+  bg_all <- d[, .N, by = .(length = floor(length + 0.5))]
+  bg <- data.table::rbindlist(lapply(ord, function(k) data.table::copy(bg_all)[, cluster := factor(k, levels = ord)]))
   xr <- c(min(d$length), stats::quantile(d$length, 0.999)) + c(-3, 3)
   pal <- stats::setNames(rep(RColorBrewer::brewer.pal(9, "Set1"), length.out = length(ord)), ord)
-  ggplot2::ggplot(h, ggplot2::aes(length, N, fill = cluster)) + ggplot2::geom_col(width = 1) +
+  ggplot2::ggplot(h, ggplot2::aes(length, N)) +
+    ggplot2::geom_col(data = bg, fill = "grey85", width = 1) +
+    ggplot2::geom_col(ggplot2::aes(fill = cluster), width = 1) +
     ggplot2::geom_vline(data = cs, ggplot2::aes(xintercept = modal_length), colour = "grey30", linetype = "dashed", linewidth = 0.4) +
     ggplot2::facet_wrap(~ cluster, ncol = 1, scales = "free_y", labeller = ggplot2::as_labeller(stats::setNames(cs$label, cs$cluster))) +
     ggplot2::scale_fill_manual(values = pal, guide = "none") +
     ggplot2::scale_y_sqrt(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05))) +
     ggplot2::coord_cartesian(xlim = xr) +
-    ggplot2::labs(x = xlab, y = "Reads (square-root scale)", title = title,
-                  subtitle = paste0(if (clustered_on == "molecules") "Reads, each in the cluster of its UMI molecule (clusters made on molecule lengths). " else "Reads, clustered on their own lengths. ",
-                                    "One row per cluster, each on its own scale; dashed line = the cluster's modal length")) +
-    ggplot2::theme_bw() + ggplot2::theme(strip.text = ggplot2::element_text(hjust = 0))
+    ggplot2::labs(x = xlab, y = paste0(tools::toTitleCase(unit_word), " (square-root scale)"), title = title,
+                  subtitle = paste0(if (mol) "One length per UMI molecule (what was clustered). " else "Each read's length (what was clustered). ",
+                                    "Colour = the cluster; grey = all the sample's ", unit_word, ";\ndashed line = the cluster's modal length. Each row on its own scale.")) +
+    ggplot2::theme_bw() + ggplot2::theme(strip.text = ggplot2::element_text(hjust = 0), plot.subtitle = ggplot2::element_text(size = 9))
 }
 
 # ------------------------------------------------------------------------------
@@ -683,7 +797,7 @@ cluster_length_plot <- function(d, cs, title, xlab = "Repeat length", clustered_
 # flank_bp bases either side of the tract are drawn - the informative region,
 # and far quicker than drawing whole 3 kb reads.
 # ------------------------------------------------------------------------------
-create_waterfall_plot <- function(d, title, flank_bp = 60L, max_reads = 1000L, length_label = "Repeat length") {
+create_waterfall_plot <- function(d, title, flank_bp = 60L, max_reads = 1000L, length_label = "Repeat length", unit_word = "reads") {
   d <- d[!is.na(d$mid), , drop = FALSE]
   if (nrow(d) == 0) return(NULL)
   n_total <- nrow(d)
@@ -713,7 +827,7 @@ create_waterfall_plot <- function(d, title, flank_bp = 60L, max_reads = 1000L, l
     ggplot2::scale_y_continuous(breaks = brk, labels = round(d$length[brk]), expand = c(0, 0)) +
     ggplot2::scale_x_continuous(expand = c(0, 0)) +
     ggplot2::labs(title = title,
-                  subtitle = sprintf("%s of %s reads, ordered by repeat length; %d bp of flank shown either side; dashed line = tract start",
+                  subtitle = sprintf(paste0("%s of %s ", unit_word, ", ordered by repeat length; %d bp of flank shown either side; dashed line = tract start"),
                                      format(nrow(d), big.mark = ","), format(n_total, big.mark = ","), flank_bp),
                   x = "Position relative to tract start (bp)", y = length_label) +
     ggplot2::theme_bw()
