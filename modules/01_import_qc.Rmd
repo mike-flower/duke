@@ -155,21 +155,27 @@ save_plot(p_pacbio, file.path(plots_dir, "pacbio_np_rq.png"), 10, 5)
 
 ## Pass count against read length
 
-Each point is one read (a random subset of at most `r format(params$pacbio_scatter_downsample, big.mark = ",")` across the cohort). Longer inserts take longer to read, so fewer passes fit in the movie: a downward trend is expected, and the gap between the clouds of short and long reads shows how many fewer passes an expanded allele gets than a short one. The flat line at the top is PacBio's cap on the reported pass count.
+Every read is counted (no subsampling): each tile is a band of read lengths and one pass count, coloured by the number of reads in it (log scale, so both the crowded and the sparse tiles show), and the white points are the median pass count in each length band that holds at least 0.5% of the reads. Longer inserts take longer to read, so fewer passes fit in the movie: a downward trend is expected, and the step between the short and the long reads shows how many fewer passes an expanded allele gets than a short one. A bright row at the top is PacBio's cap on the reported pass count. The shortest and longest 0.5% of reads are left out of the plot so it is not stretched by a few stray lengths.
 
 ```{r pacbio_np_length, eval=any_pacbio, fig.height=5}
-np_len <- dplyr::bind_rows(lapply(names(read_metadata), function(fs) {
-  w <- width(seq[[fs]]); data.frame(np = read_metadata[[fs]]$np[match(names(seq[[fs]]), read_metadata[[fs]]$read_name)], read_length = w)
-})) %>% dplyr::filter(!is.na(np))
-if (!is.na(params$pacbio_scatter_downsample) && nrow(np_len) > params$pacbio_scatter_downsample) {
-  set.seed(123); np_len <- np_len[sample(nrow(np_len), params$pacbio_scatter_downsample), ]
-}
-p_np_len <- ggplot(np_len, aes(read_length, np)) + geom_point(alpha = 0.15, size = 0.5) +
-  scale_x_continuous(labels = comma) +
+np_len <- rbindlist(lapply(names(read_metadata), function(fs) {
+  data.table(np = read_metadata[[fs]]$np[match(names(seq[[fs]]), read_metadata[[fs]]$read_name)], read_length = width(seq[[fs]]))
+}))[!is.na(np)]
+xr <- stats::quantile(np_len$read_length, c(0.005, 0.995))
+bw <- max(1, signif(diff(xr) / 80, 1))
+np_len <- np_len[read_length >= xr[1] & read_length <= xr[2]][, len_bin := floor(read_length / bw) * bw + bw / 2]
+np_tab <- np_len[, .(reads = .N), by = .(len_bin, np)]
+np_med <- np_len[, .(np = as.numeric(stats::median(np)), n = .N), by = len_bin][n >= max(20, 0.005 * nrow(np_len))][order(len_bin)]
+p_np_len <- ggplot(np_tab, aes(len_bin, np)) + geom_tile(aes(fill = reads), width = bw, height = 1) +
+  geom_point(data = np_med, shape = 21, fill = "white", colour = "black", size = 2) +
+  scale_fill_viridis_c(trans = "log10", labels = comma, name = "Reads") +
+  scale_x_continuous(labels = comma, expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) +
   labs(x = "Read length (bp)", y = "Pass count (np)", title = "PacBio pass count against read length",
-       subtitle = sprintf("%s reads shown", comma(nrow(np_len)))) + theme_bw()
+       subtitle = sprintf("All %s reads; tiles %s bp wide; points = median pass count in each band holding at least 0.5%% of reads", comma(nrow(np_len)), comma(bw))) + theme_bw()
 print(p_np_len)
 save_plot(p_np_len, file.path(plots_dir, "pacbio_np_vs_length.png"), 10, 5)
+fwrite(np_tab[order(len_bin, np)], file.path(dirname(plots_dir), "pacbio_np_by_length.tsv"), sep = "\t")
+rm(np_len); invisible(gc())
 ```
 
 ---

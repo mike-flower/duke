@@ -45,22 +45,22 @@ xlsx_path <- file.path(st_dir, "allele_structure.xlsx"); if (file.exists(xlsx_pa
 
 This module looks at the sequence of the reads around the primary tract:
 
-1. **Allele clustering** (cluster = `r params$cluster`): reads are grouped by repeat length (`r paste(params$cluster_by, collapse = " then ")`). The number of length clusters is chosen by a Gaussian mixture, and clusters holding under `r percent(params$repeat_cluster_min_prop)` of a sample's reads are merged into their neighbour, so an expansion smear is not cut into many small clusters. With `haplotype` in `cluster_by`, reads are also grouped by flank haplotype: 15-mers found in 10–90% of reads are kept only when at least 7 others appear in exactly the same reads (the signature of a real SNP or indel, not a sequencing error), they are grouped into variant blocks, and each read is scored on the k-mers it carries from each allele of each block. A split is accepted when the mean silhouette exceeds 0.5 and every cluster holds at least 5% of reads, so haplotypes carried by more than about 10–20% of reads are found. Reads whose flank variants combine the two alleles' haplotypes (e.g. PCR chimeras) form their own cluster
-2. **Alleles.** In each sample, the two clusters with the most reads are its **alleles 1 and 2**, numbered by the length of the primary tract (allele 1 = the shorter); any further clusters (a subclone, PCR chimeras) are numbered 3 upwards by reads
+1. **Allele clustering** (cluster = `r params$cluster`): reads are grouped by repeat length (`r paste(params$cluster_by, collapse = " then ")`), clustered on `r resolve_cluster_unit(params$cluster_unit, params$umi, isTRUE(params$umi) && file.exists(file.path(params$dir_out, "module_data", "04_umi.RData")))` (`cluster_unit`; with molecules, each kept UMI molecule's length is clustered and its reads take its cluster). The number of length clusters is chosen by a Gaussian mixture, and clusters holding under `r percent(params$repeat_cluster_min_prop)` of a sample's reads are merged into their neighbour, so an expansion smear is not cut into many small clusters. With `haplotype` in `cluster_by`, reads are also grouped by flank haplotype: 15-mers found in 10–90% of reads are kept only when at least 7 others appear in exactly the same reads (the signature of a real SNP or indel, not a sequencing error), they are grouped into variant blocks, and each read is scored on the k-mers it carries from each allele of each block. A split is accepted when the mean silhouette exceeds 0.5 and every cluster holds at least 5% of reads, so haplotypes carried by more than about 10–20% of reads are found. Reads whose flank variants combine the two alleles' haplotypes (e.g. PCR chimeras) form their own cluster
+2. **Alleles.** In each sample, the two clusters with the most reads (molecules, when clustered on molecules) are its **alleles 1 and 2**, numbered by the length of the primary tract (allele 1 = the shorter); any further clusters (a subclone, PCR chimeras) are numbered 3 upwards by reads
 3. **Consensus sequences** of each allele's left flank, tract and right flank (DECIPHER, up to `r params$consensus_downsample` reads, `r percent(params$consensus_threshold)` agreement; the tract consensus uses only reads at the allele's modal length), joined into one full-length allele sequence; the region between the reference flanks is written in repeat notation, e.g. (CAG)17 CAACAGCCGCCA (CCG)7
 4. **Phased variants**: each allele's flank consensus against the reference (so every variant belongs to allele 1 or 2), plus substitutions carried by at least `r if (is.na(params$allele_minor_share)) "– (off)" else percent(params$allele_minor_share)` of an allele's reads but not in its consensus; for each, the share of the allele's reads that carry it (its **read support**)
 5. **Standard files**: a phased VCF with one column per sample (the repeat region as one record with each allele's motif counts, and the flank variants with their read support per allele), the allele sequences as FASTA, and `r if (isTRUE(params$allele_bam)) "a BAM per sample of reads aligned to the whole reference and tagged by allele (HP), for IGV" else "no BAMs (allele_bam = FALSE)"`
 6. **Waterfall plots** (waterfall = `r params$waterfall`): reads stacked by repeat length with each base coloured, `r params$waterfall_flank_bp` bp of flank either side of the tract
 
-**Outputs:**
+**Outputs** (as in every module, tables and data files are at the top of the module's folder, figures under `plots/`):
 
 - `05_allele_structure/allele_structure.xlsx` – clusters, alleles (lengths of every measure, repeat notation, sequences), variants with read support
 - `05_allele_structure/consensus/alleles.fasta` – one full-length sequence per allele (and the left, tract and right parts in their own files)
 - `05_allele_structure/variants/alleles.vcf` (and `.vcf.gz` with a tabix index where bgzip and tabix are installed) – phased, one column per sample
-- `05_allele_structure/bam/{sample}.bam` – reads aligned to the reference, tagged HP (allele), XR (primary repeat length) and, with UMIs, MI (molecule)
-- `05_allele_structure/plots/alleles/{sample}.png` – each sample's alleles and variants
-- `05_allele_structure/plots/clusters/{sample}.png` – each sample's reads stacked by cluster
-- `05_allele_structure/plots/waterfall/{sample}.png`
+- `05_allele_structure/bam/{sample}.bam` – reads aligned to the reference, tagged HP (allele), XR (primary repeat length) and, with UMIs, MI (molecule). BAMs are often left out when results are copied from a cluster (e.g. `rsync --exclude '*.bam'`); copy this folder if you want to view the alleles in IGV
+- `05_allele_structure/plots/alleles/alleles_{sample}.png` – each sample's alleles and variants
+- `05_allele_structure/plots/clusters/clusters_{sample}.png` – each sample's reads by cluster
+- `05_allele_structure/plots/waterfall/waterfall_{sample}.png` (and `waterfall_cluster/` when selected in `plots`)
 
 ```{r load}
 safe_load_module(file.path(params$dir_out, "module_data", "03_repeat_detection.RData"), 3)
@@ -86,12 +86,33 @@ samples <- unique(d_all$file_stem)
 
 ```{r clustering, eval=params$cluster}
 .t <- proc.time()["elapsed"]
+# With UMIs, lengths are clustered per molecule (one consensus length per kept molecule, so
+# PCR copies and PCR-shortened reads do not weigh in) and each read takes its molecule's
+# cluster; reads not in a kept molecule are left out, as they are from the molecule-level
+# instability metrics. Without UMIs, each read's own length is clustered.
+cluster_unit <- resolve_cluster_unit(params$cluster_unit, params$umi, !is.null(read_mol))
+mol_len <- NULL
+if (cluster_unit == "molecules") {
+  safe_load_module(m4, 4)
+  mol_len <- module4_output$molecules[kept == TRUE & is.finite(primary_length), .(file_stem, molecule_id, mol_length = primary_length)]
+  rm(module4_output); invisible(gc())
+  d_all <- mol_len[read_mol, on = .(file_stem, molecule_id), nomatch = NULL][, .(file_stem, qname, molecule_id, mol_length)][d_all, on = .(file_stem, qname)]
+  no_molecule <- d_all[is.na(molecule_id), .(reads = .N), by = file_stem]
+  d_all <- d_all[!is.na(molecule_id)]
+}
 per_sample <- split(d_all, by = "file_stem")
 clusters <- rbindlist(apply_fn(names(per_sample), function(s) {
-  cache <- file.path(temp_dir, paste0("cluster_v330_", s, ".RData"))
+  cache <- file.path(temp_dir, paste0("cluster_v332_", cluster_unit, "_", s, ".RData"))
   if (safe_load_cache(cache, environment())) return(res)
   d <- per_sample[[s]]
-  res <- cbind(d[, .(file_stem, qname)], cluster_sample(as.data.frame(d), params))
+  rc <- NULL
+  if (cluster_unit == "molecules" && "repeat" %in% params$cluster_by) {
+    m <- unique(d[, .(molecule_id, mol_length)])
+    m[, rc := cluster_by_repeat_length(mol_length, params$repeat_cluster_max, params$repeat_cluster_min_prop, params$repeat_cluster_downsample)]
+    rc <- m$rc[match(d$molecule_id, m$molecule_id)]
+    rc[!is.finite(d$length)] <- NA_integer_   # no tract in this read: R0, as without UMIs
+  }
+  res <- cbind(d[, .(file_stem, qname)], cluster_sample(as.data.frame(d), params, rc = rc))
   save(res, file = cache); res
 }))
 d_all <- clusters[d_all, on = .(file_stem, qname)]
@@ -100,22 +121,37 @@ d_all <- clusters[d_all, on = .(file_stem, qname)]
 no_tract <- d_all[repeat_cluster == "R0", .(reads = .N), by = file_stem]
 d_all <- d_all[repeat_cluster != "R0"]
 d_all[, cluster_number := match(cluster_number, sort(unique(cluster_number))), by = file_stem]
-cluster_summary <- d_all[, .(reads = .N, modal_length = { tb <- table(length); as.numeric(names(tb)[which.max(tb)]) },
+# Length statistics of each cluster: over its molecules (one length per molecule) when
+# clustering was on molecules, so they describe the length interval that was clustered;
+# otherwise over its reads
+stat_src <- if (cluster_unit == "molecules") unique(d_all[, .(file_stem, cluster_number, molecule_id, length = mol_length)], by = c("file_stem", "molecule_id")) else d_all
+cluster_summary <- stat_src[, .(modal_length = { tb <- table(length); as.numeric(names(tb)[which.max(tb)]) },
                              median_length = as.numeric(median(length)), mean_length = mean(length), sd_length = sd(length),
-                             p10_length = as.numeric(stats::quantile(length, 0.1)), p90_length = as.numeric(stats::quantile(length, 0.9)),
-                             repeat_cluster = repeat_cluster[1], haplotype_cluster = haplotype_cluster[1]), by = .(file_stem, cluster_number)]
+                             p10_length = as.numeric(stats::quantile(length, 0.1)), p90_length = as.numeric(stats::quantile(length, 0.9))),
+                         by = .(file_stem, cluster_number)]
+cluster_summary <- d_all[, .(reads = .N, molecules = if ("molecule_id" %in% names(d_all)) uniqueN(molecule_id) else NA_integer_,
+                             repeat_cluster = repeat_cluster[1], haplotype_cluster = haplotype_cluster[1]),
+                         by = .(file_stem, cluster_number)][cluster_summary, on = .(file_stem, cluster_number)]
+cluster_summary[, length_stats_from := cluster_unit]
 cluster_summary[, proportion := reads / sum(reads), by = file_stem]
 setorder(cluster_summary, file_stem, cluster_number)
 # Alleles 1 and 2 = the two clusters with most reads, numbered by length (1 = shorter);
 # any other cluster is 3, 4, ... by reads
-cluster_summary[, rank_reads := frank(-reads, ties.method = "first"), by = file_stem]
+# (by molecules when clustering was on molecules: PCR copies would otherwise favour
+# whichever allele amplified best)
+cluster_summary[, molecule_proportion := molecules / sum(molecules), by = file_stem]
+cluster_summary[, size := if (cluster_unit == "molecules") molecules else reads]
+cluster_summary[, rank_reads := frank(-size, ties.method = "first"), by = file_stem]
 cluster_summary[rank_reads <= 2, allele := frank(modal_length, ties.method = "first"), by = file_stem]
-cluster_summary[rank_reads > 2, allele := 2L + frank(-reads, ties.method = "first"), by = file_stem]
+cluster_summary[rank_reads > 2, allele := 2L + frank(-size, ties.method = "first"), by = file_stem]
+cluster_summary[, size := NULL]
 cluster_summary[, rank_reads := NULL]
 timings["Clustering"] <- proc.time()["elapsed"] - .t
 ```
 
 `r if (params$cluster) "The number of samples split into each number of clusters. A sample should give one cluster per allele it carries (two for a heterozygous sample); more usually means an allele with a wide length distribution (often an expanded one) or a mixture of cells or samples, and each cluster's share is in the table below." else ""`
+
+`r if (params$cluster) { if (cluster_unit == "molecules") sprintf("**Clustered on molecules.** Each kept molecule's %s length (its consensus over its reads, Module 4) is clustered, and every read takes its molecule's cluster, so PCR copies of one molecule count once and PCR-shortened reads do not pull the clusters about. %s reads not in a kept molecule (no UMI, or a molecule dropped in Module 4) are left out of the clusters, consensus and waterfalls. Set \u0060cluster_unit = reads\u0060 to cluster each read's own length instead.", primary, format(sum(no_molecule$reads), big.mark = ",")) else "**Clustered on reads**: each read's own length is clustered." } else ""`
 
 `r if (params$cluster && exists("no_tract") && nrow(no_tract)) sprintf("%s reads in %d samples had no %s tract to measure and are left out of the clusters, consensus and waterfalls (at most %s in one sample).", format(sum(no_tract$reads), big.mark = ","), nrow(no_tract), primary, format(max(no_tract$reads), big.mark = ",")) else ""`
 
@@ -128,7 +164,7 @@ p_cc <- ggplot(cc, aes(x = factor(clusters), y = samples)) + geom_col(fill = "gr
 print(p_cc); save_plot(p_cc, file.path(plots_dir, "clusters_per_sample.png"), 5, 4.5)
 ```
 
-`r if (params$cluster) "## Clusters in every sample\n\n**How to read this.** One row per sample. Each cluster is a horizontal line from the 10th to the 90th percentile of its reads' lengths, with a point at its modal length; the size of the point is the cluster's share of the sample's reads, and the colour its order by length within the sample (1 = shortest), so the same allele has the same colour in every sample (the cluster numbers in the table count from the cluster with most reads, which can differ between samples). Clusters with the same length in every sample are the same allele across the cohort; a cluster that appears in only some samples, or whose length moves between samples, is where to look." else ""`
+`r if (params$cluster) paste0("## Clusters in every sample\n\n**How to read this.** One row per sample. Each cluster is a horizontal line from the 10th to the 90th percentile of its " , if (exists("cluster_unit") && cluster_unit == "molecules") "molecules'" else "reads'", " lengths, with a point at its modal length; the size of the point is the cluster's share of the sample's reads, and the colour its order by length within the sample (1 = shortest), so the same allele has the same colour in every sample (the cluster numbers in the table count from the cluster with most reads, which can differ between samples). Clusters with the same length in every sample are the same allele across the cohort; a cluster that appears in only some samples, or whose length moves between samples, is where to look.") else ""`
 
 ```{r cluster_overview, eval=params$cluster, fig.height=min(30, max(4, 2 + 0.16 * length(samples)))}
 lab_c <- short_labels(cluster_summary$file_stem)
@@ -142,20 +178,20 @@ p_co <- ggplot(co, aes(y = sample, colour = order)) +
   scale_size_area(max_size = 4, labels = pct_axis(), name = "Share of\nthe sample's reads") +
   scale_colour_brewer(palette = "Set1", name = "Cluster, by length\n(1 = shortest)") +
   labs(x = paste(primary, "length (repeat units)"), y = NULL, title = "Clusters in every sample",
-       subtitle = "Point = modal length; line = 10th to 90th percentile of the cluster's reads") +
+       subtitle = sprintf("Point = modal length; line = 10th to 90th percentile of the cluster's %s", cluster_unit)) +
   theme_bw() + theme(axis.text.y = element_text(size = if (length(samples) > 60) 5 else 8))
 print(p_co); save_plot(p_co, file.path(plots_dir, "clusters_overview.png"), 10, min(45, max(4, 2 + 0.16 * length(samples))))
 ```
 
-`r if (params$cluster) "## One sample's clusters\n\nThe reads of one sample, one row per cluster on a shared length axis, so each cluster's length distribution can be seen even where clusters overlap. Each row gives the cluster's allele number (1 and 2 are the two largest clusters, 1 the shorter; 3 upwards are the rest), modal length and share of reads. Where the sample's reads were also split by flank haplotype, the row says which: haplotypes are numbered separately within each length cluster, so H2 in one row is not the same sequence as H2 in another. Two clusters with the same modal length and different haplotypes are reads of the same length whose flanks differ; the allele table (*Alleles in every sample*) says whose flanks each extra cluster carries. Every sample is in \u0060plots/clusters/\u0060." else ""`
+`r if (params$cluster) "## One sample's clusters\n\nThe reads of one sample, one row per cluster on a shared length axis, so each cluster's length distribution can be seen even where clusters overlap. Each row gives the cluster's allele number (1 and 2 are the two largest clusters, 1 the shorter; 3 upwards are the rest), modal length and share of reads. Where the sample's reads were also split by flank haplotype, the row says which: haplotypes are numbered separately within each length cluster, so H2 in one row is not the same sequence as H2 in another. Two clusters with the same modal length and different haplotypes are reads of the same length whose flanks differ; the allele table (*Alleles in every sample*) says whose flanks each extra cluster carries. Every sample is in \u0060plots/clusters/clusters_{sample}.png\u0060." else ""`
 
 ```{r cluster_example, eval=params$cluster, fig.height=if (exists("cluster_summary")) 1.8 + 1.3 * nrow(cluster_summary[file_stem == samples[1]]) else 4.5}
 cl_dir <- file.path(plots_dir, "clusters")
 for (s in samples) {
-  if (s != samples[1] && !isTRUE(params$plot_per_sample)) break
-  p <- cluster_length_plot(d_all[file_stem == s], cluster_summary[file_stem == s], s, paste(primary, "length (repeat units)"))
+  if (s != samples[1] && !want_plot("clusters", params)) break
+  p <- cluster_length_plot(d_all[file_stem == s], cluster_summary[file_stem == s], s, paste(primary, "length (repeat units)"), clustered_on = cluster_unit)
   if (s == samples[1]) print(p)
-  save_plot(p, file.path(cl_dir, paste0(s, ".png")), 10, 1.8 + 1.3 * nrow(cluster_summary[file_stem == s]))
+  save_plot(p, plot_path(plots_dir, "clusters", s), 10, 1.8 + 1.3 * nrow(cluster_summary[file_stem == s]))
 }
 dt_full(cluster_summary, caption = "Clusters per sample (cluster 1 = most reads)", digits = 3)
 ```
@@ -404,15 +440,15 @@ if (exists("var_summary")) dt_full(var_summary, caption = "Variants across the c
 ## One sample's alleles
 ```
 
-`r if (params$cluster) "Each sample's alleles drawn for review, one row per allele, labelled with the allele's modal length of every tract (allele 1 has the shorter primary tract, allele 2 the longer) and its reads. Under the figure, each extra allele (3 upwards) is described by whose length and whose flanks it has. The middle panel is the region between the reference flanks in repeat notation. The side panels show the stretch of each flank the allele's consensus covers (grey) on reference coordinates, with each variant marked: filled when it is in the allele's consensus, open when it is carried by a minority of the reads, labelled with its position, bases and read support. The first sample is shown; every sample is in plots/alleles/." else ""`
+`r if (params$cluster) "Each sample's alleles drawn for review, one row per allele, labelled with the allele's modal length of every tract (allele 1 has the shorter primary tract, allele 2 the longer) and its reads. Under the figure, each extra allele (3 upwards) is described by whose length and whose flanks it has. The middle panel is the region between the reference flanks in repeat notation. The side panels show the stretch of each flank the allele's consensus covers (grey) on reference coordinates, with each variant marked: filled when it is in the allele's consensus, open when it is carried by a minority of the reads, labelled with its position, bases and read support. The first sample is shown; every sample is in plots/alleles/alleles_{sample}.png." else ""`
 
 ```{r allele_maps, eval=params$cluster, fig.height=if (exists("cons")) 2.2 + 1.3 * nrow(cons[file_stem == cons$file_stem[1]]) else 3.8, fig.width=13}
 al_dir <- file.path(plots_dir, "alleles")
 vv_all <- if (exists("variants")) variants else data.table()
 invisible(apply_fn(unique(cons$file_stem), function(s) {
-  if (s != cons$file_stem[1] && !isTRUE(params$plot_per_sample)) return(NULL)
+  if (s != cons$file_stem[1] && !want_plot("alleles", params)) return(NULL)
   p <- allele_map_plot(cons[file_stem == s], if (nrow(vv_all)) vv_all[file_stem == s] else vv_all, ref, s, tracts$tract, primary)
-  save_plot(p, file.path(al_dir, paste0(s, ".png")), 13, 2.2 + 1.3 * nrow(cons[file_stem == s]))
+  save_plot(p, plot_path(plots_dir, "alleles", s), 13, 2.2 + 1.3 * nrow(cons[file_stem == s]))
   TRUE
 }))
 s1 <- cons$file_stem[1]
@@ -427,7 +463,7 @@ invisible(apply_fn(unique(d_all$file_stem), function(s) {
   d <- d_all[file_stem == s & !is.na(allele)]
   set.seed(123); d <- d[, .SD[sample(.N, min(.N, params$allele_bam_reads))], by = allele]
   d[, hp := allele]
-  d <- if (!is.null(read_mol)) read_mol[file_stem == s, .(qname, molecule_id)][d, on = "qname"] else d[, molecule_id := NA_character_]
+  if (!"molecule_id" %in% names(d)) d <- if (!is.null(read_mol)) read_mol[file_stem == s, .(qname, molecule_id)][d, on = "qname"] else d[, molecule_id := NA_character_]
   write_allele_bam(d, ref, file.path(bam_dir, paste0(s, ".bam")), params$allele_bam_minimap2, 1L, bam_tmp)
   TRUE
 }))
@@ -455,9 +491,9 @@ The repeat itself is N in the reference, so the reads show it as a long insertio
 
 # Waterfall plots
 
-Each figure shows up to `r format(params$waterfall_downsample, big.mark = ",")` reads from one sample, ordered from shortest to longest `r primary` tract, with each base coloured and `r params$waterfall_flank_bp` bp of flank either side. A pure tract gives a regular stripe; interruptions show as vertical lines at a fixed offset from the tract start or end, and sequence variants in the flanks as columns of a different colour. The reads are a random sample, so each allele appears in proportion to its share of the reads and takes up that share of the height. Each y-axis label marks the first read whose tract reaches that length; labels are spread evenly up the plot, so a large allele carries several. One example is shown; all are in `plots/waterfall/`.
+Each figure shows up to `r format(params$waterfall_downsample, big.mark = ",")` reads from one sample, ordered from shortest to longest `r primary` tract, with each base coloured and `r params$waterfall_flank_bp` bp of flank either side. A pure tract gives a regular stripe; interruptions show as vertical lines at a fixed offset from the tract start or end, and sequence variants in the flanks as columns of a different colour. The reads are a random sample, so each allele appears in proportion to its share of the reads and takes up that share of the height. Each y-axis label marks the first read whose tract reaches that length; labels are spread evenly up the plot, so a large allele carries several. One example is shown; all are in `plots/waterfall/waterfall_{sample}.png` (and, with `waterfall_cluster` in `plots`, one per cluster in `plots/waterfall_cluster/`).
 
-```{r waterfall, eval=params$waterfall, fig.height=8}
+```{r waterfall, eval=want_plot("waterfall", params) || want_plot("waterfall_cluster", params), fig.height=8}
 .t <- proc.time()["elapsed"]
 wf_dir <- file.path(plots_dir, "waterfall")
 first <- NULL
@@ -467,11 +503,11 @@ for (s in samples) {
                              paste(primary, "length"))
   if (is.null(p)) next
   if (is.null(first)) first <- p
-  save_plot(p, file.path(wf_dir, paste0(s, ".png")), 12, 9)
-  if (params$cluster && params$waterfall_per_cluster) for (k in unique(d$cluster_number)) {
+  save_plot(p, plot_path(plots_dir, "waterfall", s), 12, 9)
+  if (params$cluster && want_plot("waterfall_cluster", params)) for (k in sort(unique(d$cluster_number))) {
     pk <- create_waterfall_plot(d[d$cluster_number == k, ], sprintf("Waterfall: %s, cluster %d", s, k), params$waterfall_flank_bp,
                                 params$waterfall_downsample, paste(primary, "length"))
-    if (!is.null(pk)) save_plot(pk, file.path(wf_dir, "by_cluster", sprintf("%s_cluster%02d.png", s, k)), 12, 9)
+    if (!is.null(pk)) save_plot(pk, plot_path(plots_dir, "waterfall_cluster", s, sprintf("cluster%02d", k)), 12, 9)
   }
 }
 timings["Waterfalls"] <- proc.time()["elapsed"] - .t

@@ -193,9 +193,13 @@ truthy <- function(x) {
 # ------------------------------------------------------------------------------
 safe_path <- function(x, replacement = "-") {
   x <- as.character(x)
-  x <- gsub("[/\\\\:*?\"<>|#%[:cntrl:]]", replacement, x, perl = TRUE)   # # and % break links in the HTML reports
-  x <- gsub("[[:space:]]+", replacement, x)
-  x <- gsub(paste0("^", replacement, "+|", replacement, "+$"), "", x)
+  # Characters that cannot be in a file name, and spaces, become the replacement; a run
+  # of them becomes one ("a /  b" gives a-b). Separators already in the name are kept,
+  # so a sample called bc1002--bc1050 keeps its two dashes.
+  x <- gsub("[/\\\\:*?\"<>|#%[:cntrl:][:space:]]+", "\001", x, perl = TRUE)   # # and % break links in the HTML reports
+  x <- gsub(paste0("\\Q", replacement, "\\E*\001[\001", replacement, "]*"), "\001", x, perl = TRUE)
+  x <- gsub("\001", replacement, x, fixed = TRUE)
+  x <- gsub(paste0("^\\Q", replacement, "\\E+|\\Q", replacement, "\\E+$"), "", x, perl = TRUE)
   x[is.na(x) | x == ""] <- "unnamed"
   x
 }
@@ -252,7 +256,11 @@ dt_compact <- function(df, caption = NULL, digits = NULL) {
 # Plot saving. Every plot is assigned, printed (when inline) and saved.
 # ------------------------------------------------------------------------------
 save_plot <- function(p, path, width = 10, height = 6, dpi = NULL) {
-  dpi <- dpi %||% tryCatch(get("params", envir = parent.frame())$plot_dpi, error = function(e) 150)
+  prm <- tryCatch(get("params", envir = parent.frame()), error = function(e) NULL)
+  dpi <- dpi %||% prm$plot_dpi %||% 150
+  # A plot whose type (the start of its file name) is not in `plots` is not saved
+  ty <- plot_type_of(path)
+  if (!is.na(ty) && !is.null(prm$plot_types) && !ty %in% prm$plot_types) return(invisible(NULL))
   dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
   # ragg when it is installed (several times faster, and needs no X11), otherwise the cairo
   # PNG device: the default device on an HPC node without X11 can take a minute or more
@@ -329,3 +337,132 @@ md_path <- function(path) {
 # unchanged, since it is the key for group controls and ranges.
 display_group <- function(x) gsub("^[-_ ]+|[-_ ]+$", "", as.character(x))
 
+
+# ------------------------------------------------------------------------------
+# Plot catalogue: every plot Duke saves, by type
+# ------------------------------------------------------------------------------
+# The type is the first part of the file name and, for types with more than one
+# file, the folder they are saved in. `plots` selects types (default "all": every
+# type with default = TRUE); `plot_units` selects the reads / molecules versions
+# of the types that can show both (units = TRUE). scope: run (one figure for the
+# run), sample (one per sample), range, group, measure.
+plot_catalogue <- function() {
+  x <- read.csv(text = "
+type,module,scope,units,default,description
+reads_per_sample,1,run,FALSE,TRUE,Reads per sample at each import step
+read_length_distribution,1,run,FALSE,TRUE,Read length distribution pooled and per sample
+quality_vs_length,1,run,FALSE,TRUE,Mean base quality against read length per sample
+pacbio_np_rq,1,run,FALSE,TRUE,PacBio pass count and read quality per sample
+pacbio_np_vs_length,1,run,FALSE,TRUE,PacBio pass count against read length (tile plot of every read)
+adapter_trimming,1,run,FALSE,TRUE,Adapter trimming outcome
+read_accounting,2,run,FALSE,TRUE,Reads kept at each alignment step
+flank_boundary_shortfall,2,run,FALSE,TRUE,Flank alignments that stop short of the repeat
+mapping_quality,2,run,FALSE,TRUE,Mapping quality per flank
+strand_by_step,2,run,FALSE,TRUE,Share of forward-strand reads at each step
+alignment,2,sample,FALSE,TRUE,Each read's flank alignments (one per sample and reference)
+detection_rate,3,run,FALSE,TRUE,Reads with each tract found
+flank_length,3,run,FALSE,TRUE,Flank length between primer and tract per sample
+strand_by_length,3,run,FALSE,TRUE,Strand balance by tract length
+count_method_agreement,3,run,FALSE,TRUE,How often the counting methods differ by tract length
+count_method_gap,3,run,FALSE,TRUE,How far the counting methods differ by tract length
+break_positions,3,run,FALSE,TRUE,Where broken tracts are broken
+between_tract_sequences,3,run,FALSE,TRUE,Sequences between adjacent tracts
+extraction_outcome,4,run,FALSE,TRUE,UMI extraction outcome per sample
+umi_length,4,run,FALSE,TRUE,UMI length per sample
+umi_neighbours,4,run,FALSE,TRUE,UMIs one mismatch from another against chance
+length_rule_scorecard,4,run,FALSE,TRUE,Molecule length rules scored
+length_rule_comparison,4,run,FALSE,TRUE,Molecule length rules compared
+shortened_flag_by_length,4,run,FALSE,TRUE,Molecules flagged as shortened by length
+shortened_flag_by_depth_band,4,run,FALSE,TRUE,Molecules flagged as shortened by length and depth
+shortened_filter_distribution,4,run,FALSE,TRUE,Shortened-read share per molecule
+shortened_flag_per_sample,4,run,FALSE,TRUE,Molecules flagged as shortened per sample
+reads_per_molecule,4,run,FALSE,TRUE,Reads per molecule
+molecules_per_sample,4,run,FALSE,TRUE,Molecules found and kept per sample
+molecules_and_depth,4,run,FALSE,TRUE,Molecules against read depth per sample
+within_molecule_error,4,run,FALSE,TRUE,Read length minus molecule length by molecule length
+within_molecule_error_hist,4,run,FALSE,TRUE,Read length minus molecule length (histogram)
+reads_far_from_molecule,4,run,FALSE,TRUE,Reads far from their molecule's length per sample
+reads_vs_molecules_cohort,4,run,FALSE,TRUE,Read and molecule length distributions for the run
+reads_vs_molecules,4,sample,FALSE,TRUE,Read and molecule length distributions (one per sample)
+clusters_per_sample,5,run,FALSE,TRUE,Number of clusters per sample
+clusters_overview,5,run,FALSE,TRUE,Clusters in every sample
+clusters,5,sample,FALSE,TRUE,One sample's reads by cluster
+variants_by_sample,5,run,FALSE,TRUE,Variants in alleles 1 and 2 of every sample
+alleles,5,sample,FALSE,TRUE,One sample's alleles and variants
+waterfall,5,sample,FALSE,TRUE,Reads stacked by length with each base coloured
+waterfall_cluster,5,sample,FALSE,FALSE,Waterfall of each cluster of each sample
+experiment_map,6,run,FALSE,TRUE,Samples by group and time
+counts_per_range,6,run,TRUE,TRUE,Reads and molecules in each range
+control_setpoints,6,run,TRUE,TRUE,Control samples and group setpoints
+timecourse,6,range,TRUE,TRUE,Headline metrics against time (one per measure and range)
+instability_index_by_range,6,run,TRUE,TRUE,Instability index in every range
+pair_trend,6,range,TRUE,TRUE,Change in one tract against change in another (one per range)
+pair_correlation,6,range,TRUE,TRUE,Per-sample correlation between two tracts (one per range)
+pair_scatter,6,sample,TRUE,TRUE,One sample's lengths of two tracts per read or molecule (every range)
+heatmap,7,measure,TRUE,TRUE,Every sample's length distribution (one per measure)
+group_density,7,group,TRUE,TRUE,A group's samples as ridges (all lengths and each range)
+group_histogram,7,group,TRUE,TRUE,A group's samples as histograms (all lengths and each range)
+sample_ranges,7,sample,TRUE,TRUE,One sample's length in every range
+sample_card,7,sample,TRUE,TRUE,One sample's every measure (all lengths and the ranges drawn in the report)
+sample_density,7,sample,TRUE,FALSE,One sample's ridge for all lengths and each range (one file each)
+sample_histogram,7,sample,TRUE,FALSE,One sample's histogram for all lengths and each range (one file each)
+", stringsAsFactors = FALSE, strip.white = TRUE)
+  x$units <- as.logical(x$units); x$default <- as.logical(x$default)
+  x
+}
+
+# The plot types this run saves, from `plots` ("all", or a list of types; "-type"
+# removes a type, e.g. "all,-waterfall,sample_density") and the older switches.
+resolve_plot_types <- function(p) {
+  cat_ <- plot_catalogue()
+  req <- p$plots %||% "all"
+  if (!length(req)) req <- "all"
+  add <- req[!startsWith(req, "-")]; drop <- sub("^-", "", req[startsWith(req, "-")])
+  bad <- setdiff(c(add, drop), c("all", "none", cat_$type))
+  if (length(bad)) stop("Unknown plot type(s) in plots: ", paste(bad, collapse = ", "), ". Known types: ", paste(cat_$type, collapse = ", "))
+  out <- unique(c(if ("all" %in% add) cat_$type[cat_$default], setdiff(add, c("all", "none"))))
+  # Older switches, so existing job scripts keep their meaning
+  if (isFALSE(p$waterfall)) drop <- c(drop, "waterfall", "waterfall_cluster")
+  if (isTRUE(p$waterfall_per_cluster)) out <- c(out, "waterfall_cluster")
+  if (isFALSE(p$sample_cards)) drop <- c(drop, "sample_card")
+  if (isTRUE(p$plot_sample_ranges)) out <- c(out, "sample_density", "sample_histogram")
+  if (isFALSE(p$visualise_alignment)) drop <- c(drop, "alignment")
+  if (isFALSE(p$plot_per_sample)) drop <- c(drop, cat_$type[cat_$scope == "sample"])
+  setdiff(unique(out), drop)
+}
+
+want_plot <- function(type, p = NULL) {
+  p <- p %||% tryCatch(get("params", envir = parent.frame()), error = function(e) NULL)
+  if (is.null(p)) return(TRUE)
+  type %in% (p$plot_types %||% resolve_plot_types(p))
+}
+
+# The unit versions to draw for a plot that can show reads and molecules: any of
+# "combined" (both in one figure), "reads", "molecules". Without molecules only
+# reads can be drawn. can_combine = FALSE (e.g. one heatmap per unit) turns
+# "combined" into one figure per unit.
+plot_units_for <- function(p, have_molecules, can_combine = TRUE) {
+  u <- p$plot_units %||% "combined"
+  if (!have_molecules) return(if (length(u)) "reads" else character(0))
+  if (!can_combine && "combined" %in% u) u <- c(setdiff(u, "combined"), "reads", "molecules")
+  intersect(c("combined", "reads", "molecules"), u)
+}
+# Which units' data a version shows
+unit_members <- function(u) if (identical(u, "combined")) c("reads", "molecules") else u
+
+# File path for a saved plot: {type}_{part}_..._{unit}.png, in a folder named after
+# the type when the type has a file per sample, range, group or measure
+plot_path <- function(plots_dir, type, ..., unit = NULL, folder = NULL) {
+  parts <- unlist(list(...)); parts <- parts[!is.na(parts) & nzchar(parts)]
+  if (is.null(folder)) folder <- plot_catalogue()$scope[match(type, plot_catalogue()$type)] %in% c("sample", "range", "group", "measure")
+  name <- paste(c(type, safe_path(parts), unit), collapse = "_")
+  if (isTRUE(folder)) file.path(plots_dir, type, paste0(name, ".png")) else file.path(plots_dir, paste0(name, ".png"))
+}
+
+# The plot type a file name starts with (the longest catalogue type that matches), or NA
+.plot_types_cache <- new.env()
+plot_type_of <- function(path) {
+  if (is.null(.plot_types_cache$t)) { t <- plot_catalogue()$type; .plot_types_cache$t <- t[order(-nchar(t))] }
+  t <- .plot_types_cache$t
+  vapply(sub("\\.png$", "", basename(path)), function(b) { m <- t[b == t | startsWith(b, paste0(t, "_"))]; if (length(m)) m[1] else NA_character_ }, "", USE.NAMES = FALSE)
+}

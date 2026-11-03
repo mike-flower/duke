@@ -36,7 +36,7 @@ duke_param_spec <- function() {
     .p("select_one_of_pair", "R1", "chr", "Import", "Paired-end: import 'R1', 'R2' or 'all'"),
     .p("downsample", NA_integer_, "int", "Import", "Maximum reads per sample (NA = all)"),
     .p("np_min", NA_integer_, "int", "Import", "Drop PacBio HiFi reads with fewer passes than this (NA = no filter)"),
-    .p("pacbio_scatter_downsample", 50000L, "int", "Import", "Maximum points in the PacBio passes-vs-length plot"),
+    .p("pacbio_scatter_downsample", 50000L, "int", "Import", "Not used since v3.3.2 (the pass-count plot now counts every read); kept so older parameter files still run"),
     .p("check_duplicate_readnames", FALSE, "lgl", "Import",
        "Remove duplicate read names, keeping the longest. Off by default: PacBio and ONT read names are unique, and the check removed 0 reads in 36 M"),
     .p("trim", FALSE, "lgl", "Import",
@@ -94,6 +94,7 @@ duke_param_spec <- function() {
     # --- Module 5: allele structure ---------------------------------------------------------
     .p("cluster", FALSE, "lgl", "Allele structure", "Cluster reads into alleles, build consensus sequences and call variants"),
     .p("cluster_by", "repeat", "chrvec", "Allele structure", "'repeat', 'haplotype', or 'repeat,haplotype'"),
+    .p("cluster_unit", "auto", "chr", "Allele structure", "What the repeat lengths are clustered on: 'molecules' (the length of each kept UMI molecule, and every read takes the cluster of its molecule), 'reads', or 'auto' (molecules when umi = TRUE, otherwise reads)"),
     .p("repeat_cluster_max", 6L, "int", "Allele structure", "Maximum repeat-length clusters per sample"),
     .p("repeat_cluster_min_prop", 0.05, "num", "Allele structure", "Clusters holding fewer than this proportion of reads are merged into their nearest neighbour"),
     .p("repeat_cluster_downsample", 10000L, "int", "Allele structure", "Reads used to choose the number of repeat clusters"),
@@ -136,13 +137,15 @@ duke_param_spec <- function() {
     # --- Module 7: repeat lengths -----------------------------------------------------------
     .p("sample_cards", TRUE, "lgl", "Repeat lengths", "Write one summary figure per sample"),
     .p("repeat_histogram_binwidth", 1L, "int", "Repeat lengths", "Histogram bin width in repeat units"),
-    .p("plot_every_range", FALSE, "lgl", "Repeat lengths",
-       "Draw the by-group distribution figures for every analysis range of the primary measure, not only plot_ranges"),
+    .p("plot_every_range", TRUE, "lgl", "Repeat lengths",
+       "Save the by-group distribution figures for every analysis range of the primary measure (FALSE: only plot_ranges, the ones shown in the report)"),
     .p("plot_sample_ranges", FALSE, "lgl", "Repeat lengths",
        "Also draw a density and a histogram figure for every sample, for all lengths and for each range drawn (many figures on a large run)"),
     .p("plot_dots_max", 2000L, "int", "Repeat lengths", "Reads drawn as dots per sample in the density (ridge) figures"),
 
     # --- Output and runtime ---------------------------------------------------------------
+    .p("plots", "all", "chrvec", "Runtime", "Plot types to save: 'all' (default; every type except sample_density, sample_histogram and waterfall_cluster), a list of types, or 'all' with '-type' to leave types out, e.g. 'all,-waterfall,sample_density'. The README lists every type"),
+    .p("plot_units", "combined", "chrvec", "Runtime", "For plots that can show reads and molecules: 'combined' (both in one figure, default), 'reads', 'molecules', or a list, e.g. 'combined,reads,molecules' for all three"),
     .p("plot_dpi", 150L, "int", "Runtime", "Resolution of saved plots"),
     .p("plot_per_sample", TRUE, "lgl", "Runtime", "Write the per-sample plots (one figure per sample) in Modules 2, 4, 5 and 7"),
     .p("threads", 4L, "int", "Runtime", "CPU cores"),
@@ -223,6 +226,8 @@ resolve_params <- function(user = list()) {
   if (isTRUE(p$umi) && p$umi_min_reads <= p$umi_top_cluster_k && p$umi_collapse_stat == "top_cluster")
     stop("umi_min_reads (", p$umi_min_reads, ") must exceed umi_top_cluster_k (", p$umi_top_cluster_k,
          "): with exactly k reads top_cluster returns their median, which at k = 2 is their mean")
+  if (!p$cluster_unit %in% c("auto", "molecules", "reads")) stop("cluster_unit must be 'auto', 'molecules' or 'reads'")
+  if (identical(p$cluster_unit, "molecules") && !isTRUE(p$umi)) stop("cluster_unit = 'molecules' needs umi = TRUE")
   if (!p$umi_cluster_max_dist %in% 0:2) stop("umi_cluster_max_dist must be 0, 1 or 2")
   if (!p$umi_collapse_stat %in% c("top_cluster", "max_supported", "mode", "median", "mean"))
     stop("umi_collapse_stat must be 'top_cluster', 'max_supported', 'mode', 'median' or 'mean'")
@@ -230,6 +235,9 @@ resolve_params <- function(user = list()) {
   if (!is.finite(p$umi_shortened_min_share) || p$umi_shortened_min_share <= 0 || p$umi_shortened_min_share > 1) stop("umi_shortened_min_share must be above 0 and at most 1")
   if (!is.finite(p$umi_top_cluster_min_share) || p$umi_top_cluster_min_share < 0 || p$umi_top_cluster_min_share > 1)
     stop("umi_top_cluster_min_share must be between 0 and 1")
+  bad_u <- setdiff(p$plot_units, c("combined", "reads", "molecules"))
+  if (length(bad_u)) stop("plot_units must be any of 'combined', 'reads', 'molecules' (got ", paste(bad_u, collapse = ", "), ")")
+  p$plot_types <- resolve_plot_types(p)
   p$dir_out <- normalizePath(p$dir_out, mustWork = FALSE)
   p
 }

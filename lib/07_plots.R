@@ -92,7 +92,9 @@ dist_rows <- function(d, title = NULL, xlab = "Repeat length", binwidth = 1, bw 
 # sample, drawn at random) as a dot just below the ridge, and the reads' modal length
 # as a red dashed line with its value. `rd` and `md` have columns label and length;
 # label is a factor whose first level is drawn at the top.
-ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length", xlim = NULL, dots_max = 2000L, subtitle = NULL) {
+# main_unit = "Molecules" draws molecules alone in place of reads (rd then holds molecules, md is NULL).
+ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length", xlim = NULL, dots_max = 2000L, subtitle = NULL, main_unit = "Reads") {
+  mu <- if (main_unit == "Molecules") "molecules" else "reads"
   rd <- data.table::as.data.table(rd)[is.finite(length)]
   if (!nrow(rd)) return(NULL)
   L <- levels(droplevels(rd$label)); if (is.null(L)) L <- unique(as.character(rd$label))
@@ -115,29 +117,32 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
   p <- ggplot2::ggplot() +
     ggplot2::geom_ribbon(data = rdn, ggplot2::aes(x, ymin = base, ymax = top, group = label), fill = "grey90", colour = NA) +
     ggplot2::geom_point(data = dots, ggplot2::aes(length, y), size = 0.35, alpha = 0.35, colour = "black", stroke = 0) +
-    ggplot2::geom_line(data = rdn, ggplot2::aes(x, top, group = label), colour = "grey25", linewidth = 0.3)
+    ggplot2::geom_line(data = rdn, ggplot2::aes(x, top, group = label, colour = main_unit), linewidth = 0.3)
   if (!is.null(md) && nrow(md)) {
     md <- data.table::as.data.table(md)[is.finite(length) & label %in% L]
-    if (nrow(md)) p <- p + ggplot2::geom_line(data = dens(md), ggplot2::aes(x, top, group = label, colour = "Molecules"), linewidth = 0.5) +
-      ggplot2::scale_colour_manual(values = c(Molecules = "#00838f"), name = NULL)
+    if (nrow(md)) p <- p + ggplot2::geom_line(data = dens(md), ggplot2::aes(x, top, group = label, colour = "Molecules"), linewidth = 0.5)
   }
+  lab <- if (main_unit == "Molecules") c(Molecules = "Molecules (UMI-collapsed; grey fill, dots)") else
+    c(Reads = "Reads (grey fill, dots)", Molecules = "Molecules (UMI-collapsed)")
+  p <- p + ggplot2::scale_colour_manual(values = c(Reads = "grey25", Molecules = "#00838f"), breaks = names(lab), labels = lab, name = NULL)
   p + ggplot2::geom_segment(data = modal, ggplot2::aes(x = modal, xend = modal, y = base, yend = base + 0.9), colour = "red", linetype = "dashed", linewidth = 0.4) +
     ggplot2::geom_text(data = modal, ggplot2::aes(x = modal, y = base + 0.9, label = round(modal)), colour = "red", size = 2.6, hjust = -0.15, vjust = 1) +
     ggplot2::scale_y_continuous(breaks = unname(idx), labels = names(idx), expand = ggplot2::expansion(add = c(0.45, 0.25))) +
     ggplot2::coord_cartesian(xlim = xlim) +
     ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(10)) +
     ggplot2::labs(x = xlab, y = NULL, title = title,
-                  subtitle = subtitle %||% sprintf("Grey = reads (density, scaled to each sample's height)%s\nDots inside each ridge = %s reads; red = the reads' modal length",
-                                                   if (!is.null(md) && nrow(md)) ", teal = molecules" else "",
-                                                   if (rd[, max(.N), by = label][, max(V1)] > dots_max) paste("up to", format(dots_max, big.mark = ","), "random") else "all")) +
+                  subtitle = subtitle %||% sprintf("Grey = %s: density, scaled to each sample's height%s\nDots inside each ridge = %s %s; red = the %s' modal length",
+                                                   if (mu == "molecules") "molecules (UMI-collapsed)" else "reads",
+                                                   if (!is.null(md) && nrow(md)) ", teal line = molecules (UMI-collapsed)" else "",
+                                                   if (rd[, max(.N), by = label][, max(V1)] > dots_max) paste("up to", format(dots_max, big.mark = ","), "random") else "all", mu, mu)) +
     ggplot2::theme_bw() + ggplot2::theme(legend.position = "top", panel.grid.minor = ggplot2::element_blank())
 }
 
 # Histograms of several samples: one row per sample, reads and (with UMIs) molecules
 # in separate columns, each panel on its own y-axis as the share of that sample's
 # reads (or molecules) at each length.
-hist_rows_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length", xlim = NULL, binwidth = 1) {
-  d <- rbind(data.table::as.data.table(rd)[, .(label, length, unit = "Reads")],
+hist_rows_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length", xlim = NULL, binwidth = 1, main_unit = "Reads") {
+  d <- rbind(data.table::as.data.table(rd)[, .(label, length, unit = main_unit)],
              if (!is.null(md) && nrow(md)) data.table::as.data.table(md)[, .(label, length, unit = "Molecules")])
   d <- d[is.finite(length)]
   if (!nrow(d)) return(NULL)
@@ -152,7 +157,7 @@ hist_rows_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length", 
     ggplot2::coord_cartesian(xlim = xlim) +
     ggplot2::labs(x = xlab, y = "Share at each length", title = title,
                   subtitle = if (data.table::uniqueN(h$unit) > 1) "One row per sample; each panel is the share of that sample's reads (grey) or molecules (teal) at each length, on its own scale"
-                             else "One row per sample; each panel is the share of that sample's reads at each length, on its own scale") +
+                             else sprintf("One row per sample; each panel is the share of that sample's %s at each length, on its own scale", if (main_unit == "Molecules") "molecules (UMI-collapsed)" else "reads")) +
     ggplot2::theme_bw() + ggplot2::theme(strip.text = ggplot2::element_text(size = 7, margin = ggplot2::margin(1, 1, 1, 1)),
                                          panel.spacing.y = grid::unit(2, "pt"), axis.text.y = ggplot2::element_text(size = 6))
 }

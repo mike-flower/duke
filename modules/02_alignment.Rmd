@@ -55,7 +55,7 @@ This module handles:
 **Outputs:**
 
 - `02_alignment/alignment.xlsx` – read accounting per sample; flank alignment quality, boundaries and strand
-- `02_alignment/plots/` – the figures in this report (per-sample alignment plots in `alignment_by_sample/`)
+- `02_alignment/plots/` – the figures in this report; per-sample alignment plots in `alignment/alignment_{sample}_{reference}.png`
 - `module_data/02_alignment.RData` – strand-corrected reads with flank coordinates, for Module 3
 
 ---
@@ -191,9 +191,9 @@ quality_table <- dplyr::left_join(dplyr::left_join(qual, sf, by = c("file_stem",
 dt_full(quality_table, caption = "Alignment quality, flank boundaries and strand per sample", digits = 3)
 ```
 
-```{r per_sample_alignment, eval=params$visualise_alignment && params$plot_per_sample}
+```{r per_sample_alignment, eval=want_plot("alignment", params)}
 .t <- proc.time()["elapsed"]
-by_sample_dir <- file.path(plots_dir, "alignment_by_sample")
+by_sample_dir <- file.path(plots_dir, "alignment")
 for (r in names(alignments)) {
   a <- alignments[[r]]
   for (s in unique(a$file_stem)) {
@@ -207,7 +207,7 @@ for (r in names(alignments)) {
       labs(x = "Reference position (bp)", y = "Reads", title = paste("Flank alignments:", s),
            subtitle = sprintf("%s of %s reads; +c = reverse-complemented", comma(nrow(d)), comma(sum(a$file_stem == s)))) +
       theme_bw() + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
-    save_plot(p, file.path(by_sample_dir, paste0(s, "-", safe_path(r), "-alignment.png")), 10, 6)
+    save_plot(p, plot_path(plots_dir, "alignment", s, r), 10, 6)
   }
 }
 timings["Per-sample plots"] <- proc.time()["elapsed"] - .t

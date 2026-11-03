@@ -393,31 +393,7 @@ if (nrow(gp)) {
 } else cat("The counting methods agree for every read.\n")
 ```
 
-## What a break does to each count
-
-**How to read this.** Each panel is one tract and one count, for a random subset of up to 2,000 reads per sample. The x-axis is that count as a share of the read's **full** count (100% = the same as full). The bars are coloured by how many breaks the read's tract has: places where the run of exact motif copies is interrupted, by a wrong base, an inserted or missing base, or a real interruption. None, one, two, or three or more.
-
-**What it shows.** Why **pure** spreads so widely and **match** does not. With no break, every count equals full (the bar at 100%). One break costs **match** about one unit, so its reads sit just below 100% whatever the tract length. For **pure**, one break splits the tract and only the longer piece is kept, so depending on where the break falls **pure** is anywhere from half of full (a break in the middle) to almost all of it (a break near an end): the reads with one break spread evenly between 50% and 100%. With two or more breaks the longest piece can be under half. A real interruption would instead put a sharp peak at the same share in every read of the allele that carries it.
-
-```{r count_share, fig.height=2 + 2.5 * nrow(tracts)}
-set.seed(123)
-cs <- rbindlist(lapply(tracts$tract, function(t) {
-  d <- read_tracts[get(paste0(t, "_found")) %in% TRUE, .(file_stem, full = get(paste0(t, "_full")),
-                    match = get(paste0(t, "_match")), pure = get(paste0(t, "_pure")), structure = get(paste0(t, "_structure")))]
-  d <- d[full > 0][, .SD[sample(.N, min(.N, 2000))], by = file_stem]
-  # breaks = pieces of the tract minus one (the structure lists the length of each unbroken run)
-  d[, errors := cut(lengths(strsplit(ifelse(is.na(structure), "", structure), ",", fixed = TRUE)) - 1, c(-Inf, 0, 1, 2, Inf), labels = c("none", "one", "two", "three or more"))]
-  rbind(d[, .(tract = t, method = "match as a share of full", share = match / full, errors)],
-        d[, .(tract = t, method = "pure as a share of full", share = pure / full, errors)])
-}))
-p_cs <- ggplot(cs, aes(pmin(share, 1), fill = errors)) + geom_histogram(binwidth = 0.02, boundary = 1, closed = "right") +
-  geom_vline(xintercept = 0.5, linetype = "dotted", colour = "grey40") +
-  facet_grid(tract ~ method, scales = "free_y") +
-  scale_x_continuous(labels = pct_axis(), limits = c(0, 1.02)) + scale_y_sqrt(labels = comma) +
-  scale_fill_manual(values = c(none = "grey70", one = "#377eb8", two = "#ff7f00", `three or more` = "#e41a1c"), name = "Breaks in the tract") +
-  labs(x = "Count as a share of the full count", y = "Reads (square-root axis)", title = "What breaks in the tract do to the match and pure counts",
-       subtitle = "Dotted line = half of full") + theme_bw()
-print(p_cs); save_plot(p_cs, file.path(plots_dir, "count_methods_share.png"), 10, 2 + 2.5 * nrow(tracts))
+```{r pure_summary}
 pure_sum <- rbindlist(lapply(tracts$tract, function(t) {
   d <- read_tracts[get(paste0(t, "_found")) %in% TRUE, .(full = get(paste0(t, "_full")), pure = get(paste0(t, "_pure")))]
   d[, .(tract = t, reads = .N, short = mean(pure < full), median_loss = as.numeric(median((full - pure)[pure < full])),
@@ -425,7 +401,7 @@ pure_sum <- rbindlist(lapply(tracts$tract, function(t) {
 }))
 ```
 
-`r paste(sprintf("For %s in this run, **pure** was shorter than **full** in %s of reads; where it was, by a median of %s units, and %s of reads had **pure** below half of **full** (two or more breaks).", pure_sum$tract, percent(pure_sum$short, 0.1), format(pure_sum$median_loss), percent(pure_sum$below_half, 0.1)), collapse = " ")`
+`r paste(sprintf("For %s in this run, **pure** was shorter than **full** in %s of reads; where it was, by a median of %s units, and %s of reads had **pure** below half of **full** (possible only with two or more breaks).", pure_sum$tract, percent(pure_sum$short, 0.1), format(pure_sum$median_loss), percent(pure_sum$below_half, 0.1)), collapse = " ")`
 
 ## Where the tract is broken
 

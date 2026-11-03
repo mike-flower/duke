@@ -613,7 +613,7 @@ print(p_far); save_plot(p_far, file.path(plots_dir, "reads_far_from_molecule.png
 
 The `r primary` length distribution of reads (grey) and of molecules (teal) for the whole run: each sample's distribution is scaled to its own total and then averaged, so every sample counts equally whatever its depth. The y-axis is square-root so that a minor allele is visible next to the major one, and the x-axis stops at the length that 99.9% of molecules fall below. Collapsing should narrow each allele's peak and remove the stutter shoulder below it.
 
-One sample is shown below as an example, with reads and molecules in separate rows, each on its own axis: the bars are the share at each length and the line a smoothed version (kernel density, bandwidth 1 unit, or 0.5 for a short tract), so the molecules' shape can be read even where there are only a few at each length. Every sample is in `plots/reads_vs_molecules/`.
+One sample is shown below as an example, with reads and molecules in separate rows, each on its own axis: the bars are the share at each length and the line a smoothed version (kernel density, bandwidth 1 unit, or 0.5 for a short tract), so the molecules' shape can be read even where there are only a few at each length. Every sample is in `plots/reads_vs_molecules/reads_vs_molecules_{sample}_{measure}.png`.
 
 ```{r dist_compare, fig.height=5}
 dc <- rbind(lengths[measure == primary, .(file_stem, unit = "Reads", length)],
@@ -643,8 +643,8 @@ draw_dc <- function(s, title) {
 first <- names(rl_by)[1]
 p_dc <- draw_dc(first, paste("Example sample:", first))
 print(p_dc)
-if (params$plot_per_sample) for (s in names(rl_by))
-  save_plot(draw_dc(s, s), file.path(plots_dir, "reads_vs_molecules", paste0(s, ".png")), 9, 5.5)
+if (want_plot("reads_vs_molecules", params)) for (s in names(rl_by))
+  save_plot(draw_dc(s, s), plot_path(plots_dir, "reads_vs_molecules", s, primary), 9, 5.5)
 ```
 
 ---

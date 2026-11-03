@@ -36,6 +36,8 @@ unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module 
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 xlsx_path <- file.path(ins_dir, "instability.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
 unit_cols <- c(reads = "grey40", molecules = "#00838f")
+# Every figure names the two units the same way, reads first
+unit_labs <- c(reads = "Reads", molecules = "Molecules (UMI-collapsed)")
 ```
 
 # Overview
@@ -78,7 +80,12 @@ The setpoint is the **`r params$control_setpoint_metric`**: the sample's own (`s
 **Outputs:**
 
 - `06_instability/instability.xlsx` – a `definitions` sheet (every column, what it means and its units), ranges, distribution statistics, peaks, controls, instability metrics, tract-comparison statistics
-- `06_instability/plots/` – control setpoints, instability index by range, timecourses by group for every measure and range, tract-comparison plots
+- `06_instability/instability_metrics.tsv` and `distribution_summary.tsv` – the two main tables as plain text, one row per sample, unit, measure and range, for your own analyses in R, Python or Prism
+- Every plot file is named `{plot type}_{sample or measure}_{range}_{unit}.png`; the unit is `combined` (reads and molecules in one figure), `reads` or `molecules`, as chosen by `plot_units` (`r paste(plot_units_for(params, isTRUE(params$umi)), collapse = ", ")` in this run)
+- `06_instability/plots/` – `counts_per_range_*`, `control_setpoints_*`, `instability_index_by_range_*`, `experiment_map.png`
+- `06_instability/plots/timecourse/` – the headline metrics against time, every measure and every range
+- `06_instability/plots/pair_trend/`, `pair_correlation/` – tract comparison for every range (`pair_trend_{A}_vs_{B}_{range}_{unit}.png`)
+- `06_instability/plots/pair_scatter/` – each sample's two tract lengths per read or molecule, one panel per range (`pair_scatter_{sample}_{A}_vs_{B}_{reads|molecules}.png`)
 
 ---
 
@@ -95,6 +102,20 @@ if (isTRUE(params$umi) && file.exists(m4_path)) {
   units$molecules <- module4_output$molecule_lengths[, .(file_stem, id = molecule_id, measure, length)]
 }
 samples_in_data <- unique(units$reads$file_stem)
+# Plots that can show reads and molecules are drawn once per version in plot_units:
+# combined (both, in one figure), reads, molecules. The first version is shown in the
+# report; every version is saved, with the version at the end of the file name
+have_mol <- "molecules" %in% names(units)
+unit_title <- c(combined = "reads and molecules", reads = "reads", molecules = "molecules (UMI-collapsed)")
+draw_units <- function(make, path_fn, w, h, show = TRUE, can_combine = TRUE) {
+  first <- TRUE
+  for (u in plot_units_for(params, have_mol, can_combine)) {
+    p <- make(unit_members(u), u)
+    if (is.null(p)) next
+    if (show && first) { print(p); first <- FALSE }
+    save_plot(p, path_fn(u), w, h)
+  }
+}
 st <- load_settings(params$path_settings, samples_in_data)
 settings <- st$used
 range_table <- build_range_table(settings, measures$measure, primary)
@@ -180,16 +201,18 @@ timings["Distributions"] <- proc.time()["elapsed"] - .t
 Each point is one sample: how many reads (and molecules) fall in each range of the primary measure. The dashed line is `range_min_n` (`r params$range_min_n`): a sample with fewer reads (or molecules) than this in a range gets no statistics or metrics for that range (they are left blank, with the count kept in `n_used`), and a control sample below it is left out of that range's group setpoint. This stops a few stray reads – from a PCR smear, or from another sample through barcode cross-talk – from giving a modal length or an instability index, as in a range above the normal allele of a sample with no expanded allele. `r rc_few <- distribution_summary[too_few == TRUE & n_used > 0, .N]; if (rc_few) sprintf('In this run %d sample–range combinations had at least one read but fewer than %d.', rc_few, params$range_min_n) else ''`
 
 ```{r range_counts, fig.height=5}
-rc <- distribution_summary[measure == primary]
-p_rc <- ggplot(rc, aes(analysis_range_name, pmax(n_total, 1), colour = unit)) +
+draw_units(function(us, u) {
+rc <- distribution_summary[measure == primary & unit %in% us]
+if (!nrow(rc)) return(NULL)
+ggplot(rc, aes(analysis_range_name, pmax(n_total, 1), colour = unit)) +
   geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
   geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.6, size = 1.2) +
   geom_hline(yintercept = params$range_min_n, linetype = "dashed", colour = "grey30") +
-  scale_y_log10(labels = comma) + scale_colour_manual(values = unit_cols, name = NULL) +
-  labs(x = "Analysis range", y = "Count in range (log scale)", title = paste("Reads and molecules per range:", primary),
+  scale_y_log10(labels = comma) + scale_colour_manual(values = unit_cols, breaks = names(unit_cols), labels = unit_labs, name = NULL) +
+  labs(x = "Analysis range", y = "Count in range (log scale)", title = sprintf("Count per range, %s: %s", unit_title[[u]], primary),
        subtitle = sprintf("Dashed line = range_min_n (%d): below it a range gets no statistics or metrics", params$range_min_n)) +
   theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
-print(p_rc); save_plot(p_rc, file.path(plots_dir, "counts_per_range.png"), 11, 5)
+}, function(u) plot_path(plots_dir, "counts_per_range", primary, unit = u), 11, 5)
 ```
 
 ---
@@ -229,16 +252,16 @@ if (nrow(group_controls)) dt_full(group_controls, caption = sprintf("Group contr
 ```{r control_plot, eval=nrow(group_controls) > 0, fig.height=4.5}
 cp <- ctrl_pool[measure == primary & analysis_range_name %in% plot_ranges_c][, unit := factor(unit, levels = c("reads", "molecules"))]
 gcp <- group_controls[measure == primary & analysis_range_name %in% plot_ranges_c]
-if (nrow(cp)) {
-  p_ctrl <- ggplot(cp, aes(unit, get(sp_metric), colour = unit)) +
-    geom_crossbar(data = gcp, aes(y = control_setpoint, ymin = control_setpoint, ymax = control_setpoint), width = 0.6, colour = "grey20", linewidth = 0.4) +
+if (nrow(cp)) draw_units(function(us, u) {
+  cpu <- cp[unit %in% us]; if (!nrow(cpu)) return(NULL)
+  ggplot(cpu, aes(unit, get(sp_metric), colour = unit)) +
+    geom_crossbar(data = gcp[unit %in% us], aes(y = control_setpoint, ymin = control_setpoint, ymax = control_setpoint), width = 0.6, colour = "grey20", linewidth = 0.4) +
     geom_jitter(width = 0.12, height = 0, size = 2, alpha = 0.8) +
     facet_grid(analysis_range_name ~ group_label, scales = "free_y", labeller = labeller(group_label = as_labeller(wrap_label))) +
-    scale_colour_manual(values = unit_cols, guide = "none") +
-    labs(x = NULL, y = paste("Control sample", gsub("_", " ", sp_metric)), title = paste("Control samples and group setpoints:", primary),
+    scale_colour_manual(values = unit_cols, guide = "none") + scale_x_discrete(labels = unit_labs) +
+    labs(x = NULL, y = paste("Control sample", gsub("_", " ", sp_metric)), title = sprintf("Control samples and group setpoints, %s: %s", unit_title[[u]], primary),
          subtitle = "Points = control samples; bar = the group setpoint") + theme_bw() + theme(strip.text = element_text(size = 7))
-  print(p_ctrl); save_plot(p_ctrl, file.path(plots_dir, "control_setpoints.png"), min(40, 3 + 2.2 * uniqueN(cp$group_label)), 2 + 2.5 * length(plot_ranges_c))
-}
+}, function(u) plot_path(plots_dir, "control_setpoints", primary, unit = u), min(40, 3 + 2.2 * uniqueN(cp$group_label)), 2 + 2.5 * length(plot_ranges_c))
 ```
 
 ---
@@ -317,6 +340,7 @@ hl_labels <- c(modal_length = "Modal length", median_length = "Median length", m
                setNames(paste0("Share ", params$expansion_thresholds, "+ units\nbelow the setpoint"), threshold_col(params$expansion_thresholds, "below")),
                share_above_setpoint = "Share above\nthe setpoint", share_below_setpoint = "Share below\nthe setpoint")
 timecourse_plot <- function(d, title) {
+  if (!nrow(d)) return(NULL)
   # One row per metric (each with its own y axis, % ticks for proportions), one column per group
   rows <- lapply(seq_along(hl), function(k) {
     v <- hl[k]; dd <- d[, .(time, group_label, unit, value = get(v))][is.finite(value)]
@@ -326,7 +350,7 @@ timecourse_plot <- function(d, title) {
       else ggplot(dd, aes(group_label, value, colour = unit)) + geom_boxplot(outlier.shape = NA, fill = NA) + scale_x_discrete(labels = display_group) +
         geom_jitter(width = 0.15, height = 0, alpha = 0.6)
     base + facet_wrap(~ group_label, nrow = 1, scales = if (has_time) "fixed" else "free_x", labeller = as_labeller(function(x) wrap_label(x, 40))) +
-      scale_colour_manual(values = unit_cols, name = NULL, drop = TRUE) +
+      scale_colour_manual(values = unit_cols, breaks = names(unit_cols), labels = unit_labs, name = NULL, drop = TRUE) +
       (if (is_prop) scale_y_continuous(labels = pct_axis()) else scale_y_continuous()) +
       labs(x = if (k == length(hl)) (if (has_time) params$time_label else NULL) else NULL, y = if (v %in% names(hl_labels)) hl_labels[[v]] else v) +
       theme_bw(base_size = 13) + theme(legend.position = if (k == 1) "top" else "none",
@@ -341,7 +365,7 @@ n_groups <- length(unique(instability_metrics$group_label))
 tc_w <- min(40, 3.5 + 3.6 * n_groups); tc_h <- min(45, 2.1 * length(hl) + 2)
 ```
 
-The headline metrics for each group, plotted against time: one column per group, one row per metric, each row on its own scale. By default these are the modal, median and mean length, the instability, expansion and contraction indices, and the shares of reads at least 5 units above and below the setpoint (`headline_metrics` sets them; every metric is in instability.xlsx, and the noisier expansion and contraction ratios can be added). Length metrics (modal, median, mean) are the sample's own; the instability metrics are `r gsub("_", " ", hl_type)`. Reads are grey`r if ("molecules" %in% names(units)) " and molecules teal" else ""`. Shown here: **`r primary`**, ranges `r paste(plot_ranges, collapse = ", ")`. Every measure and range is saved in `plots/timecourse/`.
+The headline metrics for each group, plotted against time: one column per group, one row per metric, each row on its own scale. By default these are the modal, median and mean length, the instability, expansion and contraction indices, and the shares of reads at least 5 units above and below the setpoint (`headline_metrics` sets them; every metric is in instability.xlsx, and the noisier expansion and contraction ratios can be added). Length metrics (modal, median, mean) are the sample's own; the instability metrics are `r gsub("_", " ", hl_type)`. Reads are grey`r if ("molecules" %in% names(units)) " and molecules teal" else ""`. Shown here: **`r primary`**, ranges `r paste(plot_ranges, collapse = ", ")`. Every measure and range is saved as `plots/timecourse/timecourse_{measure}_{range}_{unit}.png`, where the unit is `combined` (reads and molecules), `reads` or `molecules` as chosen by `plot_units`.
 
 ```{r headline_plots, fig.width=tc_w, fig.height=tc_h, results='asis'}
 .t <- proc.time()["elapsed"]
@@ -350,9 +374,10 @@ for (m in measures$measure) for (rg in sort(unique(range_table$range_name[range_
   # A range with no reads in any sample has no metric to draw
   if (!nrow(d) || !any(vapply(hl, function(v) any(is.finite(d[[v]])), logical(1)))) next
   lab <- range_table$range_text[range_table$measure == m & range_table$range_name == rg][1]
-  p <- timecourse_plot(d, sprintf("%s, %s (%s)", m, rg, lab))
-  save_plot(p, file.path(plots_dir, "timecourse", safe_path(m), paste0(safe_path(m), "-", rg, ".png")), tc_w, tc_h)
-  if (m == primary && rg %in% plot_ranges) { cat("\n\n### ", m, ", ", rg, " (", lab, ")\n\n", sep = ""); print(p) }
+  show <- m == primary && rg %in% plot_ranges
+  if (show) cat("\n\n### ", m, ", ", rg, " (", lab, ")\n\n", sep = "")
+  draw_units(function(us, u) timecourse_plot(d[unit %in% us], sprintf("%s, %s (%s): %s", m, rg, lab, unit_title[[u]])),
+             function(u) plot_path(plots_dir, "timecourse", m, rg, unit = u), tc_w, tc_h, show = show)
 }
 timings["Timecourse plots"] <- proc.time()["elapsed"] - .t
 ```
@@ -369,16 +394,17 @@ if (nrow(ir)) {
                                      by = .(analysis_range_name = range_name)]
   ir <- rlab[ir, on = "analysis_range_name"][, unit := factor(unit, levels = c("reads", "molecules"))]
   ir[, xlab := factor(paste0(analysis_range_name, "\n", range_text), levels = unique(paste0(rlab$analysis_range_name, "\n", rlab$range_text)[order(rlab$analysis_range_name)]))]
-  p_ir <- ggplot(ir, aes(xlab, instability_index, colour = unit)) + geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
+  draw_units(function(us, u) { iru <- ir[unit %in% us]; if (!nrow(iru)) return(NULL)
+  ggplot(iru, aes(xlab, instability_index, colour = unit)) + geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
     geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
     geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.5, size = 1) +
     facet_wrap(~ group_label, ncol = 1, labeller = as_labeller(function(x) wrap_label(x, 80))) +
-    scale_colour_manual(values = unit_cols, name = NULL) +
-    labs(x = "Analysis range", y = "Instability index (units)", title = paste("Instability index by range:", primary),
+    scale_colour_manual(values = unit_cols, breaks = names(unit_cols), labels = unit_labs, name = NULL) +
+    labs(x = "Analysis range", y = "Instability index (units)", title = sprintf("Instability index by range, %s: %s", unit_title[[u]], primary),
          subtitle = paste("Each point is one sample;", gsub("_", " ", hl_type))) +
     theme_bw() + theme(axis.text.x = if (uniqueN(ir$analysis_range_name) > 6) element_text(angle = 90, vjust = 0.5, hjust = 1, size = 7) else element_text(size = 8),
                        legend.position = "top")
-  print(p_ir); save_plot(p_ir, file.path(plots_dir, "instability_index_by_range.png"), min(40, 4 + 0.9 * uniqueN(ir$analysis_range_name)), min(40, 1.5 + 2.4 * uniqueN(ir$group_label)))
+  }, function(u) plot_path(plots_dir, "instability_index_by_range", primary, unit = u), min(40, 4 + 0.9 * uniqueN(ir$analysis_range_name)), min(40, 1.5 + 2.4 * uniqueN(ir$group_label)))
 }
 ```
 
@@ -406,12 +432,15 @@ has_pairs <- length(pairs) > 0
 ```{r pairs, eval=has_pairs, fig.height=5.5, results='asis'}
 .t <- proc.time()["elapsed"]
 pair_stats <- list(); pair_bins <- list()
+# The per-sample scatter cannot overlay reads and molecules, so "combined" in plot_units gives one figure for each
+scatter_units <- if (want_plot("pair_scatter", params)) plot_units_for(params, have_mol, can_combine = FALSE) else character(0)
 for (pr in pairs) {
   A <- pr[1]; B <- pr[2]
   for (u in names(wide)) {
     W <- wide[[u]]
     if (!all(c(A, B) %in% names(W))) next
-    for (rg in plot_ranges) {
+    by_range <- list()
+    for (rg in all_ranges_A <- sort(unique(range_table$range_name[range_table$measure == A]))) {
       rr <- as.data.table(range_table)[measure == A & range_name == rg]
       if (!nrow(rr)) next
       d <- rr[, .(file_stem, range_measure, lo, hi)][W, on = "file_stem", nomatch = NULL]
@@ -427,44 +456,57 @@ for (pr in pairs) {
       pb <- d[, .(mean_dB = mean(dB), n = .N), by = .(file_stem, dA_bin)][meta, on = "file_stem", nomatch = NULL]
       pb[, `:=`(unit = u, measure_A = A, measure_B = B, analysis_range_name = rg)]
       pair_bins[[length(pair_bins) + 1]] <- pb
-      # per-sample scatter
-      if (params$plot_per_sample) for (s in unique(d$file_stem)) {
-        ds <- d[file_stem == s]; if (nrow(ds) > params$pair_max_points) { set.seed(123); ds <- ds[sample(.N, params$pair_max_points)] }
-        p <- ggplot(ds, aes(a, b)) + geom_jitter(width = 0.25, height = 0.25, alpha = 0.3, size = 0.8) +
-          labs(x = paste(A, "length"), y = paste(B, "length"), title = s, subtitle = sprintf("%s, %s, %s; each point = one %s, jittered by up to 0.25", u, rg, A, sub("s$", "", u))) + theme_bw()
-        save_plot(p, file.path(plots_dir, "pairs", paste0(A, "_vs_", B), u, paste0(s, "-", rg, ".png")), 7, 6)
+      if (u %in% scatter_units) { set.seed(123); by_range[[rg]] <- d[, .SD[sample(.N, min(.N, params$pair_max_points))], by = file_stem][, .(file_stem, a, b, range = rg)] }
+    }
+    # One figure per sample: every range of A in its own panel (labelled with its lengths)
+    if (u %in% scatter_units && length(by_range)) {
+      br <- rbindlist(by_range)
+      rl <- unique(as.data.table(range_table)[measure == A, .(range = range_name, range_label = sub(paste0("^", A, " "), "", range_text))], by = "range")
+      br[, panel := factor(paste0(range, " (", rl$range_label[match(range, rl$range)], ")"), levels = unique(paste0(rl$range, " (", rl$range_label, ")"))[order(rl$range)])]
+      for (s in unique(br$file_stem)) {
+        ds <- br[file_stem == s]; ds[, panel := droplevels(panel)]
+        p <- ggplot(ds, aes(a, b)) + geom_jitter(width = 0.25, height = 0.25, alpha = 0.3, size = 0.6) +
+          facet_wrap(~ panel, scales = "free") +
+          labs(x = paste(A, "length"), y = paste(B, "length"), title = sprintf("%s: %s against %s, %s", s, B, A, unit_title[[u]]),
+               subtitle = sprintf("One panel per %s range; each point = one %s (up to %s per range), jittered by up to 0.25", A, if (u == "reads") "read" else "UMI-collapsed molecule", comma(params$pair_max_points))) + theme_bw()
+        nc <- ceiling(sqrt(nlevels(ds$panel)))
+        save_plot(p, plot_path(plots_dir, "pair_scatter", s, paste0(A, "_vs_", B), unit = u), 3 + 3 * nc, 2 + 2.8 * ceiling(nlevels(ds$panel) / nc))
       }
     }
   }
 }
 pair_stats <- rbindlist(pair_stats); pair_bins <- rbindlist(pair_bins)
 timings["Pairs"] <- proc.time()["elapsed"] - .t
-for (pr in pairs) for (rg in plot_ranges) {
+for (pr in pairs) for (rg in sort(unique(pair_bins$analysis_range_name))) {
   A <- pr[1]; B <- pr[2]
+  show <- rg %in% plot_ranges   # drawn here for plot_ranges; saved for every range
+  ab <- paste0(A, "_vs_", B)
   # A sample's bin with only a few reads or molecules gives a spike that is noise, so the
   # sample lines are drawn only where a bin holds at least 5
   pb <- pair_bins[measure_A == A & measure_B == B & analysis_range_name == rg & n >= 5]
   if (!nrow(pb)) next
-  cat(sprintf("\n\n### %s against %s, %s\n\n", B, A, rg))
-  cat(sprintf("For each sample, every %s's change from the sample's median in **%s** (x, rounded, capped at ±15) against its change in **%s** (y). Each thin line is one sample; the thick line is the mean across samples in the group. Each sample's line is drawn only where its bin holds at least 5 reads or molecules. A flat line at zero means %s does not change with %s; a rising line means reads that expanded in %s also lengthened in %s. Reads and molecules are drawn separately; read-level co-variation can partly reflect PCR and sequencing error on the same read.\n\n",
+  if (show) cat(sprintf("\n\n### %s against %s, %s\n\n", B, A, rg))
+  if (show) cat(sprintf("For each sample, every %s's change from the sample's median in **%s** (x, rounded, capped at ±15) against its change in **%s** (y). Each thin line is one sample; the thick line is the mean across samples in the group. Each sample's line is drawn only where its bin holds at least 5 reads or molecules. A flat line at zero means %s does not change with %s; a rising line means reads that expanded in %s also lengthened in %s. Reads and molecules are drawn separately; read-level co-variation can partly reflect PCR and sequencing error on the same read.\n\n",
               "read or molecule", A, B, B, A, A, B))
-  p <- ggplot(pb, aes(dA_bin, mean_dB, colour = unit)) +
+  draw_units(function(us, u) { pbu <- pb[unit %in% us]; if (!nrow(pbu)) return(NULL)
+  ggplot(pbu, aes(dA_bin, mean_dB, colour = unit)) +
     geom_hline(yintercept = 0, linetype = "dashed") +
     geom_line(aes(group = interaction(file_stem, unit)), alpha = 0.25) +
     stat_summary(aes(group = unit), fun = mean, geom = "line", linewidth = 1.1) +
-    facet_wrap(~ group_label, labeller = as_labeller(function(x) wrap_label(x, 60))) + scale_colour_manual(values = unit_cols, name = NULL) +
+    facet_wrap(~ group_label, labeller = as_labeller(function(x) wrap_label(x, 60))) + scale_colour_manual(values = unit_cols, breaks = names(unit_cols), labels = unit_labs, name = NULL) +
     labs(x = sprintf("Change in %s from the sample median", A), y = sprintf("Mean change in %s", B),
-         title = sprintf("%s change against %s change, %s", B, A, rg)) + theme_bw() + theme(legend.position = "top")
-  print(p); save_plot(p, file.path(plots_dir, paste0("pair_", A, "_vs_", B, "_", rg, ".png")), 11, 5.5)
+         title = sprintf("%s change against %s change, %s: %s", B, A, rg, unit_title[[u]])) + theme_bw() + theme(legend.position = "top")
+  }, function(u) plot_path(plots_dir, "pair_trend", ab, rg, unit = u), 11, 5.5, show = show)
   ps <- pair_stats[measure_A == A & measure_B == B & analysis_range_name == rg][meta, on = "file_stem", nomatch = NULL]
-  p2 <- ggplot(ps, aes(group_label, rho, colour = unit)) + geom_hline(yintercept = 0, linetype = "dashed") +
+  draw_units(function(us, u) { psu <- ps[unit %in% us]; if (!nrow(psu)) return(NULL)
+  ggplot(psu, aes(group_label, rho, colour = unit)) + geom_hline(yintercept = 0, linetype = "dashed") +
     geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
     geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.7) +
-    scale_colour_manual(values = unit_cols, name = NULL) +
+    scale_colour_manual(values = unit_cols, breaks = names(unit_cols), labels = unit_labs, name = NULL) +
     scale_x_discrete(labels = function(x) wrap_label(x, 25)) +
-    labs(x = NULL, y = "Spearman correlation", title = sprintf("Per-sample correlation of %s and %s lengths, %s", A, B, rg)) +
+    labs(x = NULL, y = "Spearman correlation", title = sprintf("Per-sample correlation of %s and %s lengths, %s: %s", A, B, rg, unit_title[[u]])) +
     theme_bw()
-  print(p2); save_plot(p2, file.path(plots_dir, paste0("pair_correlation_", A, "_vs_", B, "_", rg, ".png")), 10, 5)
+  }, function(u) plot_path(plots_dir, "pair_correlation", ab, rg, unit = u), 10, 5, show = show)
 }
 ```
 
@@ -482,6 +524,8 @@ save(module6_output, file = output_path, compression_level = 1)   # level 1: sev
 write_excel_function(list(definitions = metric_definitions(params$expansion_thresholds), range_table = range_table, distribution_summary = distribution_summary, modal_peaks = modal_peaks,
                           group_controls = group_controls, instability_metrics = instability_metrics, 
                           pair_stats = module6_output$pair_stats, excluded_samples = st$excluded), xlsx_path)
+fwrite(instability_metrics, file.path(ins_dir, "instability_metrics.tsv"), sep = "\t", na = "NA")
+fwrite(distribution_summary, file.path(ins_dir, "distribution_summary.tsv"), sep = "\t", na = "NA")
 ```
 
 ---

@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.1"
+duke_version <- "3.3.2"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -26,14 +26,14 @@ duke_version <- "3.3.1"
   `4` = c("umi", "umi_flank_5", "umi_flank_3", "umi_flank_max_mismatch", "umi_search_window", "umi_len_min",
           "umi_len_max", "umi_cluster_max_dist", "umi_min_reads", "umi_collapse_stat", "umi_top_cluster_k",
           "umi_top_cluster_w", "umi_top_cluster_wfrac", "umi_top_cluster_min_share", "umi_shortened_filter", "umi_shortened_min_units", "umi_shortened_min_share"),
-  `5` = c("cluster", "cluster_by", "repeat_cluster_max", "repeat_cluster_min_prop", "repeat_cluster_downsample",
+  `5` = c("cluster", "cluster_by", "cluster_unit", "repeat_cluster_max", "repeat_cluster_min_prop", "repeat_cluster_downsample",
           "haplotype_cluster_max", "haplotype_cluster_downsample", "haplotype_region", "haplotype_trim_length",
           "consensus_threshold", "consensus_downsample", "call_variants", "waterfall", "waterfall_downsample",
           "waterfall_per_cluster", "waterfall_flank_bp"),
   `6` = c("settings_signature", "range_peak_span", "range_min_n", "group_control", "control_sample_selection",
           "control_setpoint_metric", "control_aggregation_method", "expansion_thresholds", "cohort_plot_by", "time_label",
           "headline_metrics", "headline_setpoint_type", "plot_ranges", "measure_pairs", "pair_max_points"),
-  `7` = c("sample_cards", "repeat_histogram_binwidth", "settings_signature"))
+  `7` = c("sample_cards", "repeat_histogram_binwidth", "settings_signature", "plot_every_range", "plot_sample_ranges"))
 .module_upstream <- list(`1` = character(0), `2` = "1", `3` = "2", `4` = "3", `5` = c("3", "4"),
                          `6` = c("3", "4"), `7` = c("3", "4", "6"))
 
@@ -58,6 +58,18 @@ module_hashes <- function(p) {
   for (m in names(.module_keys)) {
     up <- unlist(h[.module_upstream[[m]]])
     h[[m]] <- substr(digest::digest(list(up, p[intersect(.module_keys[[m]], names(p))]), algo = "md5"), 1, 10)
+  }
+  # Which plots a module saves changes only that module: a suffix for its plot choice is
+  # added to its hash (not passed downstream), and only when the choice differs from the
+  # default, so results made before the plots setting existed are still resumed
+  cat_ <- plot_catalogue()
+  def <- resolve_plot_types(list(plots = "all"))
+  for (m in names(h)) {
+    ty <- cat_$type[cat_$module == as.integer(m)]
+    mine <- sort(intersect(p$plot_types %||% def, ty)); dflt <- sort(intersect(def, ty))
+    units_changed <- any(cat_$units[cat_$module == as.integer(m)]) && !identical(sort(p$plot_units %||% "combined"), "combined")
+    if (!identical(mine, dflt) || units_changed)
+      h[[m]] <- paste0(h[[m]], "-p", substr(digest::digest(list(mine, if (units_changed) sort(p$plot_units)), algo = "md5"), 1, 6))
   }
   h
 }
@@ -137,7 +149,8 @@ run_duke <- function(user_params, duke_root = getwd()) {
     for (u in .module_upstream[[m]]) {
       if (u == "4" && !isTRUE(p$umi)) next
       if (u == "6" && (is.na(p$path_settings) || !file.exists(p$path_settings))) next
-      if (!identical(stored_hash(file.path(results_dir, .module_data[[u]])), hashes[[u]]))
+      # (the data part only: a module whose plot choice changed still holds current data)
+      if (!identical(sub("-p.*$", "", stored_hash(file.path(results_dir, .module_data[[u]]))), sub("-p.*$", "", hashes[[u]])))
         stop("Module ", m, " needs Module ", u, " results made with the current parameters, but they are missing or out of date. ",
              "Add ", u, " to run_modules (resume will reuse whatever is still current).")
     }
@@ -156,6 +169,11 @@ run_duke <- function(user_params, duke_root = getwd()) {
     if (file.exists(out_path)) writeLines(hashes[[m]], paste0(out_path, ".hash"))
     cat("Done in", format_elapsed(as.numeric(difftime(Sys.time(), t0, units = "secs"))), "\n")
   }
+
+  rs <- tryCatch(write_run_summary(p), error = function(e) { cat("\nRun summary not written:", conditionMessage(e), "\n"); NULL })
+  if (!is.null(rs)) cat("\nRun summary: run_summary.xlsx (one row per sample, from every module)\n")
+  ix <- tryCatch(write_run_index(p, rs), error = function(e) { cat("\nindex.html not written:", conditionMessage(e), "\n"); NULL })
+  if (!is.null(ix)) cat("Index:       index.html (links every report, table and figure)\n")
 
   if (isTRUE(p$remove_temp)) {
     td <- file.path(p$dir_out, "temp")

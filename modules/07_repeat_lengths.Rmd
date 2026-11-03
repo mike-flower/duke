@@ -47,13 +47,16 @@ Every repeat-length distribution in one place:
 2. **Distributions by group** – for each group, a density (ridge) figure, with every read as a dot, and a histogram figure, with its samples stacked in time order: for all lengths and for each range drawn
 3. **Sample cards** – one figure per sample: for every measure, reads and (with UMIs) molecules in separate rows on their own scales, for all lengths and each range drawn, with each row's modal, median and mean marked
 
-Reads are grey and molecules teal throughout.
+Reads are grey and molecules (UMI-collapsed) teal throughout, and every figure and file name says which it shows.
 
 **Outputs:**
 
-- `07_repeat_lengths/plots/heatmap_{measure}_{reads|molecules}.png`
-- `07_repeat_lengths/plots/all_lengths/` and one folder per range drawn (`r if (isTRUE(params$plot_every_range)) "every range of the primary measure" else "plot_ranges; set plot_every_range = TRUE for every range"`), each with `by_group/{group}-density.png` and `-histogram.png`, and `by_sample/{sample}-density.png` and `-histogram.png` `r if (isTRUE(params$plot_sample_ranges)) "(written in this run)" else "(only with plot_sample_ranges = TRUE; not written in this run)"`
-- `07_repeat_lengths/plots/sample_cards/{sample}.png`
+- Every file is named `{plot type}_{sample or group}_{measure}_{all-lengths or range}_{unit}.png`, and saved in a folder named after the plot type; the unit is `combined` (reads and molecules in one figure), `reads` or `molecules`, as chosen by `plot_units` (`r paste(plot_units_for(params, isTRUE(params$umi)), collapse = ", ")` in this run). Which plot types are made is set by `plots`.
+- `07_repeat_lengths/plots/heatmap/` – every sample's distribution, one per measure and unit
+- `07_repeat_lengths/plots/group_density/`, `group_histogram/` – each group's samples, for all lengths and `r if (isTRUE(params$plot_every_range)) "every range of the primary measure" else "plot_ranges (plot_every_range = FALSE)"`
+- `07_repeat_lengths/plots/sample_ranges/` – each sample in every range
+- `07_repeat_lengths/plots/sample_card/` – each sample's every measure, for all lengths and the ranges drawn in the report
+- `07_repeat_lengths/plots/sample_density/`, `sample_histogram/` – each sample, one file per range (only when selected in `plots`)
 - `07_repeat_lengths/repeat_lengths.xlsx` – the sample order and labels used
 
 ```{r load}
@@ -99,6 +102,14 @@ range_vals <- function(tab, idcol, m, rr = NULL) {
   tab[measure == m & get(idcol) %in% ids, length]
 }
 range_row <- function(s, m, rg) { r <- rt_s[[s]]; if (is.null(r)) return(NULL); r <- r[measure == m & range_name == rg]; if (nrow(r)) r[1] else NULL }
+# Versions of each figure (plot_units): combined (reads and molecules in one figure), reads, molecules.
+# The version is the last part of every file name.
+have_mol <- !is.null(mol)
+pu <- plot_units_for(params, have_mol)
+unit_title <- c(combined = "reads and molecules", reads = "reads", molecules = "molecules (UMI-collapsed)")
+# The reads (rd) and molecules (md) of one version, and which one is drawn as the main unit
+unit_version <- function(rd, md, u) switch(u, combined = list(rd = rd, md = md, main = "Reads"), reads = list(rd = rd, md = NULL, main = "Reads"),
+                                           molecules = list(rd = md, md = NULL, main = "Molecules"))
 ```
 
 `r if (!have_m6) "Module 6 has not been run (no settings file), so samples are not grouped and no ranges are drawn." else ""`
@@ -112,12 +123,12 @@ Each column is one sample and each row one repeat length; the colour is the shar
 ```{r heatmaps, results='asis', fig.height=7}
 .t <- proc.time()["elapsed"]
 hm_w <- min(45, max(9, 3 + 0.15 * length(samples)))
-for (u in c("reads", if (!is.null(mol)) "molecules")) for (m in measures$measure) {
+for (u in plot_units_for(params, have_mol, can_combine = FALSE)) for (m in measures$measure) {
   src <- if (u == "reads") lengths[measure == m, .(file_stem, length)] else mol[measure == m, .(file_stem, length)]
   if (!nrow(src)) next
   d <- meta[, .(file_stem, sample_label = short_label, group_label)][src, on = "file_stem"]
   p <- length_heatmap(d, sprintf("%s length, %s", m, u), params$repeat_histogram_binwidth, paste(m, "length"), u)
-  save_plot(p, file.path(plots_dir, sprintf("heatmap_%s_%s.png", safe_path(m), u)), hm_w, 7)
+  save_plot(p, plot_path(plots_dir, "heatmap", m, unit = u), hm_w, 7)
   if (u == "reads" || m == primary) { cat(sprintf("\n\n## %s, %s\n\n", m, u)); print(p) }
 }
 timings["Heatmaps"] <- proc.time()["elapsed"] - .t
@@ -132,11 +143,11 @@ For each group, its samples stacked in time order, for the `r primary` length: a
 - **Density (ridge).** Each sample's reads as a grey density, scaled to the sample's own height, so its shape is visible whatever its depth`r if (!is.null(mol)) ", with the molecules as a teal line on the same row" else ""`. Inside each ridge, every read is a dot (up to `r format(params$plot_dots_max, big.mark = ",")` per sample, drawn at random, spread slightly sideways and scattered between the baseline and the ridge), so the dots stay within their own sample and where reads are sparse – a thin expansion tail, a few outliers – they can be seen individually; the red dashed line is the reads' modal length. In the all-lengths figure the largest allele sets the height, so look at the range figures for the shape of a smaller one.
 - **Histogram.** One row per sample, with reads`r if (!is.null(mol)) " and molecules in separate columns" else ""`, each panel the share of that sample's reads`r if (!is.null(mol)) " (or molecules)" else ""` at each length on its own scale.
 
-The first group's figures are shown here (the density and histogram for all lengths, and the density for each range drawn); every group is in `plots/all_lengths/by_group/` and `plots/{range}/by_group/`.
+The first group's figures are shown here (the density and histogram for all lengths, and the density for each range drawn); every group is in `plots/group_density/` and `plots/group_histogram/`, named `group_density_{group}_{measure}_{all-lengths or range}_{unit}.png`, where the unit is `combined`, `reads` or `molecules` (`plot_units`).
 
 ```{r by_group, results='asis', fig.height=5}
 .t <- proc.time()["elapsed"]
-folders <- c(all_lengths = NA_character_, setNames(group_ranges, group_ranges))
+folders <- c(`all-lengths` = NA_character_, setNames(group_ranges, group_ranges))
 # Each sample's reads (and molecules) of the primary measure for one folder, labelled
 folder_data <- function(fs, rg) {
   rd <- rbindlist(lapply(fs, function(s) {
@@ -161,20 +172,24 @@ done <- apply_fn(seq_len(nrow(jobs)), function(i) {
   fd <- folder_data(meta[group_label == g, file_stem], rg)
   if (!nrow(fd$rd)) return(NULL)
   n <- uniqueN(fd$rd$file_stem); xl <- folder_xlim(fd$rd$length)
-  ttl <- sprintf("%s: %s%s", display_group(g), primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg, " (", range_row(fd$rd$file_stem[1], primary, rg)$range_text, ")"))
-  pr <- ridge_dots_plot(fd$rd, fd$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max)
-  ph <- hist_rows_plot(fd$rd, fd$md, ttl, paste(primary, "length (repeat units)"), xl, params$repeat_histogram_binwidth)
-  dir <- file.path(plots_dir, f, "by_group")
-  save_plot(pr, file.path(dir, paste0(safe_path(g), "-density.png")), 11, min(45, 1.8 + 0.5 * n))
-  save_plot(ph, file.path(dir, paste0(safe_path(g), "-histogram.png")), if (is.null(fd$md)) 9 else 13, min(45, 1.4 + 0.7 * n))
+  for (u in pu) {
+    v <- unit_version(fd$rd, fd$md, u)
+    if (is.null(v$rd) || !nrow(v$rd)) next
+    ttl <- sprintf("%s: %s%s, %s", display_group(g), primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg, " (", range_row(fd$rd$file_stem[1], primary, rg)$range_text, ")"), unit_title[[u]])
+    if (want_plot("group_density", params))
+      save_plot(ridge_dots_plot(v$rd, v$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max, main_unit = v$main),
+                plot_path(plots_dir, "group_density", g, primary, f, unit = u), 11, min(45, 1.8 + 0.5 * n))
+    if (want_plot("group_histogram", params))
+      save_plot(hist_rows_plot(v$rd, v$md, ttl, paste(primary, "length (repeat units)"), xl, params$repeat_histogram_binwidth, main_unit = v$main),
+                plot_path(plots_dir, "group_histogram", g, primary, f, unit = u), if (is.null(v$md)) 9 else 13, min(45, 1.4 + 0.7 * n))
+  }
   TRUE
 })
 # The first group's figures, shown here from the files just written, so each keeps the
 # height it was saved with (a figure size changed partway through a chunk is ignored)
 g1 <- meta$group_label[1]
 for (f in names(folders)[seq_len(min(length(folders), 3))]) {
-  dir <- file.path(plots_dir, f, "by_group")
-  files <- file.path(dir, paste0(safe_path(g1), c("-density.png", if (is.na(folders[[f]])) "-histogram.png")))
+  files <- c(plot_path(plots_dir, "group_density", g1, primary, f, unit = pu[1]), if (is.na(folders[[f]])) plot_path(plots_dir, "group_histogram", g1, primary, f, unit = pu[1]))
   files <- files[file.exists(files)]
   if (!length(files)) next
   cat(sprintf("\n\n## %s, %s\n\n", display_group(g1), if (is.na(folders[[f]])) "all lengths" else folders[[f]]))
@@ -183,49 +198,107 @@ for (f in names(folders)[seq_len(min(length(folders), 3))]) {
 timings["By group"] <- proc.time()["elapsed"] - .t
 ```
 
-```{r by_sample, eval=isTRUE(params$plot_sample_ranges)}
+```{r by_sample, eval=want_plot("sample_density", params) || want_plot("sample_histogram", params)}
 .t <- proc.time()["elapsed"]
 invisible(apply_fn(meta$file_stem, function(s) {
   for (f in names(folders)) {
     rg <- folders[[f]]; fd <- folder_data(s, rg)
     if (!nrow(fd$rd)) next
     xl <- folder_xlim(fd$rd$length)
-    ttl <- sprintf("%s: %s%s", s, primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg))
-    dir <- file.path(plots_dir, f, "by_sample")
-    save_plot(ridge_dots_plot(fd$rd, fd$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max), file.path(dir, paste0(s, "-density.png")), 10, 3)
-    d <- rbind(fd$rd[, .(length, unit = "Reads")], if (!is.null(fd$md)) fd$md[, .(length, unit = "Molecules")])
-    save_plot(dist_rows(d, ttl, paste(primary, "length (repeat units)"), params$repeat_histogram_binwidth, xlim = xl), file.path(dir, paste0(s, "-histogram.png")), 10, if (is.null(fd$md)) 3.5 else 5.5)
+    for (u in pu) {
+      v <- unit_version(fd$rd, fd$md, u)
+      if (is.null(v$rd) || !nrow(v$rd)) next
+      ttl <- sprintf("%s: %s%s, %s", s, primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg), unit_title[[u]])
+      if (want_plot("sample_density", params))
+        save_plot(ridge_dots_plot(v$rd, v$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max, main_unit = v$main),
+                  plot_path(plots_dir, "sample_density", s, primary, f, unit = u), 10, 3)
+      d <- rbind(v$rd[, .(length, unit = v$main)], if (!is.null(v$md)) v$md[, .(length, unit = "Molecules")])
+      if (want_plot("sample_histogram", params))
+        save_plot(dist_rows(d, ttl, paste(primary, "length (repeat units)"), params$repeat_histogram_binwidth, xlim = xl),
+                  plot_path(plots_dir, "sample_histogram", s, primary, f, unit = u), 10, if (is.null(v$md)) 3.5 else 5.5)
+    }
   }
   TRUE
 }))
 timings["By sample"] <- proc.time()["elapsed"] - .t
-cat(sprintf("Per-sample density and histogram figures written for %d samples into plots/{folder}/by_sample/.\n", nrow(meta)))
+cat(sprintf("Per-sample density and histogram figures written for %d samples into plots/sample_density/ and plots/sample_histogram/.\n", nrow(meta)))
+```
+
+---
+
+# Every range, sample by sample
+
+`r if (have_m6) sprintf("For each sample, the %s length in every analysis range (%d ranges, each in its own panel), after all lengths%s. Each panel is the share of the sample's reads (or molecules) at each length in that range, with a smoothed line, and the range's modal (red), median (purple) and mean (orange) from Module 6 as dashed lines, with their values and the count in the panel's header. This is where to look at any range in any sample; the sample cards below show every measure but only the ranges drawn in the report (%s). One sample is shown here.", primary, length(unique(range_table$range_name[range_table$measure == primary])), if (is.null(mol)) " (reads only: no UMIs in this run)" else sprintf(", one figure per version in plot_units (%s): combined has the reads and the molecules in separate rows of each panel", paste(pu, collapse = ", ")), paste(plot_ranges, collapse = ", ")) else "Module 6 has not been run, so there are no ranges."`
+
+- `07_repeat_lengths/plots/sample_ranges/sample_ranges_{sample}_{measure}_{unit}.png`, unit `combined`, `reads` or `molecules`
+
+```{r sample_ranges, eval=have_m6 && want_plot("sample_ranges", params), results='asis'}
+.t <- proc.time()["elapsed"]
+all_rg <- sort(unique(range_table$range_name[range_table$measure == primary]))
+sr_dir <- file.path(plots_dir, "sample_ranges")
+make_range_grid <- function(s, u) {
+  us <- unit_members(u)
+  tabs <- list(reads = rl_s[[s]], molecules = ml_s[[s]])[us]
+  if (!any(vapply(tabs, function(t) !is.null(t) && nrow(t) > 0, logical(1)))) return(NULL)
+  ulab <- c(reads = "Reads", molecules = "Molecules")
+  panels <- list()
+  for (rg in c(NA, all_rg)) {
+    rr <- if (is.na(rg)) NULL else range_row(s, primary, rg)
+    if (!is.na(rg) && is.null(rr)) next
+    d <- rbindlist(lapply(us, function(x) if (!is.null(tabs[[x]])) data.table(length = range_vals(tabs[[x]], if (x == "reads") "qname" else "molecule_id", primary, rr), unit = ulab[[x]])))
+    d <- d[is.finite(length)]
+    if (!nrow(d)) next
+    mk <- NULL
+    if (!is.na(rg) && !is.null(dist)) {
+      mk <- dist[file_stem == s & measure == primary & analysis_range_name == rg & unit %in% us, .(unit = ulab[unit], modal = modal_length, median = median_length, mean = mean_length)]
+      mk <- if (nrow(mk)) melt(mk, id.vars = "unit", variable.name = "stat") else NULL
+    }
+    ttl <- if (is.na(rg)) "All lengths" else sprintf("%s (%s)", rg, sub(paste0("^", primary, " "), "", rr$range_text %||% rr$range_label))
+    panels[[length(panels) + 1]] <- dist_rows(d, ttl, paste(primary, "length"), params$repeat_histogram_binwidth, marks = mk) +
+      theme(plot.title = element_text(size = 10), strip.text = element_text(size = 7))
+  }
+  if (!length(panels)) return(NULL)
+  g <- meta[file_stem == s, group_label]; tm <- meta[file_stem == s, time]
+  nc <- min(4, length(panels))
+  list(plot = patchwork::wrap_plots(panels, ncol = nc) +
+         patchwork::plot_annotation(title = sprintf("%s: %s, %s", s, primary, unit_title[[u]]),
+                                    subtitle = paste0(display_group(g), if (!is.na(tm)) paste0(", time ", tm) else "", "; all lengths, then every analysis range")),
+       w = 4.2 * nc, h = 1.2 + (if (length(tabs) > 1) 4.4 else 2.6) * ceiling(length(panels) / nc))
+}
+invisible(apply_fn(meta$file_stem, function(s) {
+  for (u in pu) { g <- make_range_grid(s, u); if (!is.null(g)) save_plot(g$plot, plot_path(plots_dir, "sample_ranges", s, primary, unit = u), g$w, g$h) }
+  TRUE
+}))
+f1 <- plot_path(plots_dir, "sample_ranges", meta$file_stem[1], primary, unit = pu[1])
+if (file.exists(f1)) cat(sprintf("\n\n![](%s)\n\n", md_path(f1)))
+timings["Every range by sample"] <- proc.time()["elapsed"] - .t
 ```
 
 ---
 
 # Sample cards
 
-One figure per sample, for every measure: the first column is all lengths, the next the reads in each range drawn (`r paste(plot_ranges, collapse = ", ")`). Reads (grey)`r if (!is.null(mol)) " and molecules (teal) are in separate rows, each on its own scale" else " are"` drawn as the share at each length (bars) with a smoothed line (kernel density, bandwidth 1 unit, or 0.5 for a short tract) over them. In the range columns, each row carries its own modal (red), median (purple) and mean (orange) from Module 6 as dashed lines, with their values in the row's header`r if (!is.null(mol)) ", so the read and molecule statistics are each beside their own data" else ""`. The subtitle gives the sample's read accounting. One card from each of up to four groups is shown here for `r primary` only, so it is large enough to read; the cards in `plots/sample_cards/` have every measure.
+One figure per sample, for every measure: the first column is all lengths, the next the reads in each range drawn (`r paste(plot_ranges, collapse = ", ")`). Reads (grey)`r if (!is.null(mol)) " and molecules (teal) are in separate rows, each on its own scale" else " are"` drawn as the share at each length (bars) with a smoothed line (kernel density, bandwidth 1 unit, or 0.5 for a short tract) over them. In the range columns, each row carries its own modal (red), median (purple) and mean (orange) from Module 6 as dashed lines, with their values in the row's header`r if (!is.null(mol)) ", so the read and molecule statistics are each beside their own data" else ""`. The subtitle gives the sample's read accounting. One card from each of up to four groups is shown here for `r primary` only, so it is large enough to read; the cards in `plots/sample_card/` (`sample_card_{sample}_{unit}.png`, one per version in plot_units) have every measure.
 
-```{r sample_cards, eval=params$sample_cards, results='asis', fig.width=13.5}
+```{r sample_cards, eval=want_plot("sample_card", params), results='asis', fig.width=13.5}
 .t <- proc.time()["elapsed"]
-card_dir <- file.path(plots_dir, "sample_cards")
 show_s <- meta[, .SD[1], by = group_label][1:min(.N, 4), file_stem]
-make_card <- function(s, ms = measures$measure) {
+make_card <- function(s, ms = measures$measure, u = "combined") {
+  us <- unit_members(u)
   panels <- list()
   for (m in ms) {
     cols <- c(list(NULL), lapply(plot_ranges, function(rg) range_row(s, m, rg)))
     for (k in seq_along(cols)) {
       rr <- cols[[k]]
       if (k > 1 && is.null(rr)) next
-      d <- rbind(data.table(length = range_vals(rl_s[[s]], "qname", m, rr), unit = "Reads"),
-                 if (!is.null(ml_s[[s]])) data.table(length = range_vals(ml_s[[s]], "molecule_id", m, rr), unit = "Molecules"))
+      d <- rbind(if ("reads" %in% us) data.table(length = range_vals(rl_s[[s]], "qname", m, rr), unit = "Reads"),
+                 if ("molecules" %in% us && !is.null(ml_s[[s]])) data.table(length = range_vals(ml_s[[s]], "molecule_id", m, rr), unit = "Molecules"))
+      if (is.null(d)) next
       d <- d[is.finite(length)]
       if (!nrow(d)) next
       mk <- NULL
       if (k > 1 && !is.null(dist)) {
-        mk <- dist[file_stem == s & measure == m & analysis_range_name == rr$range_name, .(unit = ifelse(unit == "reads", "Reads", "Molecules"),
+        mk <- dist[file_stem == s & measure == m & analysis_range_name == rr$range_name & unit %in% us, .(unit = ifelse(unit == "reads", "Reads", "Molecules"),
                                                                                          modal = modal_length, median = median_length, mean = mean_length)]
         mk <- if (nrow(mk)) melt(mk, id.vars = "unit", variable.name = "stat") else NULL
       }
@@ -240,20 +313,22 @@ make_card <- function(s, ms = measures$measure) {
                                                if (!is.null(ml_s[[s]])) sprintf("; %s molecules", comma(uniqueN(ml_s[[s]]$molecule_id))) else "") else NULL
   g <- meta[file_stem == s, group_label]; tm <- meta[file_stem == s, time]
   patchwork::wrap_plots(panels, ncol = 1 + length(plot_ranges)) +
-    patchwork::plot_annotation(title = s, subtitle = paste0(display_group(g), if (!is.na(tm)) paste0(", time ", tm) else "", if (!is.null(sub)) paste0("\n", sub) else ""))
+    patchwork::plot_annotation(title = sprintf("%s: %s", s, unit_title[[u]]), subtitle = paste0(display_group(g), if (!is.na(tm)) paste0(", time ", tm) else "", if (!is.null(sub)) paste0("\n", sub) else ""))
 }
-row_h <- if (!is.null(mol)) 5 else 3.2
-card_h <- 1.6 + nrow(measures) * row_h
+row_h_of <- function(u) if (length(unit_members(u)) > 1) 5 else 3.2
 card_w <- 5.5 * (1 + length(plot_ranges))
 invisible(apply_fn(meta$file_stem, function(s) {
-  card <- make_card(s)
-  if (!is.null(card)) save_plot(card, file.path(card_dir, paste0(s, ".png")), card_w, card_h)
+  for (u in pu) {
+    card <- make_card(s, u = u)
+    if (!is.null(card)) save_plot(card, plot_path(plots_dir, "sample_card", s, unit = u), card_w, 1.6 + nrow(measures) * row_h_of(u))
+  }
   TRUE
 }))
+row_h <- row_h_of(pu[1])
 # The report shows each example card for the primary measure only, so it is large enough to read;
 # the saved cards hold every measure
 for (s in show_s) {
-  card <- make_card(s, primary)
+  card <- make_card(s, primary, pu[1])
   if (is.null(card)) next
   fl <- tempfile(fileext = ".png"); save_plot(card, fl, card_w, 1.6 + row_h)
   cat(sprintf("\n\n![](%s)\n\n", md_path(fl)))

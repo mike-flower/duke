@@ -31,9 +31,12 @@ cluster_by_repeat_length <- function(values, cluster_max = 6L, min_prop = 0.05, 
   # few units apart (14 and 20 merged, 124 cut at 138). Two kinds of component are left out
   # of the assignment, so that their reads go to whichever allele component explains them
   # best instead of forming a cluster of their own: those holding under min_prop of the
-  # reads, and broad ones whose spread is more than a fifth of their length (the smear of
-  # PCR-shortened reads between the alleles, which has no peak of its own; an allele, even a
-  # broad expanded one, has a spread of well under a fifth of its length). The assignment is made on the distinct lengths, and each run of
+  # reads, and broad ones (spread more than a fifth of their length) lying between two narrower
+  # peaks: the smear of PCR-shortened reads between the alleles, which has no peak of its
+  # own. Before v3.3.2 every broad component was left out, so in samples where the mixture
+  # fitted the expanded allele as one broad component (common for reads, whose expanded
+  # allele is spread by shortened copies) all its reads joined the normal allele and the
+  # sample came out as one cluster spanning both. The assignment is made on the distinct lengths, and each run of
   # consecutive lengths given one component becomes one cluster, so every cluster is a
   # contiguous length interval.
   cl <- if (k <= 1) rep(1L, length(v)) else {
@@ -41,7 +44,13 @@ cluster_by_repeat_length <- function(values, cluster_max = 6L, min_prop = 0.05, 
     cu <- tryCatch({
       mu <- g$parameters$mean; pro <- g$parameters$pro
       sdv <- rep_len(sqrt(g$parameters$variance$sigmasq), length(mu))
-      keep <- which(pro >= min_prop & sdv <= 0.2 * pmax(abs(mu), 1)); if (!length(keep)) keep <- which.max(pro)
+      big <- which(pro >= min_prop); if (!length(big)) big <- which.max(pro)
+      narrow <- big[sdv[big] <= 0.2 * pmax(abs(mu[big]), 1)]
+      # A broad component is the smear only when it lies between two allele peaks; a broad
+      # component with no component above it is the expanded allele itself (reads of an
+      # expanded allele shortened by PCR spread it far more widely than its molecules)
+      between <- vapply(big, function(j) any(mu[narrow] < mu[j]) && any(mu[big] > mu[j]), logical(1))
+      keep <- big[big %in% narrow | !between]
       ld <- vapply(keep, function(j) log(pro[j]) + stats::dnorm(u, mu[j], sdv[j], log = TRUE), numeric(length(u)))
       if (is.null(dim(ld))) ld <- matrix(ld, nrow = length(u))
       keep[max.col(ld, ties.method = "first")]
@@ -228,10 +237,21 @@ cluster_by_haplotype <- function(seqs, cluster_max = 6L, downsample = 3000L, k =
 }
 
 # Cluster one sample's reads. Returns cluster_number, repeat_cluster, haplotype_cluster.
-cluster_sample <- function(d, p) {
+# What lengths are clustered on: molecules when asked for, or with 'auto' when UMIs were
+# extracted; reads otherwise
+resolve_cluster_unit <- function(unit, umi, have_molecules) {
+  if (is.null(unit) || is.na(unit)) unit <- "auto"
+  if (unit == "auto") unit <- if (isTRUE(umi) && have_molecules) "molecules" else "reads"
+  if (unit == "molecules" && !have_molecules) unit <- "reads"
+  unit
+}
+
+# rc: repeat clusters already made for these reads (from their molecules' lengths, when
+# cluster_unit = molecules); NULL clusters the reads' own lengths
+cluster_sample <- function(d, p, rc = NULL) {
   by <- p$cluster_by
   n <- nrow(d)
-  rc <- if ("repeat" %in% by) cluster_by_repeat_length(d$length, p$repeat_cluster_max, p$repeat_cluster_min_prop, p$repeat_cluster_downsample) else rep(1L, n)
+  if (is.null(rc)) rc <- if ("repeat" %in% by) cluster_by_repeat_length(d$length, p$repeat_cluster_max, p$repeat_cluster_min_prop, p$repeat_cluster_downsample) else rep(1L, n)
   hc <- rep(1L, n)
   if ("haplotype" %in% by) {
     hs <- haplotype_sequences(d$left, d$right, p$haplotype_region, p$haplotype_trim_length)
@@ -630,7 +650,7 @@ waterfall_breaks <- function(len, n_target = 30) {
 
 # One sample's clusters: histogram of the primary length, stacked by cluster, with
 # each cluster's modal length and share of reads written above it.
-cluster_length_plot <- function(d, cs, title, xlab = "Repeat length") {
+cluster_length_plot <- function(d, cs, title, xlab = "Repeat length", clustered_on = "reads") {
   # One row per cluster, sharing the length axis, so clusters of the same length (e.g. the
   # same allele split by flank haplotype) are each visible rather than stacked out of sight
   d <- data.table::as.data.table(d)[is.finite(length)]
@@ -639,7 +659,8 @@ cluster_length_plot <- function(d, cs, title, xlab = "Repeat length") {
   hap <- if (data.table::uniqueN(cs$haplotype_cluster) > 1) paste0(", flank haplotype ", cs$haplotype_cluster) else ""
   cs[, label := sprintf("%sCluster %s: modal %s, %s of reads%s",
                         if ("allele" %in% names(cs)) paste0("Allele ", allele, " \u2013 ") else "", cluster_number, round(modal_length),
-                        scales::percent(proportion, 0.1), hap)]
+                        scales::percent(if (clustered_on == "molecules" && "molecule_proportion" %in% names(cs)) molecule_proportion else proportion, 0.1), hap)]
+  if (clustered_on == "molecules") cs[, label := sub(" of reads", " of molecules", label, fixed = TRUE)]
   d[, cluster := factor(cluster_number, levels = ord)]
   cs[, cluster := factor(cluster_number, levels = ord)]
   h <- d[, .N, by = .(cluster, length = floor(length + 0.5))]
@@ -652,7 +673,8 @@ cluster_length_plot <- function(d, cs, title, xlab = "Repeat length") {
     ggplot2::scale_y_sqrt(labels = scales::comma, expand = ggplot2::expansion(mult = c(0, 0.05))) +
     ggplot2::coord_cartesian(xlim = xr) +
     ggplot2::labs(x = xlab, y = "Reads (square-root scale)", title = title,
-                  subtitle = "One row per cluster, each on its own scale; dashed line = the cluster's modal length") +
+                  subtitle = paste0(if (clustered_on == "molecules") "Reads, each in the cluster of its UMI molecule (clusters made on molecule lengths). " else "Reads, clustered on their own lengths. ",
+                                    "One row per cluster, each on its own scale; dashed line = the cluster's modal length")) +
     ggplot2::theme_bw() + ggplot2::theme(strip.text = ggplot2::element_text(hjust = 0))
 }
 
