@@ -55,11 +55,14 @@ while (i <= length(args)) {
     key <- kv
     nxt <- if (i < length(args)) args[i + 1] else NA
     if (key == "dry_run") { dry_run <- TRUE; i <- i + 1; next }
-    if (!key %in% names(spec)) stop("Unknown option --", key, ". See ./duke --help")
-    if (spec[[key]]$type == "lgl" && (is.na(nxt) || startsWith(nxt, "--"))) { val <- "TRUE"; i <- i + 1 }
+    known <- if (key %in% names(spec)) spec[[key]] else if (key %in% names(.renamed_params)) spec[[.renamed_params[[key]]]] else NULL
+    if (is.null(known) && !key %in% names(.legacy_params)) stop("Unknown option --", key, ". See ./duke --help")
+    if (!is.null(known) && known$type == "lgl" && (is.na(nxt) || startsWith(nxt, "--"))) { val <- "TRUE"; i <- i + 1 }
     else { if (is.na(nxt)) stop("--", key, " needs a value"); val <- nxt; i <- i + 2 }
   }
   if (key == "dry_run") { dry_run <- truthy(val); next }
+  # Renamed and retired options are accepted; resolve_params() maps or drops them with a message
+  if (!key %in% names(spec) && (key %in% names(.renamed_params) || key %in% names(.legacy_params))) { user[[key]] <- val; next }
   if (!key %in% names(spec)) stop("Unknown option --", key, ". See ./duke --help")
   type <- spec[[key]]$type
   user[[key]] <- switch(type,

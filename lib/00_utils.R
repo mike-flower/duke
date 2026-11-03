@@ -5,6 +5,9 @@
 # parameter hashing, house-style tables and plot saving.
 # ==============================================================================
 
+# The run's parameter list as seen from the caller: only a list called params counts (a
+# function of that name elsewhere on the search path is skipped), NULL when there is none
+.run_params <- function(env) get0("params", envir = env, mode = "list", inherits = TRUE)
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0 || (length(a) == 1 && is.na(a))) b else a
 
 # ------------------------------------------------------------------------------
@@ -54,7 +57,7 @@ write_excel_function <- function(named_list, path, overwrite_sheet = TRUE) {
 # Threading wrapper. Uses params$threads from the calling environment.
 # ------------------------------------------------------------------------------
 apply_fn <- function(X, FUN, ..., threads = NULL) {
-  threads <- threads %||% tryCatch(get("params", envir = parent.frame())$threads,
+  threads <- threads %||% tryCatch(.run_params(parent.frame())$threads,
                                    error = function(e) 1)
   threads <- threads %||% 1
   lost <- character(0)
@@ -256,7 +259,7 @@ dt_compact <- function(df, caption = NULL, digits = NULL) {
 # Plot saving. Every plot is assigned, printed (when inline) and saved.
 # ------------------------------------------------------------------------------
 save_plot <- function(p, path, width = 10, height = 6, dpi = NULL) {
-  prm <- tryCatch(get("params", envir = parent.frame()), error = function(e) NULL)
+  prm <- .run_params(parent.frame())
   dpi <- dpi %||% prm$plot_dpi %||% 150
   # A plot whose type (the start of its file name) is not in `plots` is not saved
   ty <- plot_type_of(path)
@@ -432,7 +435,9 @@ resolve_plot_types <- function(p) {
 }
 
 want_plot <- function(type, p = NULL) {
-  p <- p %||% tryCatch(get("params", envir = parent.frame()), error = function(e) NULL)
+  # knitr also evaluates chunk options once where params can be some package's function,
+  # so anything but Duke's parameter list is ignored
+  if (!is.list(p)) p <- .run_params(parent.frame())
   if (is.null(p)) return(TRUE)
   type %in% (p$plot_types %||% resolve_plot_types(p))
 }

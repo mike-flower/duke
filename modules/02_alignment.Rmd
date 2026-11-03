@@ -93,7 +93,7 @@ results <- lapply(refs, function(ref) {
 alignments <- lapply(results, function(r) rbindlist(lapply(r, `[[`, "table")))
 funnel <- dplyr::bind_rows(lapply(results, function(r) dplyr::bind_rows(lapply(r, `[[`, "funnel"))))
 strand_steps <- dplyr::bind_rows(lapply(results, function(r) dplyr::bind_rows(lapply(r, `[[`, "strand"))))
-rm(results); if (params$remove_intermediate) { rm(sequences); invisible(gc()) }
+rm(results); if (params$free_memory) { rm(sequences); invisible(gc()) }
 timings["Alignment and filtering"] <- proc.time()["elapsed"] - .t
 cat(sprintf("%s of %s reads (%.1f%%) span both flanks in the correct order.",
             comma(sum(funnel$final)), comma(sum(funnel$input)), 100 * sum(funnel$final) / max(1, sum(funnel$input))))

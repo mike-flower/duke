@@ -319,8 +319,12 @@ if (nrow(support_all)) {
 # differ in another tract, that tract tells which allele the extra cluster's reads came from even
 # when no flank variant does.
 allele_origin <- function(cs, sa, tc = NULL) {
+  none <- data.table(file_stem = character(0), allele = integer(0), origin = character(0))
   a12 <- cs[allele %in% 1:2]
-  if (nrow(a12) < 2) return(data.table(file_stem = character(0), allele = integer(0), origin = character(0)))
+  # Nothing to explain without two alleles to compare with, or without an extra cluster.
+  # (Before v3.3.2 a sample with exactly two alleles returned a one-row table with no allele
+  # column, which stopped the module when every sample had exactly two.)
+  if (nrow(a12) < 2 || !any(cs$allele > 2)) return(none)
   near <- function(m, ref_m) abs(m - ref_m) <= max(3, 0.1 * ref_m)
   ph <- if (nrow(sa)) dcast(sa[allele %in% 1:2 & !is.na(support), .(pos, ref, alt, allele, support)], pos + ref + alt ~ allele, value.var = "support") else data.table()
   if (nrow(ph) && all(c("1", "2") %in% names(ph))) { setnames(ph, c("1", "2"), c("s1", "s2")); ph <- ph[!is.na(s1) & !is.na(s2) & abs(s1 - s2) >= 0.6] } else ph <- data.table()
@@ -377,7 +381,7 @@ allele_origin <- function(cs, sa, tc = NULL) {
   }))[, file_stem := cs$file_stem[1]][]
 }
 origin <- rbindlist(lapply(split(cluster_summary, by = "file_stem"), function(cs) allele_origin(cs, if (nrow(support_all)) support_all[file_stem == cs$file_stem[1]] else data.table(), cons[file_stem == cs$file_stem[1]])), fill = TRUE)
-if (nrow(origin)) cons <- origin[cons, on = .(file_stem, allele)] else cons[, origin := NA_character_]
+if (nrow(origin) && all(c("file_stem", "allele", "origin") %in% names(origin))) cons <- origin[cons, on = .(file_stem, allele)] else cons[, origin := NA_character_]
 var_dir <- file.path(st_dir, "variants"); unlink(var_dir, recursive = TRUE); dir.create(var_dir, showWarnings = FALSE)
 write_allele_vcf(as.data.frame(cons), as.data.frame(support_all), ref, paste(tracts$tract, collapse = "_"), file.path(var_dir, "alleles.vcf"))
 var_summary <- variants[, .(alleles_in_consensus = sum(in_consensus), alleles_minority = sum(!in_consensus), alleles_confirmed = sum(confirmed), samples = uniqueN(file_stem),

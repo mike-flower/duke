@@ -248,7 +248,7 @@ params <- list(
   # Reuse a module's results when the parameters that affect it are unchanged
   resume = TRUE,
   # Free memory between steps
-  remove_intermediate = TRUE,
+  free_memory = TRUE,
   # Delete temp/ (per-sample caches) at the end
   remove_temp = FALSE,
   # Modules to run

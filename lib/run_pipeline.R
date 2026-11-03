@@ -74,6 +74,81 @@ module_hashes <- function(p) {
   h
 }
 
+# ------------------------------------------------------------------------------
+# Reusing modules from an earlier run (reuse_from, reuse_modules)
+# ------------------------------------------------------------------------------
+# Copies a module's results from an earlier output folder into this run's, so the
+# module is skipped instead of re-run: its saved data (module_data/), its output
+# folder, its report and its working caches (temp/). A module is reused only when
+# its data were made with the same settings as this run (the same data part of the
+# module hash, which takes in the settings of every module upstream), so a reused
+# module is the same as a re-run one would be, apart from anything the newer Duke
+# version changed in that module's own figures and reports. The plot choice (plots,
+# plot_units) is not part of that check: a reused module keeps the earlier run's
+# figures. reuse_modules names the modules to take (default: every module whose
+# data still match); a named module that cannot be reused stops the run before
+# anything is done, so a long job does not start on a wrong assumption.
+.data_hash <- function(h) sub("-p.*$", "", h)
+.hash_version <- function(path) {
+  side <- paste0(path, ".hash")
+  if (!file.exists(side)) return(NA_character_)
+  l <- readLines(side, warn = FALSE)
+  v <- grep("^duke ", l, value = TRUE)
+  v <- if (length(v)) sub("^duke ", "", v[1]) else NA_character_
+  if (identical(v, "unknown")) NA_character_ else v
+}
+reuse_earlier_run <- function(p, hashes, results_dir) {
+  src <- normalizePath(p$reuse_from, mustWork = FALSE)
+  if (!dir.exists(src)) stop("reuse_from: folder not found: ", src)
+  if (identical(src, normalizePath(p$dir_out, mustWork = FALSE))) stop("reuse_from is the output folder itself; give the earlier run's folder")
+  named <- length(p$reuse_modules) > 0
+  want <- as.character(if (named) p$reuse_modules else sort(unique(p$run_modules)))
+  bad <- setdiff(want, names(.module_data)); if (length(bad)) stop("reuse_modules: no module ", paste(bad, collapse = ", "))
+  # Modules this run does not run at all have nothing to reuse
+  off <- c(if (!isTRUE(p$umi)) "4", if (!isTRUE(p$cluster) && !isTRUE(p$waterfall)) "5", if (is.na(p$path_settings) || !file.exists(p$path_settings)) "6")
+  want <- setdiff(want, off)
+  cat("\nReusing from: ", src, "\n", sep = "")
+  plan <- list()
+  for (m in want) {
+    from <- file.path(src, "module_data", .module_data[[m]])
+    here <- file.path(results_dir, .module_data[[m]])
+    why <- NULL
+    if (identical(.data_hash(stored_hash(here)), .data_hash(hashes[[m]]))) { cat(sprintf("  Module %s: already here with the current settings\n", m)); next }
+    if (!file.exists(from)) why <- "not in that folder"
+    else if (!identical(.data_hash(stored_hash(from)), .data_hash(hashes[[m]])))
+      why <- "made with different settings (this module's or an upstream module's), so it would not match this run"
+    else if (!named && !identical(.hash_version(from), duke_version))
+      why <- sprintf("made by Duke %s; its settings match, but this version may have changed its outputs. Name it in reuse_modules to reuse it anyway",
+                     if (is.na(.hash_version(from))) "before 3.3.2" else .hash_version(from))
+    if (!is.null(why)) {
+      if (named) {
+        msg <- sprintf("reuse_modules: Module %s (%s) cannot be reused from %s: %s. Leave it out of reuse_modules to run it. Nothing has been copied or run.", m, .module_names[[m]], src, why)
+        cat("\nSTOPPED:", msg, "\n")
+        stop(msg, call. = FALSE)
+      }
+      cat(sprintf("  Module %s: not reused (%s); it will run\n", m, why)); next
+    }
+    plan[[m]] <- from
+  }
+  for (m in names(plan)) {
+    stem <- tools::file_path_sans_ext(.module_files[[m]])
+    unlink(c(file.path(p$dir_out, stem), file.path(p$dir_out, paste0(stem, ".html"))), recursive = TRUE)
+    if (dir.exists(file.path(src, stem))) file.copy(file.path(src, stem), p$dir_out, recursive = TRUE, copy.date = TRUE)
+    if (file.exists(file.path(src, paste0(stem, ".html")))) file.copy(file.path(src, paste0(stem, ".html")), p$dir_out, overwrite = TRUE, copy.date = TRUE)
+    tmp <- list.files(file.path(src, "temp"), pattern = paste0("^m", m, "_", .data_hash(hashes[[m]])), full.names = TRUE)
+    if (length(tmp)) { dir.create(file.path(p$dir_out, "temp"), showWarnings = FALSE); file.copy(tmp, file.path(p$dir_out, "temp"), recursive = TRUE, copy.date = TRUE) }
+    file.copy(plan[[m]], results_dir, overwrite = TRUE, copy.date = TRUE)
+    v <- .hash_version(plan[[m]])
+    # The current hash, so the module is skipped; the version line keeps the version that made it
+    writeLines(c(hashes[[m]], paste("duke", if (is.na(v)) "unknown" else v), paste("reused from", src)),
+               paste0(file.path(results_dir, .module_data[[m]]), ".hash"))
+    note <- c(if (is.na(v) || v != duke_version) sprintf("made by Duke %s, so its report and figures are that version's", if (is.na(v)) "before 3.3.2" else v),
+              if (!identical(stored_hash(plan[[m]]), hashes[[m]])) "its figures follow the earlier run's plots / plot_units")
+    cat(sprintf("  Module %s (%s): reused%s\n", m, .module_names[[m]], if (length(note)) paste0("; ", paste(note, collapse = "; ")) else ""))
+  }
+  invisible(names(plan))
+}
+
 # The hash a module's results were made with. A small sidecar file
 # (<module>.RData.hash, written after each successful run) avoids loading
 # large .RData files just to read it; it is only trusted when it is newer
@@ -132,6 +207,7 @@ run_duke <- function(user_params, duke_root = getwd()) {
 
   results_dir <- file.path(p$dir_out, "module_data")
   dir.create(results_dir, showWarnings = FALSE)
+  if (!is.na(p$reuse_from %||% NA)) reuse_earlier_run(p, hashes, results_dir)
   for (m in as.character(sort(unique(p$run_modules)))) {
     cat("\n-----------------------------------------------------------------\n")
     cat("Module ", m, ": ", .module_names[[m]], "\n", sep = "")
@@ -166,7 +242,7 @@ run_duke <- function(user_params, duke_root = getwd()) {
                       envir = list2env(list(params = p), parent = globalenv()),
                       knit_root_dir = duke_root, quiet = TRUE)
     unlink(c(work_dir, file.path(p$dir_out, paste0(tools::file_path_sans_ext(.module_files[[m]]), "_files"))), recursive = TRUE)
-    if (file.exists(out_path)) writeLines(hashes[[m]], paste0(out_path, ".hash"))
+    if (file.exists(out_path)) writeLines(c(hashes[[m]], paste("duke", duke_version)), paste0(out_path, ".hash"))
     cat("Done in", format_elapsed(as.numeric(difftime(Sys.time(), t0, units = "secs"))), "\n")
   }
 

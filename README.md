@@ -548,14 +548,16 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 
 | Parameter | Default | Format | What it does |
 |---|---|---|---|
+| `reuse_from` | – | text | An earlier run`s output folder to take module results from, so those modules are not re-run. A module is reused only when its results were made with the same settings as this run (its own and every upstream module`s); it keeps that run's report and figures |
+| `reuse_modules` | – | whole-number list | With reuse_from: the modules to reuse, e.g. 1:4 (default: every module made by this Duke version whose results still match; a module made by an earlier version is reused only when named here). A module named here that cannot be reused stops the run before it starts |
 | `plots` | `all` | text list | Plot types to save: `all` (default; every type except sample_density, sample_histogram and waterfall_cluster), a list of types, or `all` with `-type` to leave types out, e.g. `all,-waterfall,sample_density`. The README lists every type |
 | `plot_units` | `combined` | text list | For plots that can show reads and molecules: `combined` (both in one figure, default), `reads`, `molecules`, or a list, e.g. `combined,reads,molecules` for all three |
 | `plot_dpi` | `150` | whole number | Resolution of saved plots |
 | `plot_per_sample` | `TRUE` | TRUE / FALSE | Write the per-sample plots (one figure per sample) in Modules 2, 4, 5 and 7 |
 | `threads` | `4` | whole number | CPU cores |
 | `resume` | `TRUE` | TRUE / FALSE | Reuse a module's results when the parameters that affect it are unchanged |
-| `remove_intermediate` | `TRUE` | TRUE / FALSE | Free memory between steps |
-| `remove_temp` | `FALSE` | TRUE / FALSE | Delete temp/ (per-sample caches) at the end |
+| `free_memory` | `TRUE` | TRUE / FALSE | Drop large objects from memory once a module has finished with them (at present the imported read sequences, after Module 2 has aligned them). Changes no results; called remove_intermediate before v3.3.2 |
+| `remove_temp` | `FALSE` | TRUE / FALSE | Delete temp/ at the end of the run. temp/ holds per-sample working caches (UMI collapsing, clustering) that let a re-run after a crash pick up part-way through a module; a re-run with changed settings adds new caches beside the old ones, so delete temp/ (or set this TRUE) once a run is final |
 | `run_modules` | `1:7` | whole-number list | Modules to run |
 
 <!-- params:Runtime:end -->
@@ -565,6 +567,23 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 ## Resume
 
 With `resume = TRUE` (default) a module is reused when its stored parameter hash matches. Each hash covers the parameters that affect that module and the hashes of the modules it depends on, plus the reference and settings files and the list of input files (names, sizes, dates), so changing `rpt_flank_pad` re-runs Modules 3 to 7 but changing a plot setting in Module 7 re-runs Module 7 only. Changes to Duke's own code are not detected: after updating Duke, delete `module_data/` (or use `--resume FALSE`) to re-run everything. If you run only some modules after changing a parameter that affects an earlier one (e.g. `--run_modules 6` after changing a tract setting), Duke stops and names the module to include, rather than building on out-of-date results.
+
+### Reusing modules from an earlier run (`reuse_from`, `reuse_modules`)
+
+To write a new run to a new folder while taking some modules from an earlier run, rather than re-running them, give the earlier run's output folder:
+
+```
+--dir_out .../result_duke_v3.3.2_new --reuse_from .../result_duke_v3.3.1_old --reuse_modules 1:4
+```
+
+Before any module runs, Duke copies each module to reuse from the earlier folder into the new one: its saved data (`module_data/`), its output folder, its report and its working caches (`temp/`). It then skips those modules as it would on resume, and runs the rest on top of them. The earlier folder is only read, never changed.
+
+- A module is reused only when its results were made with the same settings as this run: its own and every upstream module's, the same input files, reference and settings file. So a reused module holds the same data a re-run would give. The plot choice (`plots`, `plot_units`) is not part of that check: a reused module keeps the earlier run's figures.
+- **`reuse_modules` not given:** every module whose results still match **and** that was made by this Duke version is reused. A module made by an earlier version is not, because the newer version may have changed its report or figures; the log says so for each module.
+- **`reuse_modules` given** (e.g. `1:4`): those modules are reused even if an earlier Duke version made them (their reports and figures are then that version's, and the log says which version). If a named module cannot be reused (it is not in the earlier folder, or its settings differ), Duke stops before copying or running anything and says why, so a long job does not start on a wrong assumption.
+- The log lists each module as reused, or not reused and why. Each module's `module_data/*.hash` file records the Duke version that made it and, for a reused module, the folder it came from.
+
+Typical use: a new Duke version changes only the later modules (e.g. clustering in Module 5), and Modules 1–4 (import, alignment, repeat detection, UMI collapsing, the slow part) can be taken from the previous run.
 
 ---
 
@@ -718,6 +737,10 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - Module 3: the *What a break does to each count* plot is removed; it showed what the two plots before it show (how often and by how much the counting methods differ) in a harder form. Its summary sentence is kept.
 - File names: spaces and characters that cannot be in a file name are replaced together by one `-`, so a group called `QS5 MLH1ko / primer 0.01uM` gives `QS5-MLH1ko-primer-0.01uM`, not `QS5-MLH1ko----primer-0.01uM`. Dashes already in a name (such as `bc1002--bc1050`) are kept.
 - Plot files are named `{plot type}_{sample, group or measure}_{measure}_{range}_{unit}.png`, in a folder named after the plot type (see [Plots](#plots)); before, many were just `{sample}.png` in a folder whose name gave the type, so a copied file lost its meaning. Folders renamed to match: `alignment_by_sample/` is `alignment/`, `pairs/` is `pair_trend/`, `pair_correlation/` and `pair_scatter/`, the Module 7 range folders are `group_density/` and `group_histogram/`, `sample_cards/` is `sample_card/`.
+- Module 5 fix: when every sample had exactly two alleles (no extra clusters), the step that explains extra clusters returned a malformed table and Module 5 stopped (*non-existing column(s): cols[2]='allele'*). Earlier runs always had some sample with an extra cluster, which hid it; the corrected clustering exposed it on the jasmine run.
+- The plot-selection check no longer mistakes a package's `params` function for Duke's settings (it caused a harmless *is.na() applied to ... 'closure'* warning in the log).
+- New `reuse_from` and `reuse_modules` parameters: take chosen modules' results from an earlier run's output folder instead of re-running them, when their settings match (see [Reusing modules from an earlier run](#reusing-modules-from-an-earlier-run-reuse_from-reuse_modules)). Each module's saved hash now also records the Duke version that made it.
+- `remove_intermediate` is renamed `free_memory`, which says what it does: it drops large objects from memory once a module has finished with them, and changes no results. The old name still works, with a message, in job scripts and on the command line; the command line used to stop on any renamed option (including the old `umi_long_read_*` names), and now accepts them.
 - New `plots` parameter: choose which plot types are saved (`all` by default, a list, or `all,-type`). New `plot_units` parameter: reads and molecules combined in one figure (default), and/or reads only and molecules only, for every plot that can show both (Module 6 counts per range, control setpoints, timecourses, instability by range, tract comparison; Module 7 heatmaps, group densities and histograms, sample ranges, sample cards). Every figure title says which it shows.
 
 **v3.3.1** – manual controls by default, cleaner clusters, faster Module 4

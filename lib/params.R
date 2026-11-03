@@ -144,14 +144,16 @@ duke_param_spec <- function() {
     .p("plot_dots_max", 2000L, "int", "Repeat lengths", "Reads drawn as dots per sample in the density (ridge) figures"),
 
     # --- Output and runtime ---------------------------------------------------------------
+    .p("reuse_from", NA_character_, "chr", "Runtime", "An earlier run's output folder to take module results from, so those modules are not re-run. A module is reused only when its results were made with the same settings as this run (its own and every upstream module's); it keeps that run's report and figures"),
+    .p("reuse_modules", integer(0), "intvec", "Runtime", "With reuse_from: the modules to reuse, e.g. 1:4 (default: every module made by this Duke version whose results still match; a module made by an earlier version is reused only when named here). A module named here that cannot be reused stops the run before it starts"),
     .p("plots", "all", "chrvec", "Runtime", "Plot types to save: 'all' (default; every type except sample_density, sample_histogram and waterfall_cluster), a list of types, or 'all' with '-type' to leave types out, e.g. 'all,-waterfall,sample_density'. The README lists every type"),
     .p("plot_units", "combined", "chrvec", "Runtime", "For plots that can show reads and molecules: 'combined' (both in one figure, default), 'reads', 'molecules', or a list, e.g. 'combined,reads,molecules' for all three"),
     .p("plot_dpi", 150L, "int", "Runtime", "Resolution of saved plots"),
     .p("plot_per_sample", TRUE, "lgl", "Runtime", "Write the per-sample plots (one figure per sample) in Modules 2, 4, 5 and 7"),
     .p("threads", 4L, "int", "Runtime", "CPU cores"),
     .p("resume", TRUE, "lgl", "Runtime", "Reuse a module's results when the parameters that affect it are unchanged"),
-    .p("remove_intermediate", TRUE, "lgl", "Runtime", "Free memory between steps"),
-    .p("remove_temp", FALSE, "lgl", "Runtime", "Delete temp/ (per-sample caches) at the end"),
+    .p("free_memory", TRUE, "lgl", "Runtime", "Drop large objects from memory once a module has finished with them (at present the imported read sequences, after Module 2 has aligned them). Changes no results; called remove_intermediate before v3.3.2"),
+    .p("remove_temp", FALSE, "lgl", "Runtime", "Delete temp/ at the end of the run. temp/ holds per-sample working caches (UMI collapsing, clustering) that let a re-run after a crash pick up part-way through a module; a re-run with changed settings adds new caches beside the old ones, so delete temp/ (or set this TRUE) once a run is final"),
     .p("run_modules", 1:7, "intvec", "Runtime", "Modules to run")
   )
 }
@@ -164,7 +166,8 @@ duke_defaults <- function() {
 # Parameters renamed or removed since v2.3.1, mapped to their replacements
 # v3.3.1: the long-read filter is now the shortened-molecule filter, so it is not read as
 # filtering out long (expanded) alleles
-.renamed_params <- c(umi_long_read_filter = "umi_shortened_filter",
+.renamed_params <- c(remove_intermediate = "free_memory",
+                     umi_long_read_filter = "umi_shortened_filter",
                      umi_long_read_units  = "umi_shortened_min_units",
                      umi_long_read_share  = "umi_shortened_min_share")
 
@@ -235,6 +238,7 @@ resolve_params <- function(user = list()) {
   if (!is.finite(p$umi_shortened_min_share) || p$umi_shortened_min_share <= 0 || p$umi_shortened_min_share > 1) stop("umi_shortened_min_share must be above 0 and at most 1")
   if (!is.finite(p$umi_top_cluster_min_share) || p$umi_top_cluster_min_share < 0 || p$umi_top_cluster_min_share > 1)
     stop("umi_top_cluster_min_share must be between 0 and 1")
+  if (length(p$reuse_modules) && is.na(p$reuse_from)) stop("reuse_modules needs reuse_from (the earlier run's output folder)")
   bad_u <- setdiff(p$plot_units, c("combined", "reads", "molecules"))
   if (length(bad_u)) stop("plot_units must be any of 'combined', 'reads', 'molecules' (got ", paste(bad_u, collapse = ", "), ")")
   p$plot_types <- resolve_plot_types(p)
