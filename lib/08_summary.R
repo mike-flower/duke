@@ -91,7 +91,7 @@ write_run_summary <- function(p) {
   }
 
   files <- data.table(
-    where = c("index.html", "run_summary.xlsx / run_summary_samples.tsv", "run_summary_headline_metrics.tsv",
+    where = c("00_index.html", "run_summary.xlsx / run_summary_samples.tsv", "run_summary_headline_metrics.tsv",
               "0N_*.html", "01_import_qc/", "02_alignment/", "03_repeat_detection/", "03_repeat_detection/read_repeat_counts/",
               "04_umi/", "04_umi/molecules/", "05_allele_structure/", "06_instability/", "06_instability/instability_metrics.tsv",
               "07_repeat_lengths/", "*/plots/"),
@@ -139,7 +139,7 @@ write_run_summary <- function(p) {
 }
 
 # ------------------------------------------------------------------------------
-# index.html: one page at the top of the output folder that links everything
+# 00_index.html: one page at the top of the output folder that links everything
 # ------------------------------------------------------------------------------
 # The reports, the run summary, then every figure arranged so it can be found
 # without knowing the folder layout: cohort figures by module (as thumbnails),
@@ -200,7 +200,11 @@ write_run_index <- function(p, summary = NULL) {
          'th{background:#f3f3f3;position:sticky;top:0}.wrap{overflow-x:auto;max-height:80vh}.thumbs{display:flex;flex-wrap:wrap;gap:12px}',
          '.thumbs figure{margin:0;width:240px}.thumbs img{width:240px;height:160px;object-fit:contain;border:1px solid #ddd;background:#fff}',
          '.thumbs figcaption{font-size:12px;word-break:break-all}.note{font-size:13px;color:#555;max-width:900px}a{color:#0b5cad}',
-         '.r{color:#555}.m{color:#00838f}</style></head><body>',
+         '.r{color:#555}.m{color:#00838f}',
+         # Sample by sample: the sample, group and time columns stay in view when the table is scrolled sideways
+         '.fix1{position:sticky;left:0;background:#fff;z-index:1;width:200px;min-width:200px;max-width:200px;box-shadow:2px 0 0 #bbb}.fix1 small{color:#666}',
+         'th.fix1{background:#f3f3f3;z-index:3}th{z-index:2}',
+         '</style></head><body>',
          '<h1>Duke run index</h1>',
          sprintf('<p class="meta">Duke %s &middot; %s &middot; %d samples &middot; output folder %s</p>', esc(p$duke_version %||% ""), format(Sys.time(), "%Y-%m-%d %H:%M"),
                  length(stems), esc(dir_out)),
@@ -209,7 +213,9 @@ write_run_index <- function(p, summary = NULL) {
   h <- c(h, '<h2>Reports</h2><table><tr><th>Report</th><th>What it covers</th><th>Tables</th></tr>')
   for (m in names(mod_names)) {
     rep <- paste0(m, ".html"); if (!file.exists(file.path(dir_out, rep))) next
-    xl <- list.files(file.path(dir_out, m), pattern = "\\.(xlsx|tsv|vcf|fasta)$")
+    # the module's tables, plus the allele FASTA and VCF one folder down in Module 5
+    xl <- c(list.files(file.path(dir_out, m), pattern = "\\.(xlsx|tsv)$"),
+            grep("^(consensus|variants)/[^/]+\\.(fasta|vcf)$", list.files(file.path(dir_out, m), recursive = TRUE), value = TRUE))
     h <- c(h, sprintf("<tr><td>%s</td><td>%s</td><td>%s</td></tr>", a(rep, mod_names[[m]]), esc(mod_desc[[m]]),
                       paste(vapply(xl, function(x) a(file.path(m, x), x), ""), collapse = "<br>")))
   }
@@ -224,13 +230,14 @@ write_run_index <- function(p, summary = NULL) {
   if (nrow(sp)) {
     sp[, kind := trimws(paste(type, strip_part(rest, sample), uw(unit)))]
     kinds <- unique(sp[order(module, type, ord_unit(unit), kind), .(module, kind)])
-    h <- c(h, '<h2>Sample by sample</h2><p class="note">One row per sample, one column per kind of per-sample figure: the plot type, then the measure, then which units it shows (<i>reads + molecules</i>, <i>reads</i>, or <i>molecules</i>). File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p><div class="wrap"><table><tr><th>Sample</th><th>Group</th><th>Time</th>',
+    h <- c(h, '<h2>Sample by sample</h2><p class="note">One row per sample, one column per kind of per-sample figure: the plot type, then the measure, then which units it shows (<i>reads + molecules</i>, <i>reads</i>, or <i>molecules</i>). File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p><div class="wrap"><table><tr><th class="fix1">Sample<br><small>group, time</small></th>',
            paste0("<th>M", kinds$module, " ", esc(kinds$kind), "</th>", collapse = ""), "</tr>")
     for (i in seq_along(stems)) {
       st <- stems[i]
       cells <- vapply(kinds$kind, function(k) { f <- sp[sample == st & kind == k, path]; if (length(f)) a(f[1], "view") else "" }, "")
-      h <- c(h, sprintf("<tr><td title=\"%s\">%s</td><td>%s</td><td>%s</td>%s</tr>", esc(s$sample[i]), esc(st),
-                        esc(display_group(s$group[i] %||% "")), esc(as.character(s$time[i] %||% "")), paste0("<td>", cells, "</td>", collapse = "")))
+      # The sample column (with its group and time) stays in view when the table is scrolled sideways
+      h <- c(h, sprintf("<tr><td class=\"fix1\" title=\"%s\"><b>%s</b><br><small>%s%s</small></td>%s</tr>", esc(st), esc(s$sample[i]),
+                        esc(display_group(s$group[i] %||% "")), if (!is.na(s$time[i] %||% NA)) paste0(", t = ", esc(as.character(s$time[i]))) else "", paste0("<td>", cells, "</td>", collapse = "")))
     }
     h <- c(h, "</table></div>")
   }
@@ -275,7 +282,9 @@ write_run_index <- function(p, summary = NULL) {
     }
   }
   h <- c(h, "</body></html>")
-  con <- file(file.path(dir_out, "index.html"), open = "w", encoding = "UTF-8"); on.exit(close(con))
+  # 00_ so that it sorts above the module reports; an index.html from before v3.3.3 is replaced
+  if (file.exists(file.path(dir_out, "index.html"))) file.remove(file.path(dir_out, "index.html"))
+  con <- file(file.path(dir_out, "00_index.html"), open = "w", encoding = "UTF-8"); on.exit(close(con))
   writeLines(enc2utf8(h), con)
-  invisible(file.path(dir_out, "index.html"))
+  invisible(file.path(dir_out, "00_index.html"))
 }

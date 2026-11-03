@@ -464,9 +464,22 @@ unit_members <- function(u) if (identical(u, "combined")) c("reads", "molecules"
 # the type when the type has a file per sample, range, group or measure
 plot_path <- function(plots_dir, type, ..., unit = NULL, folder = NULL) {
   parts <- unlist(list(...)); parts <- parts[!is.na(parts) & nzchar(parts)]
-  if (is.null(folder)) folder <- plot_catalogue()$scope[match(type, plot_catalogue()$type)] %in% c("sample", "range", "group", "measure")
+  scope <- plot_catalogue()$scope[match(type, plot_catalogue()$type)]
+  if (is.null(folder)) folder <- scope %in% c("sample", "range", "group", "measure")
   name <- paste(c(type, safe_path(parts), unit), collapse = "_")
-  if (isTRUE(folder)) file.path(plots_dir, type, paste0(name, ".png")) else file.path(plots_dir, paste0(name, ".png"))
+  if (!isTRUE(folder)) return(file.path(plots_dir, paste0(name, ".png")))
+  # A type with many files is split into subfolders, so each folder holds one set to
+  # flick through: first by unit (combined / reads / molecules), then, for a type with
+  # one file per sample or group in each range, by range (all-lengths, range01, ...), and
+  # for a type with one file per range, by measure (or tract pair). The file name still
+  # carries every part, so a copied file keeps its meaning.
+  sub <- if (!is.null(unit)) unit else character(0)
+  if (isTRUE(scope %in% c("sample", "group"))) {
+    rg <- parts[grepl("^(range[0-9]+|all-lengths)$", parts)]
+    if (length(rg)) sub <- c(sub, rg[1])
+  }
+  if (isTRUE(scope == "range") && length(parts)) sub <- c(sub, safe_path(parts[1]))
+  do.call(file.path, as.list(c(plots_dir, type, sub, paste0(name, ".png"))))
 }
 
 # The plot type a file name starts with (the longest catalogue type that matches), or NA

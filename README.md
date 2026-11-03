@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.3** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.3.4** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -328,7 +328,7 @@ result_duke/
 ├── 05_allele_structure.html      05_allele_structure/allele_structure.xlsx, consensus/alleles.fasta, variants/alleles.vcf, bam/, plots/ (alleles/, clusters/, waterfall/)
 ├── 06_instability.html           06_instability/instability.xlsx, instability_metrics.tsv, distribution_summary.tsv, plots/ (timecourse/, pair_trend/, pair_correlation/, pair_scatter/)
 ├── 07_repeat_lengths.html        07_repeat_lengths/repeat_lengths.xlsx, plots/ (heatmap/, group_density/, group_histogram/, sample_ranges/, sample_card/)
-├── index.html                    start here: links every report, table and figure, by sample, range and group
+├── 00_index.html                 start here: links every report, table and figure, by sample, range and group
 ├── run_summary.xlsx              one row per sample from every module, headline metrics, column and file guide (+ .tsv copies)
 ├── module_data/                  one .RData per module (used by resume)
 └── temp/                         per-sample caches (remove_temp = TRUE deletes it)
@@ -338,7 +338,7 @@ Every module keeps its tables and data files at the top of its folder and its fi
 
 ### Plots
 
-Every saved figure is named **`{plot type}_{sample, group or measure}_{measure}_{range}_{unit}.png`**, with the parts that apply, so a file keeps its meaning wherever it is copied and sorts by plot type, then sample or group. Plot types with one file per sample, range, group or measure are saved in a folder named after the type (e.g. `05_allele_structure/plots/waterfall/waterfall_{sample}.png`, `06_instability/plots/timecourse/timecourse_CAG_range02_combined.png`); plot types with one file for the run sit in `plots/` itself.
+Every saved figure is named **`{plot type}_{sample, group or measure}_{measure}_{range}_{unit}.png`**, with the parts that apply, so a file keeps its meaning wherever it is copied and sorts by plot type, then sample or group. Plot types with one file per sample, range, group or measure are saved in a folder named after the type (e.g. `05_allele_structure/plots/waterfall/waterfall_{sample}.png`); plot types with one file for the run sit in `plots/` itself. A type folder with many files is split into subfolders, so each holds one set to flick through: first by unit (`combined/`, `reads/`, `molecules/`), then, for types with one file per sample or group in each range, by range (`all-lengths/`, `range01/`, …), and for types with one file per range, by measure or tract pair. For example `07_repeat_lengths/plots/sample_density/combined/range02/sample_density_{sample}_CAG_range02_combined.png`, `06_instability/plots/timecourse/combined/CAG/timecourse_CAG_range02_combined.png`, `07_repeat_lengths/plots/sample_card/molecules/sample_card_{sample}_molecules.png`.
 
 **Units.** A plot that can show both reads and molecules is drawn once for each version in `plot_units`: `combined` (reads grey and molecules teal in one figure, the default), `reads` or `molecules`; the version is the last part of the file name. `--plot_units combined,reads,molecules` gives all three; `--plot_units reads,molecules` gives the two separately instead of combined. Plots that cannot overlay the two (heatmaps, per-sample tract scatter) give a reads and a molecules file for `combined`. Without UMIs, only reads are drawn.
 
@@ -404,11 +404,11 @@ Every saved figure is named **`{plot type}_{sample, group or measure}_{measure}_
 | `sample_density` | 7 | one per sample | yes | no | One sample's ridge for all lengths and each range (one file each) |
 | `sample_histogram` | 7 | one per sample | yes | no | One sample's histogram for all lengths and each range (one file each) |
 
-`index.html` at the top of the output folder links every saved figure, arranged by sample, range and group.
+`00_index.html` at the top of the output folder links every saved figure, arranged by sample, range and group.
 
 Key tables:
 
-- `index.html`: start here – links everything.
+- `00_index.html`: start here – links everything.
 - `run_summary.xlsx`: one row per sample with the results of every module.
 
 - `06_instability/instability.xlsx`: `instability_metrics` (one row per sample × unit × measure × range × setpoint type; the column names used by v2 scripts are kept), `distribution_summary`, `modal_peaks`, `group_controls`, `pair_stats`, `range_table`.
@@ -724,6 +724,14 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 **v3.0.10**
 - Module 5 haplotype clustering: the left and right flanks are no longer joined into one sequence for k-mer counting, so no k-mer spans the junction. Junction k-mers combined the bases either side of the tract, so jitter where the tract ends changed ~15 k-mers in the same reads at once, which looks like a real variant; on the jasmine CAG + CCG run this split ~10% of the expanded allele into a second "haplotype" (H2) in 45 of 66 samples, with the same length distribution and a consensus that differed only in the bases next to the tract. On simulated reads the old code split off 9% of reads on boundary jitter alone and missed a real SNP carried by 30% of reads; the new code keeps one cluster for jitter and splits on the SNP. A real variant within ~7 bp of the tract is no longer used for haplotypes.
 - Module 5 report: the variants section says how much flank sequence the consensuses cover (on a UMI amplicon this is ~50 bp left and ~80 bp right of the tract, not the whole reference flank), and says plainly when no consensus differs from the reference, rather than introducing a table that is not there.
+
+**v3.3.4** – plot subfolders, 00_index.html, consensus fix
+
+- Plot folders with many files are split into subfolders: by unit (`combined/`, `reads/`, `molecules/`), then by range (`all-lengths/`, `range01/`, …) for the group and per-sample range figures, or by measure or tract pair for the one-per-range figures (timecourses, tract comparison). For example `07_repeat_lengths/plots/sample_density/combined/range02/` and `06_instability/plots/timecourse/combined/CAG/`. File names are unchanged, so a copied file keeps its meaning. See [Plots](#plots).
+- The run index is `00_index.html`, so it sorts above the module reports (an `index.html` left by an earlier version is removed). In *Sample by sample*, the sample column (with its group and time) stays in view when the table is scrolled sideways. The reports table also links the allele FASTA and VCF.
+- Module 5 tract consensus: v3.3.3 combined reads column by column only when they all had the same length between the flanks, but reads at the modal CAG length can still differ by a few bases elsewhere (e.g. 438–444 bp at CAG 134), so they were aligned and the *N* columns remained (*(CAG)70 CANNG (CAG)63* in kxF07--kxR13 of the jasmine run). The consensus now takes, of the reads at the modal CAG length, those of the commonest total length; on that sample's reads it gives a clean (CAG)134 with no N.
+- Module 5 report: *Clusters in every sample* comes first, then the new heading *Allele shares in every sample*, then *One sample's clusters*.
+- Module 6: *Per-sample correlation* has the groups down the y-axis, so long group names no longer overlap.
 
 **v3.3.3** – allele BAMs that show in IGV, cluster figures on molecules, run summary fixes
 

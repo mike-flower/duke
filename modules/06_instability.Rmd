@@ -83,9 +83,9 @@ The setpoint is the **`r params$control_setpoint_metric`**: the sample's own (`s
 - `06_instability/instability_metrics.tsv` and `distribution_summary.tsv` – the two main tables as plain text, one row per sample, unit, measure and range, for your own analyses in R, Python or Prism
 - Every plot file is named `{plot type}_{sample or measure}_{range}_{unit}.png`; the unit is `combined` (reads and molecules in one figure), `reads` or `molecules`, as chosen by `plot_units` (`r paste(plot_units_for(params, isTRUE(params$umi)), collapse = ", ")` in this run)
 - `06_instability/plots/` – `counts_per_range_*`, `control_setpoints_*`, `instability_index_by_range_*`, `experiment_map.png`
-- `06_instability/plots/timecourse/` – the headline metrics against time, every measure and every range
-- `06_instability/plots/pair_trend/`, `pair_correlation/` – tract comparison for every range (`pair_trend_{A}_vs_{B}_{range}_{unit}.png`)
-- `06_instability/plots/pair_scatter/` – each sample's two tract lengths per read or molecule, one panel per range (`pair_scatter_{sample}_{A}_vs_{B}_{reads|molecules}.png`)
+- `06_instability/plots/timecourse/{unit}/{measure}/` – the headline metrics against time, every measure and every range
+- `06_instability/plots/pair_trend/{unit}/{A}_vs_{B}/`, `pair_correlation/…` – tract comparison for every range (`pair_trend_{A}_vs_{B}_{range}_{unit}.png`)
+- `06_instability/plots/pair_scatter/{reads|molecules}/` – each sample's two tract lengths per read or molecule, one panel per range (`pair_scatter_{sample}_{A}_vs_{B}_{reads|molecules}.png`)
 
 ---
 
@@ -369,7 +369,7 @@ n_groups <- length(unique(instability_metrics$group_label))
 tc_w <- min(40, 3.5 + 3.6 * n_groups); tc_h <- min(45, 2.1 * length(hl) + 2)
 ```
 
-The headline metrics for each group, plotted against time: one column per group, one row per metric, each row on its own scale. By default these are the modal, median and mean length, the instability, expansion and contraction indices, and the shares of reads at least 5 units above and below the setpoint (`headline_metrics` sets them; every metric is in instability.xlsx, and the noisier expansion and contraction ratios can be added). Length metrics (modal, median, mean) are the sample's own; the instability metrics are `r gsub("_", " ", hl_type)`. Reads are grey`r if ("molecules" %in% names(units)) " and molecules teal" else ""`. Shown here: **`r primary`**, ranges `r paste(plot_ranges, collapse = ", ")`. Every measure and range is saved as `plots/timecourse/timecourse_{measure}_{range}_{unit}.png`, where the unit is `combined` (reads and molecules), `reads` or `molecules` as chosen by `plot_units`.
+The headline metrics for each group, plotted against time: one column per group, one row per metric, each row on its own scale. By default these are the modal, median and mean length, the instability, expansion and contraction indices, and the shares of reads at least 5 units above and below the setpoint (`headline_metrics` sets them; every metric is in instability.xlsx, and the noisier expansion and contraction ratios can be added). Length metrics (modal, median, mean) are the sample's own; the instability metrics are `r gsub("_", " ", hl_type)`. Reads are grey`r if ("molecules" %in% names(units)) " and molecules teal" else ""`. Shown here: **`r primary`**, ranges `r paste(plot_ranges, collapse = ", ")`. Every measure and range is saved as `plots/timecourse/{unit}/{measure}/timecourse_{measure}_{range}_{unit}.png`, where the unit is `combined` (reads and molecules), `reads` or `molecules` as chosen by `plot_units`.
 
 ```{r headline_plots, fig.width=tc_w, fig.height=tc_h, results='asis'}
 .t <- proc.time()["elapsed"]
@@ -502,15 +502,21 @@ for (pr in pairs) for (rg in sort(unique(pair_bins$analysis_range_name))) {
          title = sprintf("%s change against %s change, %s: %s", B, A, rg, unit_title[[u]])) + theme_bw() + theme(legend.position = "top")
   }, function(u) plot_path(plots_dir, "pair_trend", ab, rg, unit = u), 11, 5.5, show = show)
   ps <- pair_stats[measure_A == A & measure_B == B & analysis_range_name == rg][meta, on = "file_stem", nomatch = NULL]
-  draw_units(function(us, u) { psu <- ps[unit %in% us]; if (!nrow(psu)) return(NULL)
+  # Groups down the y-axis, so long group names are readable however many groups there are;
+  # within a group, reads above molecules
+  n_grp <- uniqueN(ps$group_label)
+  draw_units(function(us, u) { psu <- copy(ps[unit %in% us]); if (!nrow(psu)) return(NULL)
+  psu[, unit := factor(unit, levels = c("molecules", "reads"))]
+  psu[, group_label := factor(group_label, levels = rev(sort(unique(group_label))))]
   ggplot(psu, aes(group_label, rho, colour = unit)) + geom_hline(yintercept = 0, linetype = "dashed") +
     geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
     geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.7) +
     scale_colour_manual(values = unit_cols, breaks = names(unit_cols), labels = unit_labs, name = NULL) +
-    scale_x_discrete(labels = function(x) wrap_label(x, 25)) +
-    labs(x = NULL, y = "Spearman correlation", title = sprintf("Per-sample correlation of %s and %s lengths, %s: %s", A, B, rg, unit_title[[u]])) +
-    theme_bw()
-  }, function(u) plot_path(plots_dir, "pair_correlation", ab, rg, unit = u), 10, 5, show = show)
+    scale_x_discrete(labels = function(x) wrap_label(x, 40)) + coord_flip() +
+    labs(x = NULL, y = "Spearman correlation", title = sprintf("Per-sample correlation of %s and %s lengths, %s: %s", A, B, rg, unit_title[[u]]),
+         subtitle = "Each point is one sample; 0 = the two tracts' lengths vary independently") +
+    theme_bw() + theme(legend.position = "top")
+  }, function(u) plot_path(plots_dir, "pair_correlation", ab, rg, unit = u), 10, min(40, 2 + 0.6 * n_grp * (if (u == "combined") 2 else 1)), show = show)
 }
 ```
 

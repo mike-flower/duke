@@ -51,7 +51,7 @@ Reads are grey and molecules (UMI-collapsed) teal throughout, and every figure a
 
 **Outputs:**
 
-- Every file is named `{plot type}_{sample or group}_{measure}_{all-lengths or range}_{unit}.png`, and saved in a folder named after the plot type; the unit is `combined` (reads and molecules in one figure), `reads` or `molecules`, as chosen by `plot_units` (`r paste(plot_units_for(params, isTRUE(params$umi)), collapse = ", ")` in this run). Which plot types are made is set by `plots`.
+- Every file is named `{plot type}_{sample or group}_{measure}_{all-lengths or range}_{unit}.png`, and saved in a folder named after the plot type, split into a subfolder per unit and, for the group and per-sample range figures, per range (e.g. `sample_density/combined/range02/`); the unit is `combined` (reads and molecules in one figure), `reads` or `molecules`, as chosen by `plot_units` (`r paste(plot_units_for(params, isTRUE(params$umi)), collapse = ", ")` in this run). Which plot types are made is set by `plots`.
 - `07_repeat_lengths/plots/heatmap/` – every sample's distribution, one per measure and unit
 - `07_repeat_lengths/plots/group_density/`, `group_histogram/` – each group's samples, for all lengths and `r if (isTRUE(params$plot_every_range)) "every range of the primary measure" else "plot_ranges (plot_every_range = FALSE)"`
 - `07_repeat_lengths/plots/sample_ranges/` – each sample in every range
@@ -144,7 +144,7 @@ For each group, its samples stacked in time order, for the `r primary` length: a
 - **Density (ridge).** Each sample's reads as a grey density, scaled to the sample's own height, so its shape is visible whatever its depth`r if (!is.null(mol)) ", with the molecules as a teal line on the same row" else ""`. Inside each ridge, every read is a dot (up to `r format(params$plot_dots_max, big.mark = ",")` per sample, drawn at random, spread slightly sideways and scattered between the baseline and the ridge), so the dots stay within their own sample and where reads are sparse – a thin expansion tail, a few outliers – they can be seen individually; the red dashed line is the reads' modal length. In the all-lengths figure the largest allele sets the height, so look at the range figures for the shape of a smaller one.
 - **Histogram.** One row per sample, with reads`r if (!is.null(mol)) " and molecules in separate columns" else ""`, each panel the share of that sample's reads`r if (!is.null(mol)) " (or molecules)" else ""` at each length on its own scale.
 
-The first group's figures are shown here (the density and histogram for all lengths, and the density for each range drawn); every group is in `plots/group_density/` and `plots/group_histogram/`, named `group_density_{group}_{measure}_{all-lengths or range}_{unit}.png`, where the unit is `combined`, `reads` or `molecules` (`plot_units`).
+The first group's figures are shown here (the density and histogram for all lengths, and the density for each range drawn); every group is in `plots/group_density/{unit}/{all-lengths or range}/` and `plots/group_histogram/…`, named `group_density_{group}_{measure}_{all-lengths or range}_{unit}.png`, where the unit is `combined`, `reads` or `molecules` (`plot_units`).
 
 ```{r by_group, results='asis', fig.height=5}
 .t <- proc.time()["elapsed"]
@@ -223,7 +223,7 @@ invisible(apply_fn(meta$file_stem, function(s) {
   TRUE
 }))
 timings["By sample"] <- proc.time()["elapsed"] - .t
-cat(sprintf("Per-sample density and histogram figures written for %d samples into plots/sample_density/ and plots/sample_histogram/.\n", nrow(meta)))
+cat(sprintf("Per-sample density and histogram figures written for %d samples into plots/sample_density/ and plots/sample_histogram/ (a subfolder per unit, then per range).\n", nrow(meta)))
 ```
 
 ---
@@ -232,7 +232,7 @@ cat(sprintf("Per-sample density and histogram figures written for %d samples int
 
 `r if (have_m6) sprintf("For each sample, the %s length in every analysis range (%d ranges, each in its own panel), after all lengths%s. Each panel is the share of the sample's reads (or molecules) at each length in that range, with a smoothed line, and the range's modal (red), median (purple) and mean (orange) from Module 6 as dashed lines, with their values and the count in the panel's header. This is where to look at any range in any sample; the sample cards below show every measure but only the ranges drawn in the report (%s). One sample is shown here.", primary, length(unique(range_table$range_name[range_table$measure == primary])), if (is.null(mol)) " (reads only: no UMIs in this run)" else sprintf(", one figure per version in plot_units (%s): combined has the reads and the molecules in separate rows of each panel", paste(pu, collapse = ", ")), paste(plot_ranges, collapse = ", ")) else "Module 6 has not been run, so there are no ranges."`
 
-- `07_repeat_lengths/plots/sample_ranges/sample_ranges_{sample}_{measure}_{unit}.png`, unit `combined`, `reads` or `molecules`
+- `07_repeat_lengths/plots/sample_ranges/{unit}/sample_ranges_{sample}_{measure}_{unit}.png`, unit `combined`, `reads` or `molecules`
 
 ```{r sample_ranges, eval=have_m6 && want_plot("sample_ranges", params), results='asis'}
 .t <- proc.time()["elapsed"]
@@ -284,7 +284,7 @@ timings["Every range by sample"] <- proc.time()["elapsed"] - .t
 
 # Sample cards
 
-One figure per sample, for every measure: the first column is all lengths, the next the reads in each range drawn (`r paste(plot_ranges, collapse = ", ")`). Reads (grey)`r if (!is.null(mol)) " and molecules (teal) are in separate rows, each on its own scale" else " are"` drawn as the share at each length (bars) with a smoothed line (kernel density, bandwidth 1 unit, or 0.5 for a short tract) over them. In the range columns, each row carries its own modal (red), median (purple) and mean (orange) from Module 6 as dashed lines, with their values in the row's header`r if (!is.null(mol)) ", so the read and molecule statistics are each beside their own data" else ""`. The subtitle gives the sample's read accounting. One card from each of up to four groups is shown here for `r primary` only, so it is large enough to read; the cards in `plots/sample_card/` (`sample_card_{sample}_{unit}.png`, one per version in plot_units) have every measure.
+One figure per sample, for every measure: the first column is all lengths, the next the reads in each range drawn (`r paste(plot_ranges, collapse = ", ")`). Reads (grey)`r if (!is.null(mol)) " and molecules (teal) are in separate rows, each on its own scale" else " are"` drawn as the share at each length (bars) with a smoothed line (kernel density, bandwidth 1 unit, or 0.5 for a short tract) over them. In the range columns, each row carries its own modal (red), median (purple) and mean (orange) from Module 6 as dashed lines, with their values in the row's header`r if (!is.null(mol)) ", so the read and molecule statistics are each beside their own data" else ""`. The subtitle gives the sample's read accounting. One card from each of up to four groups is shown here for `r primary` only, so it is large enough to read; the cards in `plots/sample_card/{unit}/` (`sample_card_{sample}_{unit}.png`, one per version in plot_units) have every measure.
 
 ```{r sample_cards, eval=want_plot("sample_card", params), results='asis', fig.width=13.5}
 .t <- proc.time()["elapsed"]

@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.3"
+duke_version <- "3.3.4"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -248,8 +248,8 @@ run_duke <- function(user_params, duke_root = getwd()) {
 
   rs <- tryCatch(write_run_summary(p), error = function(e) { cat("\nRun summary not written:", conditionMessage(e), "\n"); NULL })
   if (!is.null(rs)) cat("\nRun summary: run_summary.xlsx (one row per sample, from every module)\n")
-  ix <- tryCatch(write_run_index(p, rs), error = function(e) { cat("\nindex.html not written:", conditionMessage(e), "\n"); NULL })
-  if (!is.null(ix)) cat("Index:       index.html (links every report, table and figure)\n")
+  ix <- tryCatch(write_run_index(p, rs), error = function(e) { cat("\n00_index.html not written:", conditionMessage(e), "\n"); NULL })
+  if (!is.null(ix)) cat("Index:       00_index.html (links every report, table and figure)\n")
 
   if (isTRUE(p$remove_temp)) {
     td <- file.path(p$dir_out, "temp")
