@@ -31,7 +31,7 @@ write_run_summary <- function(p) {
 
   s <- data.table(file_stem = stems)
   lab <- short_labels(stems)
-  s[, sample := unname(lab[file_stem])]
+  s[, short_label := unname(lab[file_stem])]
   if (!is.null(im)) s <- unique(im[, .(file_stem, group, time, is_control)], by = "file_stem")[s, on = "file_stem"]
   if (!is.null(stage)) s <- stage[, .(file_stem, reads_imported = imported, reads_after_qc = final)][s, on = "file_stem"]
   if (!is.null(qc)) s <- qc[, intersect(c("file_stem", "median_length", "median_np", "median_qv"), names(qc)), with = FALSE][s, on = "file_stem"]
@@ -63,7 +63,7 @@ write_run_summary <- function(p) {
     s[is.na(other_clusters) & file_stem %in% al$file_stem, other_clusters := 0L]
   }
   # Columns in pipeline order, so the table reads left to right as the run went
-  ord <- c("sample", "file_stem", "group", "time", "is_control", "reads_imported", "reads_after_qc",
+  ord <- c("file_stem", "short_label", "group", "time", "is_control", "reads_imported", "reads_after_qc",
            "median_read_length_bp", "median_np", "median_qv", "reads_aligned",
            grep("^reads_with_", names(s), value = TRUE), grep("_detection_rate$", names(s), value = TRUE),
            "reads_with_umi", "umi_molecules", "molecules_kept", "reads_in_kept_molecules", "share_of_umi_reads_in_kept_molecules", "median_reads_per_kept_molecule",
@@ -83,11 +83,13 @@ write_run_summary <- function(p) {
     hl <- im[measure == primary, keep, with = FALSE]
     if ("setpoint_type" %in% names(hl) && isTRUE(p$headline_setpoint_type %in% hl$setpoint_type)) hl <- hl[setpoint_type == p$headline_setpoint_type]
     rt <- rd("06_instability", "instability.xlsx", "range_table")
+    # each sample's own bounds for each range (a range can be set differently per sample)
     if (!is.null(rt) && "range_text" %in% names(rt))
-      hl <- unique(rt[measure == primary, .(analysis_range_name = range_name, range = sub(paste0("^", primary, " "), "", range_text))], by = "analysis_range_name")[hl, on = "analysis_range_name"]
-    hl[, sample := unname(lab[file_stem])]
-    setcolorder(hl, c("sample", "file_stem", intersect(c("group", "time", "is_control", "unit", "measure", "analysis_range_name", "range", "setpoint_type"), names(hl))))
-    setorder(hl, unit, analysis_range_name, group, time, sample, na.last = TRUE)
+      hl <- unique(rt[measure == primary, .(file_stem, analysis_range_name = range_name, range = sub(paste0("^", primary, " "), "", range_text))],
+                   by = c("file_stem", "analysis_range_name"))[hl, on = .(file_stem, analysis_range_name)]
+    hl[, short_label := unname(lab[file_stem])]
+    setcolorder(hl, c("file_stem", "short_label", intersect(c("group", "time", "is_control", "unit", "measure", "analysis_range_name", "range", "setpoint_type"), names(hl))))
+    setorder(hl, unit, analysis_range_name, group, time, file_stem, na.last = TRUE)
   }
 
   files <- data.table(
@@ -110,15 +112,15 @@ write_run_summary <- function(p) {
              "The same metrics as plain text, for R, Python or Prism",
              "Length distribution figures for every group, range and sample (plots/sample_card/ = one page per sample)",
              "Every figure in a report is saved as a PNG under that module's plots/ folder"))
-  cols <- data.table(column = c("sample", "file_stem", "group, time, is_control", "reads_imported, reads_after_qc",
+  cols <- data.table(column = c("file_stem", "short_label", "group, time, is_control", "reads_imported, reads_after_qc",
                                 "median_read_length_bp, median_np, median_qv", "reads_aligned",
                                 "reads_with_<tract>, <tract>_detection_rate", "reads_with_umi, umi_molecules, molecules_kept",
                                 "reads_in_kept_molecules, share_of_umi_reads_in_kept_molecules, median_reads_per_kept_molecule",
                                 sprintf("allele1_%s, allele2_%s", primary, primary), "allele1_read_share, allele2_read_share",
                                 "allele1_molecule_share, allele2_molecule_share",
                                 "allele1_notation, allele2_notation", "other_clusters"),
-                     meaning = c("Short sample label: the part of the file name that differs between samples (as in the reports)",
-                                 "The sample's file name without extension, as in every table",
+                     meaning = c("The sample's file name without extension: its identifier in every table, and in the plot file names",
+                                 "Short label used in figures, where the full name will not fit: the parts of the file name that differ between this run's samples (always unique within the run, but it depends on which samples are in the run, so use file_stem to match samples between runs)",
                                  "From the settings file", "Reads read in, and left after the import filters (Module 1)",
                                  "Median read length, pass count and read quality (QV; PacBio only)",
                                  "Reads with both flanks aligned in the right order (Module 2)",
@@ -200,17 +202,21 @@ write_run_index <- function(p, summary = NULL) {
          'th{background:#f3f3f3;position:sticky;top:0}.wrap{overflow-x:auto;max-height:80vh}.thumbs{display:flex;flex-wrap:wrap;gap:12px}',
          '.thumbs figure{margin:0;width:240px}.thumbs img{width:240px;height:160px;object-fit:contain;border:1px solid #ddd;background:#fff}',
          '.thumbs figcaption{font-size:12px;word-break:break-all}.note{font-size:13px;color:#555;max-width:900px}a{color:#0b5cad}',
-         '.r{color:#555}.m{color:#00838f}',
+         '.r{color:#555}.m{color:#00838f}code{font-size:12px;word-break:break-all}',
+         # Contents bar: stays at the top of the window while scrolling
+         'nav.toc{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #ccc;padding:6px 0;margin:8px 0 0;font-size:14px}nav.toc a{margin-right:16px;text-decoration:none}',
+         'h2{scroll-margin-top:44px}',
          # Sample by sample: the sample, group and time columns stay in view when the table is scrolled sideways
-         '.fix1{position:sticky;left:0;background:#fff;z-index:1;width:200px;min-width:200px;max-width:200px;box-shadow:2px 0 0 #bbb}.fix1 small{color:#666}',
+         '.fix1{position:sticky;left:0;background:#fff;z-index:1;width:300px;min-width:300px;max-width:300px;word-break:break-all;box-shadow:2px 0 0 #bbb}.fix1 small{color:#666;word-break:normal}',
          'th.fix1{background:#f3f3f3;z-index:3}th{z-index:2}',
          '</style></head><body>',
-         '<h1>Duke run index</h1>',
-         sprintf('<p class="meta">Duke %s &middot; %s &middot; %d samples &middot; output folder %s</p>', esc(p$duke_version %||% ""), format(Sys.time(), "%Y-%m-%d %H:%M"),
+         '<h1 id="top">Duke run index</h1>',
+         sprintf('<p class="meta">Duke %s &middot; %s &middot; %d samples<br>Output folder: <code>%s</code></p>', esc(p$duke_version %||% ""), format(Sys.time(), "%Y-%m-%d %H:%M"),
                  length(stems), esc(dir_out)),
+         '<nav class="toc"><a href="#reports">Reports</a><a href="#summary">Run summary</a><a href="#samples">Sample by sample</a><a href="#ranges">Range by range</a><a href="#groups">Group by group</a><a href="#run">Whole-run figures</a><a href="#top">Top</a></nav>',
          '<p class="note">Everything this run produced, linked from one page. Start with the reports and the run summary. Figures are grouped below by what they show: the whole run, one sample, one range, one group. Wherever both are drawn, <span class="r">reads</span> are grey and <span class="m">molecules (UMI-collapsed: one consensus length per UMI)</span> teal, and file and folder names say which.</p>')
 
-  h <- c(h, '<h2>Reports</h2><table><tr><th>Report</th><th>What it covers</th><th>Tables</th></tr>')
+  h <- c(h, '<h2 id="reports">Reports</h2><table><tr><th>Report</th><th>What it covers</th><th>Tables</th></tr>')
   for (m in names(mod_names)) {
     rep <- paste0(m, ".html"); if (!file.exists(file.path(dir_out, rep))) next
     # the module's tables, plus the allele FASTA and VCF one folder down in Module 5
@@ -222,7 +228,7 @@ write_run_index <- function(p, summary = NULL) {
   h <- c(h, "</table>")
   rs <- c("run_summary.xlsx", "run_summary_samples.tsv", "run_summary_headline_metrics.tsv")
   rs <- rs[file.exists(file.path(dir_out, rs))]
-  if (length(rs)) h <- c(h, '<h2>Run summary</h2><p class="note">One row per sample with what every module found (reads at each step, molecules, alleles), the headline metrics for every range, and a guide to the columns. The .tsv files are the same tables as plain text.</p><p>',
+  if (length(rs)) h <- c(h, '<h2 id="summary">Run summary</h2><p class="note">One row per sample with what every module found (reads at each step, molecules, alleles), the headline metrics for every range, and a guide to the columns. The .tsv files are the same tables as plain text.</p><p>',
                          paste(vapply(rs, function(x) a(x, x), ""), collapse = " &middot; "), "</p>")
 
   # Sample by sample: one column per kind of per-sample figure
@@ -230,13 +236,13 @@ write_run_index <- function(p, summary = NULL) {
   if (nrow(sp)) {
     sp[, kind := trimws(paste(type, strip_part(rest, sample), uw(unit)))]
     kinds <- unique(sp[order(module, type, ord_unit(unit), kind), .(module, kind)])
-    h <- c(h, '<h2>Sample by sample</h2><p class="note">One row per sample, one column per kind of per-sample figure: the plot type, then the measure, then which units it shows (<i>reads + molecules</i>, <i>reads</i>, or <i>molecules</i>). File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p><div class="wrap"><table><tr><th class="fix1">Sample<br><small>group, time</small></th>',
+    h <- c(h, '<h2 id="samples">Sample by sample</h2><p class="note">One row per sample, one column per kind of per-sample figure: the plot type, then the measure, then which units it shows (<i>reads + molecules</i>, <i>reads</i>, or <i>molecules</i>). File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p><div class="wrap"><table><tr><th class="fix1">Sample (file name)<br><small>group, time</small></th>',
            paste0("<th>M", kinds$module, " ", esc(kinds$kind), "</th>", collapse = ""), "</tr>")
     for (i in seq_along(stems)) {
       st <- stems[i]
       cells <- vapply(kinds$kind, function(k) { f <- sp[sample == st & kind == k, path]; if (length(f)) a(f[1], "view") else "" }, "")
       # The sample column (with its group and time) stays in view when the table is scrolled sideways
-      h <- c(h, sprintf("<tr><td class=\"fix1\" title=\"%s\"><b>%s</b><br><small>%s%s</small></td>%s</tr>", esc(st), esc(s$sample[i]),
+      h <- c(h, sprintf("<tr><td class=\"fix1\" title=\"%s\"><b>%s</b><br><small>%s%s</small></td>%s</tr>", esc(s$short_label[i]), esc(st),
                         esc(display_group(s$group[i] %||% "")), if (!is.na(s$time[i] %||% NA)) paste0(", t = ", esc(as.character(s$time[i]))) else "", paste0("<td>", cells, "</td>", collapse = "")))
     }
     h <- c(h, "</table></div>")
@@ -246,9 +252,14 @@ write_run_index <- function(p, summary = NULL) {
   rp <- fig[!is.na(range) & is.na(sample)]
   if (nrow(rp)) {
     rt <- tryCatch(as.data.table(readxl::read_excel(file.path(dir_out, "06_instability", "instability.xlsx"), "range_table")), error = function(e) NULL)
-    rtxt <- if (!is.null(rt) && "range_text" %in% names(rt)) unique(rt[measure == p$tracts_table$tract[1], .(range_name, range_text)], by = "range_name") else NULL
+    # A range can be set differently for different samples in the settings file: list each
+    # version, with the number of samples that have it
+    rtxt <- if (!is.null(rt) && "range_text" %in% names(rt)) {
+      rt[measure == p$tracts_table$tract[1], .(n = uniqueN(file_stem)), by = .(range_name, range_text)][
+        , .(range_text = if (.N == 1) range_text else paste0("varies by sample: ", paste(sprintf("%s (%d)", range_text, n), collapse = "; "))), by = range_name]
+    } else NULL
     rp[, lab0 := strip_part(rest, range)][, label := trimws(paste(lab0, uw(unit)))]
-    h <- c(h, '<h2>Range by range</h2><p class="note">One row per analysis range: every figure drawn for that range (Module 6 timecourses and tract comparison, Module 7 group figures), by plot type. Each sample in every range is under <i>Sample by sample</i> (sample_ranges).</p><div class="wrap"><table><tr><th>Range</th><th>Lengths</th><th>Figures</th></tr>')
+    h <- c(h, '<h2 id="ranges">Range by range</h2><p class="note">One row per analysis range: every figure drawn for that range (Module 6 timecourses and tract comparison, Module 7 group figures), by plot type. Each sample in every range is under <i>Sample by sample</i> (sample_ranges).</p><div class="wrap"><table><tr><th>Range</th><th>Lengths</th><th>Figures</th></tr>')
     for (r in sort(unique(rp$range))) {
       x <- rp[range == r][order(module, type, lab0, ord_unit(unit))]
       cell <- paste(vapply(unique(x$type), function(t) paste0("<b>", esc(t), "</b>: ", paste(vapply(which(x$type == t), function(k) a(x$path[k], x$label[k]), ""), collapse = " &middot; ")), ""), collapse = "<br>")
@@ -262,7 +273,7 @@ write_run_index <- function(p, summary = NULL) {
   gp <- fig[!is.na(group)]
   if (nrow(gp)) {
     gp[, lab0 := strip_part(rest, group)][, label := trimws(paste(lab0, uw(unit)))]
-    h <- c(h, '<h2>Group by group</h2><p class="note">Module 7: each group&rsquo;s samples stacked in time order, for all lengths and for each range. <i>group_density</i> = ridges with every read (or molecule) as a dot; <i>group_histogram</i> = one row per sample.</p><div class="wrap"><table><tr><th>Group</th><th>Figures</th></tr>')
+    h <- c(h, '<h2 id="groups">Group by group</h2><p class="note">Module 7: each group&rsquo;s samples stacked in time order, for all lengths and for each range. <i>group_density</i> = ridges with every read (or molecule) as a dot; <i>group_histogram</i> = one row per sample.</p><div class="wrap"><table><tr><th>Group</th><th>Figures</th></tr>')
     for (g in sort(unique(gp$group))) {
       x <- gp[group == g][order(type, lab0, ord_unit(unit))]
       cell <- paste(vapply(unique(x$type), function(t) paste0("<b>", esc(t), "</b>: ", paste(vapply(which(x$type == t), function(k) a(x$path[k], x$label[k]), ""), collapse = " &middot; ")), ""), collapse = "<br>")
@@ -273,7 +284,7 @@ write_run_index <- function(p, summary = NULL) {
 
   cp <- fig[is.na(sample) & is.na(range) & is.na(group)][order(module, type, ord_unit(unit), base)]
   if (nrow(cp)) {
-    h <- c(h, '<h2>Whole-run figures</h2><p class="note">Figures that summarise every sample at once, by module. Click a thumbnail for the full figure.</p>')
+    h <- c(h, '<h2 id="run">Whole-run figures</h2><p class="note">Figures that summarise every sample at once, by module. Click a thumbnail for the full figure.</p>')
     for (m in names(mod_names)) {
       f <- cp[startsWith(path, paste0(m, "/")), path]; if (!length(f)) next
       h <- c(h, sprintf("<h3>%s</h3><div class=\"thumbs\">", esc(mod_names[[m]])))

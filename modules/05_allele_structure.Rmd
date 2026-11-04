@@ -487,7 +487,7 @@ s1 <- cons$file_stem[1]
 print(allele_map_plot(cons[file_stem == s1], if (nrow(vv_all)) vv_all[file_stem == s1] else vv_all, ref, s1, tracts$tract, primary))
 ```
 
-```{r allele_bams, eval=params$cluster && isTRUE(params$allele_bam)}
+```{r allele_bams, eval=params$cluster && isTRUE(params$allele_bam), results='asis'}
 .t <- proc.time()["elapsed"]
 bam_dir <- file.path(st_dir, "bam"); unlink(bam_dir, recursive = TRUE)
 bam_tmp <- file.path(temp_dir, "allele_bam"); dir.create(bam_tmp, recursive = TRUE, showWarnings = FALSE)
@@ -506,7 +506,8 @@ invisible(apply_fn(unique(d_all$file_stem), function(s) {
 }))
 timings["Allele BAMs"] <- proc.time()["elapsed"] - .t
 cat(sprintf("Reads were placed on the reference %s. ", if (bam_method == "flanks") sprintf("from their flanks (allele_bam_method = %s; median flank length %s bp): each flank aligned to its reference flank and the repeat region shown as one insertion at the N block, at position %d", params$allele_bam_method, round(flank_bp), ref$n_start - 1) else sprintf("with minimap2 (%s)", params$allele_bam_minimap2)))
-cat(sprintf("Allele BAMs written for %d samples (up to %s reads per allele) to bam/. In IGV, load the reference FASTA, alleles.vcf and a sample's BAM, then group or colour the reads by tag HP to see each allele's reads. The repeat is at %s:%s-%s; paste that into the IGV locus box.\n",
+cat("\n\n")
+cat(sprintf("Allele BAMs written for %d samples (up to %s reads per allele) to bam/. In IGV, load the reference FASTA, alleles.vcf and a sample's BAM, then group or colour the reads by tag HP to see each allele's reads. The repeat is at %s:%s-%s; paste that into the IGV locus box.\n\n",
             uniqueN(d_all$file_stem), format(params$allele_bam_reads, big.mark = ","), ref$ref_id,
             format(max(1, ref$n_start - 150), big.mark = ","), format(min(nchar(ref$full), ref$n_end + 150), big.mark = ",")))
 ```

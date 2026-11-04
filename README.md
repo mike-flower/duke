@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.4** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.3.5** – see [Changes from v2.3.1](#changes-from-v231)
 
 ---
 
@@ -724,6 +724,12 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 **v3.0.10**
 - Module 5 haplotype clustering: the left and right flanks are no longer joined into one sequence for k-mer counting, so no k-mer spans the junction. Junction k-mers combined the bases either side of the tract, so jitter where the tract ends changed ~15 k-mers in the same reads at once, which looks like a real variant; on the jasmine CAG + CCG run this split ~10% of the expanded allele into a second "haplotype" (H2) in 45 of 66 samples, with the same length distribution and a consensus that differed only in the bases next to the tract. On simulated reads the old code split off 9% of reads on boundary jitter alone and missed a real SNP carried by 30% of reads; the new code keeps one cluster for jitter and splits on the SNP. A real variant within ~7 bp of the tract is no longer used for haplotypes.
 - Module 5 report: the variants section says how much flank sequence the consensuses cover (on a UMI amplicon this is ~50 bp left and ~80 bp right of the tract, not the whole reference flank), and says plainly when no consensus differs from the reference, rather than introducing a table that is not there.
+
+**v3.3.5** – file names as sample identifiers, index contents bar
+
+- Run summary and headline metrics: `file_stem` is the first column, the sample's identifier; the short label used in figures follows it as `short_label` (it was `sample`). The headline metrics give each sample's own bounds for each range, which can differ between samples.
+- `00_index.html`: a contents bar that stays at the top of the window; the version, date and sample count on one line and the output folder on the next; *Sample by sample* names each sample by its file name, with group and time under it; *Range by range* lists every version of a range that the settings file sets differently for different samples, with how many samples have each.
+- Module 5: the allele BAM summary prints as text, not as code output.
 
 **v3.3.4** – plot subfolders, 00_index.html, consensus fix
 
