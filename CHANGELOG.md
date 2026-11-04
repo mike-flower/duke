@@ -2,6 +2,14 @@
 
 Newest first. The [README](README.md) describes the current version.
 
+## v3.3.10 – a small expanded allele kept as an allele, tract maps, clearer Module 1 and 4 figures
+
+- Module 5 clustering: a cluster holding under `repeat_cluster_min_prop` (5%) of a sample's molecules or reads was always merged into its nearest neighbour, however far away. On the full jasmine run one sample (kxF07--kxR15, MLH1ko 9B, t = 98) had its expanded allele (CAG ~123, 75 of 1,787 molecules, 4%) merged into the 14-CAG allele, so it was reported with one allele. A cluster far from every other (by more than 10 units and a quarter of the length) that holds at least 1% and 20 molecules or reads is now kept as an allele. On the 66 jasmine samples this changes that one sample and no other; the PacBio and UMI test sets give the same alleles as before. The allele-shares subtitle says "1 sample", not "1 samples".
+- New Module 6 figures, *CCG against CAG, every read or molecule* (`pair_map`, `pair_map_group`): each tract's length against the other's for every read or molecule, at all lengths, as a 2-D histogram on a log colour scale; one figure for the run with a panel per group, and one per group with a panel per sample in time order. Drawn for reads and for molecules, for every pair of tracts.
+- Module 1 *Pass count against read length*: each length band is now coloured by the share of its own reads at each pass count, so every band shows its own pass-count distribution. Colouring by read numbers made each band one flat colour, set by how common that length is, and hid the distribution. Bars give the 25th to 75th percentile beside each median, a bar chart on top gives the reads in each band, bands with under 0.1% of the reads are left uncoloured, and the subtitle says when many reads sit at the highest pass count (on the jasmine run, 28.5% at np 60, the instrument's cap).
+- Module 1 *Reads per sample*: one labelled row per sample (short label), ordered by read count, with the reads imported shown beside the reads kept where a filter removed any. It was an unlabelled ranked dot plot.
+- Module 4 shortened-filter grids: the panels are titled *Number of molecules in each cell* and *Share of each cell's molecules flagged as shortened*, with a note that blank cells hold fewer than 5 molecules.
+
 ## v3.3.9 – modal labels in the density figures, waterfalls explained
 
 - Waterfalls with UMIs say what each row is: the subtitle reads *Each row = one molecule, drawn with its read closest to the molecule's length (that read's bases, not a consensus)*, the rows are said to be ordered by molecule length, and the Module 5 report and the README's plot table explain the choice.

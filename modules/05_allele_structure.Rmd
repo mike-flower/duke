@@ -200,7 +200,7 @@ p_cc <- ggplot(sh, aes(x = share, y = sample, fill = allele_lab)) + geom_col(wid
   scale_fill_manual(values = c(`Allele 1` = "#e41a1c", `Allele 2` = "#377eb8", `Extra alleles (3+)` = "grey60"), name = NULL, breaks = c("Allele 1", "Allele 2", "Extra alleles (3+)")) +
   labs(x = NULL, y = NULL, title = paste0("How each sample's ", if (length(sh_units) > 1) "reads and molecules split" else "reads split", " between its alleles"),
        subtitle = paste0("Allele 1 = the shorter of the two largest clusters.\n",
-                         paste(sprintf("%d samples with %d cluster%s", as.integer(table(nclu$N)), as.integer(names(table(nclu$N))), ifelse(names(table(nclu$N)) == "1", "", "s")), collapse = "; "))) +
+                         paste(sprintf("%d sample%s with %d cluster%s", as.integer(table(nclu$N)), ifelse(as.integer(table(nclu$N)) == 1, "", "s"), as.integer(names(table(nclu$N))), ifelse(names(table(nclu$N)) == "1", "", "s")), collapse = "; "))) +
   theme_bw() + theme(legend.position = "bottom", panel.spacing = unit(1.5, "lines"), axis.text.y = element_text(size = if (length(samples) > 60) 5 else 8),
                      plot.title.position = "plot")
 print(p_cc); save_plot(p_cc, plot_path(plots_dir, "allele_shares"), 4 + 3 * length(sh_units), min(45, max(4, 2.2 + 0.18 * length(samples))))

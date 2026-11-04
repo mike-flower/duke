@@ -8,7 +8,8 @@
 # The number of clusters is chosen by a Gaussian mixture (BIC) on a subsample, and
 # every value is assigned by that mixture (k-means at that k only if the mixture
 # fails); any cluster holding fewer than min_prop of the values is merged into its
-# nearest neighbour. The
+# nearest neighbour, unless it lies far from every other cluster (an isolated minor allele,
+# kept when it holds at least 1% and 20 values). The
 # merge step stops the expansion smear of an unstable allele being cut into
 # many small clusters (the old version gave 3-20 clusters for 15% of samples).
 cluster_by_repeat_length <- function(values, cluster_max = 6L, min_prop = 0.05, downsample = 10000L) {
@@ -46,6 +47,13 @@ cluster_by_repeat_length <- function(values, cluster_max = 6L, min_prop = 0.05, 
       mu <- g$parameters$mean; pro <- g$parameters$pro
       sdv <- rep_len(sqrt(g$parameters$variance$sigmasq), length(mu))
       big <- which(pro >= min_prop); if (!length(big)) big <- which.max(pro)
+      # A small component far from every larger one is a minor allele, not stutter or smear
+      # of another allele (e.g. an expanded allele that holds 4% of the molecules in a sample
+      # where most cells have lost it), so it is kept when it holds enough values
+      far <- function(j, ref) !length(ref) || min(abs(mu[ref] - mu[j])) > max(10, 0.25 * max(abs(mu[j]), abs(mu[ref])))
+      isolated <- setdiff(which(pro >= 0.01 & pro * length(opt_v) >= 20), big)
+      isolated <- isolated[vapply(isolated, far, logical(1), ref = big)]
+      big <- sort(c(big, isolated))
       narrow <- big[sdv[big] <= 0.2 * pmax(abs(mu[big]), 1)]
       # A broad component is the smear only when it lies between two allele peaks; a broad
       # component with no component above it is the expanded allele itself (reads of an
@@ -59,14 +67,22 @@ cluster_by_repeat_length <- function(values, cluster_max = 6L, min_prop = 0.05, 
     if (is.null(cu)) { set.seed(123); stats::kmeans(v, centers = k, nstart = 10)$cluster }
     else { runs <- rle(cu); run_id <- rep(seq_along(runs$lengths), runs$lengths); run_id[match(v, u)] }
   }
+  # Clusters under min_prop are merged into their nearest neighbour, smallest first, except a
+  # cluster far from every other (an isolated minor allele) holding at least 1% and 20 values
   repeat {
     tab <- table(cl); props <- tab / sum(tab)
-    if (length(tab) <= 1 || min(props) >= min_prop) break
-    small <- as.integer(names(props)[which.min(props)])
+    if (length(tab) <= 1) break
     centres <- tapply(v, cl, mean)
+    isolated_cl <- vapply(names(centres), function(i) {
+      d <- min(abs(centres[names(centres) != i] - centres[i]))
+      d > max(10, 0.25 * max(abs(centres))) && props[i] >= 0.01 && tab[i] >= 20
+    }, logical(1))
+    cand <- props[props < min_prop & !isolated_cl[names(props)]]
+    if (!length(cand)) break
+    small <- names(cand)[which.min(cand)]
     others <- centres[names(centres) != small]
-    target <- as.integer(names(others)[which.min(abs(others - centres[as.character(small)]))])
-    cl[cl == small] <- target
+    target <- as.integer(names(others)[which.min(abs(others - centres[small]))])
+    cl[cl == as.integer(small)] <- target
   }
   cl <- merge_length_shoulders(v, cl)
   centres <- tapply(v, cl, mean)

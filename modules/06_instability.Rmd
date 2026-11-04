@@ -85,6 +85,7 @@ The setpoint is the **`r params$control_setpoint_metric`**: the sample's own (`s
 - `06_instability/plots/` – `counts_per_range_*`, `control_setpoints_*`, `instability_index_by_range_*`, `experiment_map.png`
 - `06_instability/plots/timecourse/{unit}/{measure}/` – the headline metrics against time, every measure and every range
 - `06_instability/plots/pair_trend/{unit}/{A}_vs_{B}/`, `pair_correlation/…` – tract comparison for every range (`pair_trend_{A}_vs_{B}_{range}_{unit}.png`)
+- `06_instability/plots/pair_map/` and `pair_map_group/` – each tract against the other for every read or molecule, all lengths: one figure for the run with a panel per group, and one per group with a panel per sample
 - `06_instability/plots/pair_scatter/{reads|molecules}/` – each sample's two tract lengths per read or molecule, one panel per range (`pair_scatter_{sample}_{A}_vs_{B}_{reads|molecules}.png`)
 
 ---
@@ -531,6 +532,63 @@ for (pr in pairs) for (rg in sort(unique(pair_bins$analysis_range_name))) {
     theme_bw() + theme(legend.position = "top")
   }, function(u) plot_path(plots_dir, "pair_correlation", ab, rg, unit = u), 10, min(40, 2 + 0.6 * n_grp * (if (u == "combined") 2 else 1)), show = show)
 }
+```
+
+```{r pair_maps, eval=has_pairs, results='asis'}
+.t <- proc.time()["elapsed"]
+# Each tract's length against the other's, read by read (or molecule by molecule), for all
+# lengths: a 2-D histogram per group for the whole run, and one figure per group with a
+# panel per sample. Reads and molecules cannot share one histogram, so "combined" gives both.
+map_units <- intersect(plot_units_for(params, have_mol, can_combine = FALSE), names(wide))
+want_run <- want_plot("pair_map", params); want_grp <- want_plot("pair_map_group", params)
+lab_m <- short_labels(meta$file_stem)
+for (pr in pairs) {
+  A <- pr[1]; B <- pr[2]; ab <- paste0(A, "_vs_", B); shown <- FALSE
+  for (u in if (want_run || want_grp) map_units else character(0)) {
+    W <- wide[[u]]; if (!all(c(A, B) %in% names(W))) next
+    d <- W[!is.na(get(A)) & !is.na(get(B)), .(file_stem, a = round(get(A)), b = round(get(B)))][meta[, .(file_stem, group_label, time)], on = "file_stem", nomatch = NULL]
+    if (!nrow(d)) next
+    xl <- c(min(d$a), stats::quantile(d$a, 0.999)) + c(-1, 1); yl <- c(min(d$b), stats::quantile(d$b, 0.999)) + c(-1, 1)
+    what <- if (u == "reads") "reads" else "molecules (UMI-collapsed)"
+    scale_share <- scale_fill_viridis_c(trans = "log10", breaks = 10^(-4:0), labels = c("0.01%", "0.1%", "1%", "10%", "100%"), limits = c(1e-4, 1), oob = scales::squish,
+                                        name = sprintf("Share of the\n%s", if (u == "reads") "reads" else "molecules"))
+    if (want_run) {
+      tg <- d[, .N, by = .(group_label, a, b)][, share := N / sum(N), by = group_label]
+      n_g <- uniqueN(tg$group_label); nc <- min(4, n_g)
+      p <- ggplot(tg, aes(a, b, fill = share)) + geom_tile() + scale_share +
+        facet_wrap(~ group_label, ncol = nc, labeller = as_labeller(function(x) wrap_label(display_group(x), 40))) +
+        coord_cartesian(xlim = xl, ylim = yl) +
+        labs(x = paste(A, "length (repeat units)"), y = paste(B, "length (repeat units)"),
+             title = sprintf("%s against %s, every %s: by group", B, A, if (u == "reads") "read" else "molecule"),
+             subtitle = sprintf("Each panel pools a group's %s; colour = share of them at each pair of lengths (log scale)\nAll lengths; the top 0.1%% of each axis is not drawn", what)) +
+        theme_bw() + theme(strip.text = element_text(size = 7), panel.grid.minor = element_blank())
+      h <- 2 + 2.6 * ceiling(n_g / nc)
+      save_plot(p, plot_path(plots_dir, "pair_map", ab, unit = u), max(9, 2.5 + 2.8 * nc), h)
+      if (!shown && (u == "molecules" || !"molecules" %in% map_units)) {
+        cat(sprintf("\n\n### %s against %s, every %s\n\n", B, A, if (u == "reads") "read" else "molecule"))
+        cat(sprintf("Each read's (or molecule's) **%s** length against its **%s** length, for all lengths, so the alleles, their spread and any link between the two tracts can be seen together. Each panel pools one group; the colour is the share of the group's %s at that pair of lengths, on a log scale so a minor population shows beside the main one. Samples with an expanded %s tract that also carries a different %s length show as a separate spot; a %s that changes with %s shows as a slope. Saved for reads and for molecules as `plots/pair_map/{unit}/pair_map_%s_{unit}.png`, and one figure per group with a panel per sample as `plots/pair_map_group/{unit}/pair_map_group_{group}_%s_{unit}.png`.\n\n", A, B, what, A, B, B, A, ab, ab))
+        cat(sprintf("![](%s)\n\n", md_path(plot_path(plots_dir, "pair_map", ab, unit = u))))
+        shown <- TRUE
+      }
+    }
+    if (want_grp) for (g in unique(d$group_label)) {
+      dg <- d[group_label == g]
+      ts <- dg[, .N, by = .(file_stem, time, a, b)][, share := N / sum(N), by = file_stem]
+      ord <- unique(ts[order(time, file_stem), file_stem])
+      ts[, sample := factor(paste0(lab_m[file_stem], ifelse(is.na(time), "", paste0(" (t=", time, ")"))),
+                            levels = unique(paste0(lab_m[ord], ifelse(is.na(ts$time[match(ord, ts$file_stem)]), "", paste0(" (t=", ts$time[match(ord, ts$file_stem)], ")")))))]
+      ns <- uniqueN(ts$sample); nc <- min(4, ns)
+      p <- ggplot(ts, aes(a, b, fill = share)) + geom_tile() + scale_share + facet_wrap(~ sample, ncol = nc) +
+        coord_cartesian(xlim = xl, ylim = yl) +
+        labs(x = paste(A, "length (repeat units)"), y = paste(B, "length (repeat units)"),
+             title = sprintf("%s: %s against %s, every %s", display_group(g), B, A, if (u == "reads") "read" else "molecule"),
+             subtitle = sprintf("One panel per sample, in time order; colour = share of the sample's %s at each pair of lengths (log scale)", what)) +
+        theme_bw() + theme(strip.text = element_text(size = 7), panel.grid.minor = element_blank())
+      save_plot(p, plot_path(plots_dir, "pair_map_group", g, ab, unit = u), max(9, 2.5 + 2.8 * nc), 2 + 2.6 * ceiling(ns / nc))
+    }
+  }
+}
+timings["Tract maps"] <- proc.time()["elapsed"] - .t
 ```
 
 ---

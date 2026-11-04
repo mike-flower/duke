@@ -292,12 +292,13 @@ lf_bin <- lf[length_bin <= lf_lim, .(molecules = .N, flagged = mean(long_flag)),
 lf_bin[, x := length_bin + (lf_bw - 1) / 2]
 p_lf1 <- ggplot(lf_bin, aes(x, depth, fill = molecules)) + geom_tile(width = lf_bw) + scale_y_discrete(drop = FALSE) +
   scale_fill_viridis_c(trans = "log10", labels = comma, name = "Molecules\n(log scale)") +
-  labs(x = paste("Molecule's", primary, "repeat length (units)"), y = "Reads per molecule", title = "Molecules") +
+  labs(x = paste("Molecule's", primary, "repeat length (units)"), y = "Reads per molecule", title = "Number of molecules in each cell") +
   theme_bw() + theme(panel.grid = element_blank(), legend.position = "bottom", legend.key.width = grid::unit(1.2, "cm"))
 p_lf2 <- ggplot(lf_bin[molecules >= 5], aes(x, depth, fill = flagged)) + geom_tile(width = lf_bw) +
-  scale_fill_viridis_c(option = "magma", direction = -1, labels = pct_axis(), limits = c(0, 1), name = "Flagged") +
+  scale_fill_viridis_c(option = "magma", direction = -1, labels = pct_axis(), limits = c(0, 1), name = "Flagged as\nshortened") +
   scale_y_discrete(drop = FALSE) +
-  labs(x = paste("Molecule's", primary, "repeat length (units)"), y = NULL, title = "Share flagged (cells with 5+ molecules)") +
+  labs(x = paste("Molecule's", primary, "repeat length (units)"), y = NULL, title = "Share of each cell's molecules flagged as shortened",
+       subtitle = "Blank = fewer than 5 molecules in the cell, too few for a share") +
   theme_bw() + theme(panel.grid = element_blank(), legend.position = "bottom", legend.key.width = grid::unit(1.2, "cm"))
 p_lf <- patchwork::wrap_plots(p_lf1, p_lf2, nrow = 1) + patchwork::plot_annotation(
   title = "Molecules flagged by the shortened-molecule filter, by length and reads per molecule",

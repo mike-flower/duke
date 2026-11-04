@@ -155,9 +155,9 @@ save_plot(p_pacbio, file.path(plots_dir, "pacbio_np_rq.png"), 10, 5)
 
 ## Pass count against read length
 
-Every read is counted (no subsampling): each tile is a band of read lengths and one pass count, coloured by the number of reads in it (log scale, so both the crowded and the sparse tiles show), and the white points are the median pass count in each length band that holds at least 0.5% of the reads. Longer inserts take longer to read, so fewer passes fit in the movie: a downward trend is expected, and the step between the short and the long reads shows how many fewer passes an expanded allele gets than a short one. A bright row at the top is PacBio's cap on the reported pass count. The shortest and longest 0.5% of reads are left out of the plot so it is not stretched by a few stray lengths.
+Every read is counted (no subsampling). Each column is a band of read lengths, and its tiles are coloured by the share of **that band's** reads at each pass count, so every column shows its own pass-count distribution however many reads it holds (colouring by read numbers instead makes each column one flat colour, set by how common that length is). The white points are each band's median pass count, with bars from the 25th to the 75th percentile, for bands holding at least 0.5% of the reads; the bar on top gives how many reads each band holds, and bands with fewer than 0.1% of the reads are left uncoloured, as a handful of reads gives no distribution. Longer inserts take longer to read, so fewer passes fit in the movie: a downward trend is expected, and the step between the short and the long reads shows how many fewer passes an expanded allele gets than a short one. A bright row at the top is PacBio's cap on the reported pass count. The shortest and longest 0.5% of reads are left out of the plot so it is not stretched by a few stray lengths.
 
-```{r pacbio_np_length, eval=any_pacbio, fig.height=5}
+```{r pacbio_np_length, eval=any_pacbio, fig.height=6.5}
 np_len <- rbindlist(lapply(names(read_metadata), function(fs) {
   data.table(np = read_metadata[[fs]]$np[match(names(seq[[fs]]), read_metadata[[fs]]$read_name)], read_length = width(seq[[fs]]))
 }))[!is.na(np)]
@@ -165,16 +165,32 @@ xr <- stats::quantile(np_len$read_length, c(0.005, 0.995))
 bw <- max(1, signif(diff(xr) / 80, 1))
 n_np_all <- nrow(np_len)
 np_len <- np_len[read_length >= xr[1] & read_length <= xr[2]][, len_bin := floor(read_length / bw) * bw + bw / 2]
-np_tab <- np_len[, .(reads = .N), by = .(len_bin, np)]
-np_med <- np_len[, .(np = as.numeric(stats::median(np)), n = .N), by = len_bin][n >= max(20, 0.005 * nrow(np_len))][order(len_bin)]
-p_np_len <- ggplot(np_tab, aes(len_bin, np)) + geom_tile(aes(fill = reads), width = bw, height = 1) +
+np_tab <- np_len[, .(reads = .N), by = .(len_bin, np)][, share := reads / sum(reads), by = len_bin]
+# A band holding only a handful of reads gives shares of 50-100% from single reads, which would
+# dominate the colour scale, so only bands holding at least 0.1% of the reads (and 20) are coloured
+band_n <- np_tab[, .(n = sum(reads)), by = len_bin][n >= max(20, 0.001 * nrow(np_len))]
+np_tab_c <- np_tab[len_bin %in% band_n$len_bin]
+share_top <- max(stats::quantile(np_tab_c$share, 0.99), 0.01)
+np_med <- np_len[, .(np = as.numeric(stats::median(np)), q25 = as.numeric(stats::quantile(np, 0.25)), q75 = as.numeric(stats::quantile(np, 0.75)), n = .N),
+                 by = len_bin][n >= max(20, 0.005 * nrow(np_len))][order(len_bin)]
+np_max <- max(np_len$np); at_max <- mean(np_len$np == np_max)
+p_np_main <- ggplot(np_tab_c, aes(len_bin, np)) + geom_tile(aes(fill = share), width = bw, height = 1) +
+  geom_errorbar(data = np_med, aes(ymin = q25, ymax = q75), width = bw * 0.6, colour = "white", linewidth = 0.4) +
   geom_point(data = np_med, shape = 21, fill = "white", colour = "black", size = 2) +
-  scale_fill_viridis_c(trans = "log10", labels = comma, name = "Reads") +
-  scale_x_continuous(labels = comma, expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) +
-  labs(x = "Read length (bp)", y = "Pass count (np)", title = "PacBio pass count against read length",
-       subtitle = sprintf("%s of %s reads (the shortest and longest 0.5%% left out); tiles %s bp wide; points = median pass count in each band holding at least 0.5%% of reads", comma(nrow(np_len)), comma(n_np_all), comma(bw))) + theme_bw()
+  scale_fill_viridis_c(limits = c(0, share_top), oob = scales::squish, labels = pct_axis(), name = "Share of the\nlength band's\nreads") +
+  scale_x_continuous(labels = comma, limits = range(np_tab$len_bin) + c(-bw, bw) / 2, expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) +
+  labs(x = "Read length (bp)", y = "Pass count (np)") + theme_bw()
+len_tot <- np_tab[, .(reads = sum(reads)), by = len_bin]
+p_np_top <- ggplot(len_tot, aes(len_bin, reads)) + geom_col(width = bw, fill = "grey50") +
+  scale_x_continuous(limits = range(np_tab$len_bin) + c(-bw, bw) / 2, expand = c(0, 0)) + scale_y_log10(labels = comma) +
+  labs(x = NULL, y = "Reads\n(log)") + theme_bw() + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+p_np_len <- patchwork::wrap_plots(p_np_top, p_np_main, ncol = 1, heights = c(1, 3.2)) +
+  patchwork::plot_annotation(title = "PacBio pass count against read length",
+    subtitle = sprintf("%s of %s reads (the shortest and longest 0.5%% left out); length bands %s bp wide\nPoints = median pass count, bars = 25th to 75th percentile%s",
+                       comma(nrow(np_len)), comma(n_np_all), comma(bw),
+                       if (at_max > 0.02) sprintf("; %s of reads have the highest pass count, %d (likely the instrument's cap)", percent(at_max, 0.1), np_max) else ""))
 print(p_np_len)
-save_plot(p_np_len, file.path(plots_dir, "pacbio_np_vs_length.png"), 10, 5)
+save_plot(p_np_len, file.path(plots_dir, "pacbio_np_vs_length.png"), 10, 6.5)
 fwrite(np_tab[order(len_bin, np)], file.path(dirname(plots_dir), "pacbio_np_by_length.tsv"), sep = "\t")
 rm(np_len); invisible(gc())
 ```
@@ -238,18 +254,24 @@ print(p_trim); save_plot(p_trim, file.path(plots_dir, "adapter_trimming.png"), 6
 
 # Reads per sample
 
-Each point is one sample, ordered from fewest to most reads, on a log scale. The dashed line marks the cohort median. Samples at the far left are the ones most likely to give noisy repeat-length distributions.
+One row per sample, labelled, ordered from fewest to most reads, on a log scale: the blue point is the reads left after this module's filters, and where a filter removed reads a grey ring marks the number imported, joined by a line. The dashed line is the median of all samples. Samples at the bottom are the ones most likely to give noisy repeat-length distributions; the table below gives the count after every step.
 
-```{r read_counts, fig.height=5}
+```{r read_counts, fig.height=min(40, 2 + 0.14 * length(seq))}
 stage_counts$final <- vapply(seq[stage_counts$file_stem], length, integer(1))
-rc <- stage_counts %>% dplyr::arrange(final) %>% dplyr::mutate(rank = row_number())
-p_counts <- ggplot(rc, aes(rank, pmax(final, 1))) + geom_point(colour = "#377eb8") +
-  geom_hline(yintercept = median(rc$final), linetype = "dashed") +
-  annotate("text", x = 1, y = median(rc$final), label = paste("median", comma(median(rc$final))), vjust = -0.5, hjust = 0, size = 3.5) +
-  scale_y_log10(labels = comma) +
-  labs(x = "Samples, ordered by read count", y = "Reads (log scale)", title = "Reads per sample after Module 1",
-       subtitle = sprintf("%d samples; %s reads in total", nrow(rc), comma(sum(rc$final)))) + theme_bw()
-print(p_counts); save_plot(p_counts, file.path(plots_dir, "reads_per_sample.png"), 10, 5)
+rc <- as.data.table(stage_counts)[order(final)]
+rc[, label := factor(short_labels(file_stem)[file_stem], levels = unique(short_labels(file_stem)[file_stem]))]
+lost <- rc[imported > final]
+p_counts <- ggplot(rc, aes(y = label)) +
+  geom_vline(xintercept = median(rc$final), linetype = "dashed", colour = "grey30") +
+  { if (nrow(lost)) geom_segment(data = lost, aes(x = pmax(final, 1), xend = imported, yend = label), colour = "grey70") } +
+  { if (nrow(lost)) geom_point(data = lost, aes(x = imported), shape = 21, colour = "grey50", fill = "white", size = 1.8) } +
+  geom_point(aes(x = pmax(final, 1)), colour = "#377eb8", size = 1.8) +
+  scale_x_log10(labels = comma) +
+  labs(x = "Reads (log scale)", y = NULL, title = "Reads per sample after import and QC",
+       subtitle = sprintf("%d samples; %s reads in total; dashed line = median, %s%s", nrow(rc), comma(sum(rc$final)), comma(median(rc$final)),
+                          if (nrow(lost)) "; grey ring = reads imported, before the filters" else "")) +
+  theme_bw() + theme(axis.text.y = element_text(size = if (nrow(rc) > 80) 5 else 7), panel.grid.minor = element_blank())
+print(p_counts); save_plot(p_counts, file.path(plots_dir, "reads_per_sample.png"), 8, min(40, 2 + 0.14 * nrow(rc)))
 ```
 
 ```{r stage_table}

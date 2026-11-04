@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.9** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+**v3.3.10** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 **New to Duke?** Read [What Duke does](#what-duke-does), then follow [Installation](#installation) and [Quick start](#quick-start). The rest of this page is reference: look things up as you need them.
 
@@ -129,7 +129,7 @@ You need a folder of reads (one BAM, FASTQ or FASTA file per sample) and a refer
 **1. A first look, without a settings file.** Write each run to a new folder, named with the Duke version, so earlier results are kept.
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.9 --path_ref www/HTTset20_cagcaa.fasta --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.10 --path_ref www/HTTset20_cagcaa.fasta --threads 8
 ```
 
 Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus sequences and variants. Without a settings file every module runs except Module 6. Open `00_index.html` in the output folder: Modules 1 and 2 show whether the reads and alignment are good, and the Module 3 and Module 7 length plots show where each sample's alleles are, so where to put the ranges.
@@ -139,7 +139,7 @@ Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus se
 **3. Run again with the settings file**, into the same folder:
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.9 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.10 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
 ```
 
 [Resume](#resume) keeps Modules 1–5, as nothing that affects them changed, and runs Modules 6 and 7. Edit the settings and run again as often as needed.
@@ -232,11 +232,11 @@ Every saved figure is named **`{plot type}_{sample, group or measure}_{measure}_
 
 | Plot type | Module | Files | Reads / molecules versions | Default | What it shows |
 |---|---|---|---|---|---|
-| `reads_per_sample` | 1 | one for the run | – | yes | Reads per sample at each import step |
+| `reads_per_sample` | 1 | one for the run | – | yes | Reads per sample, one labelled row each, imported and kept |
 | `read_length_distribution` | 1 | one for the run | – | yes | Read length distribution pooled and per sample |
 | `quality_vs_length` | 1 | one for the run | – | yes | Mean base quality against read length per sample |
 | `pacbio_np_rq` | 1 | one for the run | – | yes | PacBio pass count and read quality per sample |
-| `pacbio_np_vs_length` | 1 | one for the run | – | yes | PacBio pass count against read length (tile plot of every read) |
+| `pacbio_np_vs_length` | 1 | one for the run | – | yes | PacBio pass count against read length: each length band's pass-count distribution, with medians and quartiles |
 | `adapter_trimming` | 1 | one for the run | – | yes | Adapter trimming outcome |
 | `read_accounting` | 2 | one for the run | – | yes | Reads kept at each alignment step |
 | `flank_boundary_shortfall` | 2 | one for the run | – | yes | Flank alignments that stop short of the repeat |
@@ -282,6 +282,8 @@ Every saved figure is named **`{plot type}_{sample, group or measure}_{measure}_
 | `pair_trend` | 6 | one per range | yes | yes | Change in one tract against change in another (one per range) |
 | `pair_correlation` | 6 | one per range | yes | yes | Per-sample correlation between two tracts (one per range) |
 | `pair_scatter` | 6 | one per sample | yes | yes | One sample's lengths of two tracts per read or molecule (every range) |
+| `pair_map` | 6 | one per tract pair | yes | yes | Two tracts' lengths against each other for every read or molecule, all lengths, a panel per group |
+| `pair_map_group` | 6 | one per group | yes | yes | One group's samples: two tracts' lengths against each other, a panel per sample |
 | `heatmap` | 7 | one per measure | yes | yes | Every sample's length distribution (one per measure) |
 | `group_density` | 7 | one per group | yes | yes | A group's samples as ridges (all lengths and each range) |
 | `group_histogram` | 7 | one per group | yes | yes | A group's samples as histograms (all lengths and each range) |
@@ -566,7 +568,7 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 | `cluster_by` | `repeat` | text list | `repeat`, `haplotype`, or `repeat,haplotype` |
 | `cluster_unit` | `auto` | text | What the repeat lengths are clustered on: `molecules` (the length of each kept UMI molecule, and every read takes the cluster of its molecule), `reads`, or `auto` (molecules when umi = TRUE, otherwise reads) |
 | `repeat_cluster_max` | `6` | whole number | Maximum repeat-length clusters per sample |
-| `repeat_cluster_min_prop` | `0.05` | number | Clusters holding fewer than this proportion of reads are merged into their nearest neighbour |
+| `repeat_cluster_min_prop` | `0.05` | number | Clusters holding fewer than this proportion of reads (or molecules) are merged into their nearest neighbour, unless far from every other cluster (more than 10 units and a quarter of the length) and holding at least 1% and 20: such a cluster is a minor allele and is kept |
 | `repeat_cluster_downsample` | `10000` | whole number | Reads used to choose the number of repeat clusters |
 | `haplotype_cluster_max` | `6` | whole number | Maximum haplotype clusters per sample |
 | `haplotype_cluster_downsample` | `3000` | whole number | Reads used to define haplotype clusters |
@@ -672,7 +674,7 @@ tail -f ~/Scratch/bin/duke/logs/duke_<job id>.out
 
 Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's warnings and messages go to the run log only. Loading R on a compute node can take a few minutes before the first Duke line appears, and new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file. `qstat -j <id> | grep usage` shows CPU time and memory so far, `qdel <id>` stops a job and `qacct -j <id>` gives the resources a finished job used. A waiting job's resources can be changed with `qalter`, e.g. `qalter -pe smp 1 -l mem=8G <id>`.
 
-**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.9 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
+**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.10 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
 
 **Other clusters.** `scripts/duke_kathleen.sh` (SGE, `-pe mpi`) and `scripts/duke_kathleen_slurm.sh` (Slurm, `sbatch`; monitor with `squeue -u $USER`, `scancel <id>`, `sacct -j <id>`) ask for one whole node, as Duke cannot spread one run across nodes. A run that fits on Myriad is simplest there.
 

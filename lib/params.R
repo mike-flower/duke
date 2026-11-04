@@ -96,7 +96,7 @@ duke_param_spec <- function() {
     .p("cluster_by", "repeat", "chrvec", "Allele structure", "'repeat', 'haplotype', or 'repeat,haplotype'"),
     .p("cluster_unit", "auto", "chr", "Allele structure", "What the repeat lengths are clustered on: 'molecules' (the length of each kept UMI molecule, and every read takes the cluster of its molecule), 'reads', or 'auto' (molecules when umi = TRUE, otherwise reads)"),
     .p("repeat_cluster_max", 6L, "int", "Allele structure", "Maximum repeat-length clusters per sample"),
-    .p("repeat_cluster_min_prop", 0.05, "num", "Allele structure", "Clusters holding fewer than this proportion of reads are merged into their nearest neighbour"),
+    .p("repeat_cluster_min_prop", 0.05, "num", "Allele structure", "Clusters holding fewer than this proportion of reads (or molecules) are merged into their nearest neighbour, unless far from every other cluster (more than 10 units and a quarter of the length) and holding at least 1% and 20: such a cluster is a minor allele and is kept"),
     .p("repeat_cluster_downsample", 10000L, "int", "Allele structure", "Reads used to choose the number of repeat clusters"),
     .p("haplotype_cluster_max", 6L, "int", "Allele structure", "Maximum haplotype clusters per sample"),
     .p("haplotype_cluster_downsample", 3000L, "int", "Allele structure", "Reads used to define haplotype clusters"),

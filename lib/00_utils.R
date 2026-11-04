@@ -438,6 +438,8 @@ instability_index_by_range,6,run,TRUE,TRUE,Instability index in every range
 pair_trend,6,range,TRUE,TRUE,Change in one tract against change in another (one per range)
 pair_correlation,6,range,TRUE,TRUE,Per-sample correlation between two tracts (one per range)
 pair_scatter,6,sample,TRUE,TRUE,One sample's lengths of two tracts per read or molecule (every range)
+pair_map,6,measure,TRUE,TRUE,Two tracts' lengths against each other for every read or molecule (one per tract pair; a panel per group)
+pair_map_group,6,group,TRUE,TRUE,One group's samples: two tracts' lengths against each other (one per group and tract pair)
 heatmap,7,measure,TRUE,TRUE,Every sample's length distribution (one per measure)
 group_density,7,group,TRUE,TRUE,A group's samples as ridges (all lengths and each range)
 group_histogram,7,group,TRUE,TRUE,A group's samples as histograms (all lengths and each range)

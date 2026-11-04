@@ -172,8 +172,10 @@ params <- list(
   cluster_unit = "auto",
   # Maximum repeat-length clusters per sample
   repeat_cluster_max = 6L,
-  # Clusters holding fewer than this proportion of reads are merged into their nearest
-  # neighbour
+  # Clusters holding fewer than this proportion of reads (or molecules) are merged into
+  # their nearest neighbour, unless far from every other cluster (more than 10 units and
+  # a quarter of the length) and holding at least 1% and 20: such a cluster is a minor
+  # allele and is kept
   repeat_cluster_min_prop = 0.05,
   # Reads used to choose the number of repeat clusters
   repeat_cluster_downsample = 10000L,
