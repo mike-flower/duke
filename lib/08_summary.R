@@ -11,7 +11,11 @@
 write_run_summary <- function(p) {
   suppressPackageStartupMessages(library(data.table))   # attached in a pipeline run already; needed when called on its own
   dir_out <- p$dir_out
+  # Only modules whose results belong to this run (p$current_modules, set by run_duke);
+  # a workbook left by an earlier run with other settings is ignored
+  cur <- p$current_modules %||% as.character(1:7)
   rd <- function(mod, file, sheet) {
+    if (!substr(mod, 2, 2) %in% cur) return(NULL)
     f <- file.path(dir_out, mod, file)
     if (!file.exists(f) || !sheet %in% readxl::excel_sheets(f)) return(NULL)
     x <- tryCatch(as.data.table(readxl::read_excel(f, sheet)), error = function(e) NULL)
@@ -71,6 +75,11 @@ write_run_summary <- function(p) {
   ord <- intersect(ord, names(s))
   setcolorder(s, c(ord, setdiff(names(s), ord)))
   if (!is.null(so)) { o <- match(s$file_stem, so$file_stem); s <- s[order(o, s$file_stem)] }
+  # Readable numbers: shares and rates to 4 decimal places, QV to 1
+  rnd <- function(d) { for (cn in names(d)) if (is.double(d[[cn]])) data.table::set(d, j = cn, value = round(d[[cn]], if (cn == "median_qv") 1 else 4)); d }
+  s <- rnd(s)
+  # molecule columns are empty without UMIs
+  for (cn in grep("molecule_share$", names(s), value = TRUE)) if (all(is.na(s[[cn]]))) s[, (cn) := NULL]
 
   # Headline metrics for the primary measure: one row per sample, unit and range, with
   # the columns most people want; every metric is in 06_instability/instability_metrics.tsv
@@ -89,7 +98,11 @@ write_run_summary <- function(p) {
                    by = c("file_stem", "analysis_range_name"))[hl, on = .(file_stem, analysis_range_name)]
     hl[, short_label := unname(lab[file_stem])]
     setcolorder(hl, c("file_stem", "short_label", intersect(c("group", "time", "is_control", "unit", "measure", "analysis_range_name", "range", "setpoint_type"), names(hl))))
-    setorder(hl, unit, analysis_range_name, group, time, file_stem, na.last = TRUE)
+    # reads first, as in every figure
+    hl[, unit_order := match(unit, c("reads", "molecules"))]
+    setorder(hl, unit_order, analysis_range_name, group, time, file_stem, na.last = TRUE)
+    hl[, unit_order := NULL]
+    hl <- rnd(hl)
   }
 
   files <- data.table(
@@ -125,13 +138,17 @@ write_run_summary <- function(p) {
                                  "Median read length, pass count and read quality (QV; PacBio only)",
                                  "Reads with both flanks aligned in the right order (Module 2)",
                                  "Reads in which each tract was found, and as a share of aligned reads (Module 3)",
-                                 "Reads holding a UMI, the UMI molecules (families) found, and those kept (enough reads and not flagged as shortened; Module 4)",
+                                 "Reads with a UMI and a primary-tract length (the reads Module 4 collapses), the UMI molecules (families) found, and those kept (enough reads and not flagged as shortened; Module 4)",
                                  "Reads in kept molecules, as a count and as a share of the reads with a UMI, and the kept molecules' median depth",
                                  sprintf("Modal %s length of the shorter (1) and longer (2) allele (Module 5)", primary),
                                  "Share of the sample's clustered reads in each allele",
                                  "Share of the sample's clustered molecules in each allele (UMI runs clustered on molecules; the better measure of allele balance, as each molecule counts once)",
                                  "Each allele's consensus repeat region in repeat notation",
                                  "Clusters beyond the two alleles (a subclone, PCR chimeras or contamination; see Module 5)"))
+  # List only the columns and outputs this run has (e.g. no UMI rows in a run without UMIs)
+  cols <- cols[vapply(strsplit(column, ",\\s*"), function(cc) any(grepl("<", cc)) || any(cc %in% names(s)), TRUE)]
+  files <- files[vapply(sub(" .*$", "", where), function(w) grepl("\\*|^run_summary|^00_index", w) || file.exists(file.path(dir_out, w)), TRUE)]
+  if (is.null(hl)) files <- files[!grepl("headline", where)]
   out <- list(samples = s, headline_metrics = hl, columns = cols, files = files)
   xl <- file.path(dir_out, "run_summary.xlsx"); if (file.exists(xl)) file.remove(xl)
   write_excel_function(out, xl)
@@ -157,6 +174,7 @@ write_run_index <- function(p, summary = NULL) {
   a <- function(path, text) sprintf('<a href="%s">%s</a>', href(path), esc(text))
   pngs <- list.files(dir_out, pattern = "\\.png$", recursive = TRUE)
   pngs <- pngs[!grepl("^(temp|module_data)/|_files/", pngs)]
+  pngs <- pngs[substr(pngs, 2, 2) %in% (p$current_modules %||% as.character(1:7))]   # this run's modules only
   s <- summary$samples
   stems <- if (!is.null(s)) s$file_stem else character(0)
   # Every figure is named {type}_{sample or group}_{measure}_{range}_{unit}.png (see
@@ -169,10 +187,15 @@ write_run_index <- function(p, summary = NULL) {
   fig[, module := cat_$module[match(type, cat_$type)]]
   fig[is.na(module), module := suppressWarnings(as.integer(substr(path, 2, 2)))]
   fig[, rest := ifelse(is.na(type), base, substring(base, nchar(type) + 2))]
-  fig[, unit := ifelse(grepl("_(combined|reads|molecules)$", rest), sub(".*_", "", rest), NA_character_)]
+  # Only types drawn per unit end in _combined/_reads/_molecules (a file stem can end in
+  # e.g. "hifi_reads" too, and must not lose it)
+  has_unit <- fig$type %in% cat_$type[cat_$units]
+  fig[, unit := ifelse(has_unit & grepl("_(combined|reads|molecules)$", rest), sub(".*_", "", rest), NA_character_)]
   fig[, rest := ifelse(is.na(unit), rest, sub("_(combined|reads|molecules)$", "", rest))]
-  so <- stems[order(-nchar(stems))]
-  fig[, sample := vapply(rest, function(r) { m <- so[r == so | startsWith(r, paste0(so, "_"))]; if (length(m)) m[1] else NA_character_ }, "", USE.NAMES = FALSE)]
+  # File names carry each stem as safe_path() writes it (spaces etc. replaced), so match on that
+  stem_fs <- stats::setNames(stems, safe_path(stems))
+  so <- names(stem_fs)[order(-nchar(names(stem_fs)))]
+  fig[, sample := vapply(rest, function(r) { m <- so[r == so | startsWith(r, paste0(so, "_"))]; if (length(m)) unname(stem_fs[m[1]]) else NA_character_ }, "", USE.NAMES = FALSE)]
   groups <- if (!is.null(s) && "group" %in% names(s)) unique(stats::na.omit(s$group)) else character(0)
   gs <- safe_path(groups); gs <- gs[order(-nchar(gs))]
   fig[, group := ifelse(type %in% cat_$type[cat_$scope == "group"],
@@ -206,19 +229,19 @@ write_run_index <- function(p, summary = NULL) {
          # Contents bar: stays at the top of the window while scrolling
          'nav.toc{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #ccc;padding:6px 0;margin:8px 0 0;font-size:14px}nav.toc a{margin-right:16px;text-decoration:none}',
          'h2{scroll-margin-top:44px}',
-         # Sample by sample: the sample, group and time columns stay in view when the table is scrolled sideways
+         # Samples: the sample, group and time columns stay in view when the table is scrolled sideways
          '.fix1{position:sticky;left:0;background:#fff;z-index:1;width:300px;min-width:300px;max-width:300px;word-break:break-all;box-shadow:2px 0 0 #bbb}.fix1 small{color:#666;word-break:normal}',
          'th.fix1{background:#f3f3f3;z-index:3}th{z-index:2}',
          '</style></head><body>',
          '<h1 id="top">Duke run index</h1>',
-         sprintf('<p class="meta">Duke %s &middot; %s &middot; %d samples<br>Output folder: <code>%s</code></p>', esc(p$duke_version %||% ""), format(Sys.time(), "%Y-%m-%d %H:%M"),
+         sprintf('<p class="meta">Duke %s &middot; %s &middot; %d samples<br>Output folder: <a href="./" title="Open the output folder"><code>%s</code></a></p>', esc(p$duke_version %||% ""), format(Sys.time(), "%Y-%m-%d %H:%M"),
                  length(stems), esc(dir_out)),
-         '<nav class="toc"><a href="#reports">Reports</a><a href="#summary">Run summary</a><a href="#samples">Sample by sample</a><a href="#ranges">Range by range</a><a href="#groups">Group by group</a><a href="#run">Whole-run figures</a><a href="#top">Top</a></nav>',
-         '<p class="note">Everything this run produced, linked from one page. Start with the reports and the run summary. Figures are grouped below by what they show: the whole run, one sample, one range, one group. Wherever both are drawn, <span class="r">reads</span> are grey and <span class="m">molecules (UMI-collapsed: one consensus length per UMI)</span> teal, and file and folder names say which.</p>')
+         '<nav class="toc"><a href="#reports">Reports</a><a href="#summary">Run summary</a><a href="#samples">Samples</a><a href="#ranges">Ranges</a><a href="#groups">Groups</a><a href="#run">Summary figures</a><a href="#top">Top</a></nav>',
+         '<p class="note">Everything this run produced, linked from one page. Start with the reports and the run summary. Figures are grouped below by what they show: one sample (<i>Samples</i>), one range (<i>Ranges</i>), one group (<i>Groups</i>), or every sample at once (<i>Summary figures</i>). Wherever both are drawn, <span class="r">reads</span> are grey and <span class="m">molecules (UMI-collapsed: one consensus length per UMI)</span> teal, and file and folder names say which.</p>')
 
   h <- c(h, '<h2 id="reports">Reports</h2><table><tr><th>Report</th><th>What it covers</th><th>Tables</th></tr>')
   for (m in names(mod_names)) {
-    rep <- paste0(m, ".html"); if (!file.exists(file.path(dir_out, rep))) next
+    rep <- paste0(m, ".html"); if (!file.exists(file.path(dir_out, rep)) || !substr(m, 2, 2) %in% (p$current_modules %||% as.character(1:7))) next
     # the module's tables, plus the allele FASTA and VCF one folder down in Module 5
     xl <- c(list.files(file.path(dir_out, m), pattern = "\\.(xlsx|tsv)$"),
             grep("^(consensus|variants)/[^/]+\\.(fasta|vcf)$", list.files(file.path(dir_out, m), recursive = TRUE), value = TRUE))
@@ -231,12 +254,12 @@ write_run_index <- function(p, summary = NULL) {
   if (length(rs)) h <- c(h, '<h2 id="summary">Run summary</h2><p class="note">One row per sample with what every module found (reads at each step, molecules, alleles), the headline metrics for every range, and a guide to the columns. The .tsv files are the same tables as plain text.</p><p>',
                          paste(vapply(rs, function(x) a(x, x), ""), collapse = " &middot; "), "</p>")
 
-  # Sample by sample: one column per kind of per-sample figure
+  # Samples: one column per kind of per-sample figure
   sp <- fig[!is.na(sample)]
   if (nrow(sp)) {
-    sp[, kind := trimws(paste(type, strip_part(rest, sample), uw(unit)))]
+    sp[, kind := gsub("\\s+", " ", trimws(paste(type, strip_part(rest, safe_path(sample)), uw(unit))))]
     kinds <- unique(sp[order(module, type, ord_unit(unit), kind), .(module, kind)])
-    h <- c(h, '<h2 id="samples">Sample by sample</h2><p class="note">One row per sample, one column per kind of per-sample figure: the plot type, then the measure, then which units it shows (<i>reads + molecules</i>, <i>reads</i>, or <i>molecules</i>). File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p><div class="wrap"><table><tr><th class="fix1">Sample (file name)<br><small>group, time</small></th>',
+    h <- c(h, '<h2 id="samples">Samples</h2><p class="note">One row per sample, one column per kind of per-sample figure: the plot type, then the measure, then which units it shows (<i>reads + molecules</i>, <i>reads</i>, or <i>molecules</i>). File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p><div class="wrap"><table><tr><th class="fix1">Sample (file name)<br><small>group, time</small></th>',
            paste0("<th>M", kinds$module, " ", esc(kinds$kind), "</th>", collapse = ""), "</tr>")
     for (i in seq_along(stems)) {
       st <- stems[i]
@@ -248,7 +271,7 @@ write_run_index <- function(p, summary = NULL) {
     h <- c(h, "</table></div>")
   }
 
-  # Range by range: every figure of a range that is not one sample's
+  # Ranges: every figure of a range that is not one sample's
   rp <- fig[!is.na(range) & is.na(sample)]
   if (nrow(rp)) {
     rt <- tryCatch(as.data.table(readxl::read_excel(file.path(dir_out, "06_instability", "instability.xlsx"), "range_table")), error = function(e) NULL)
@@ -259,7 +282,7 @@ write_run_index <- function(p, summary = NULL) {
         , .(range_text = if (.N == 1) range_text else paste0("varies by sample: ", paste(sprintf("%s (%d)", range_text, n), collapse = "; "))), by = range_name]
     } else NULL
     rp[, lab0 := strip_part(rest, range)][, label := trimws(paste(lab0, uw(unit)))]
-    h <- c(h, '<h2 id="ranges">Range by range</h2><p class="note">One row per analysis range: every figure drawn for that range (Module 6 timecourses and tract comparison, Module 7 group figures), by plot type. Each sample in every range is under <i>Sample by sample</i> (sample_ranges).</p><div class="wrap"><table><tr><th>Range</th><th>Lengths</th><th>Figures</th></tr>')
+    h <- c(h, '<h2 id="ranges">Ranges</h2><p class="note">One row per analysis range: every figure drawn for that range (Module 6 timecourses and tract comparison, Module 7 group figures), by plot type. Each sample in every range is under <i>Samples</i> (sample_ranges).</p><div class="wrap"><table><tr><th>Range</th><th>Lengths</th><th>Figures</th></tr>')
     for (r in sort(unique(rp$range))) {
       x <- rp[range == r][order(module, type, lab0, ord_unit(unit))]
       cell <- paste(vapply(unique(x$type), function(t) paste0("<b>", esc(t), "</b>: ", paste(vapply(which(x$type == t), function(k) a(x$path[k], x$label[k]), ""), collapse = " &middot; ")), ""), collapse = "<br>")
@@ -269,11 +292,11 @@ write_run_index <- function(p, summary = NULL) {
     h <- c(h, "</table></div>")
   }
 
-  # Group by group
+  # Groups
   gp <- fig[!is.na(group)]
   if (nrow(gp)) {
     gp[, lab0 := strip_part(rest, group)][, label := trimws(paste(lab0, uw(unit)))]
-    h <- c(h, '<h2 id="groups">Group by group</h2><p class="note">Module 7: each group&rsquo;s samples stacked in time order, for all lengths and for each range. <i>group_density</i> = ridges with every read (or molecule) as a dot; <i>group_histogram</i> = one row per sample.</p><div class="wrap"><table><tr><th>Group</th><th>Figures</th></tr>')
+    h <- c(h, '<h2 id="groups">Groups</h2><p class="note">Module 7: each group&rsquo;s samples stacked in time order, for all lengths and for each range. <i>group_density</i> = ridges with every read (or molecule) as a dot; <i>group_histogram</i> = one row per sample.</p><div class="wrap"><table><tr><th>Group</th><th>Figures</th></tr>')
     for (g in sort(unique(gp$group))) {
       x <- gp[group == g][order(type, lab0, ord_unit(unit))]
       cell <- paste(vapply(unique(x$type), function(t) paste0("<b>", esc(t), "</b>: ", paste(vapply(which(x$type == t), function(k) a(x$path[k], x$label[k]), ""), collapse = " &middot; ")), ""), collapse = "<br>")
@@ -284,7 +307,7 @@ write_run_index <- function(p, summary = NULL) {
 
   cp <- fig[is.na(sample) & is.na(range) & is.na(group)][order(module, type, ord_unit(unit), base)]
   if (nrow(cp)) {
-    h <- c(h, '<h2 id="run">Whole-run figures</h2><p class="note">Figures that summarise every sample at once, by module. Click a thumbnail for the full figure.</p>')
+    h <- c(h, paste0('<h2 id="run">Summary figures</h2><p class="note">Figures that show every sample in the run together, rather than one sample, range or group: for example read counts and quality per sample (Module 1)', if (dir.exists(file.path(dir_out, "04_umi"))) ", the length distributions of reads against molecules (Module 4)", if (dir.exists(file.path(dir_out, "05_allele_structure"))) ", the clusters in every sample (Module 5)", if (dir.exists(file.path(dir_out, "06_instability"))) ", the instability index in every range (Module 6)", '. By module; click a thumbnail for the full figure.</p>'))
     for (m in names(mod_names)) {
       f <- cp[startsWith(path, paste0(m, "/")), path]; if (!length(f)) next
       h <- c(h, sprintf("<h3>%s</h3><div class=\"thumbs\">", esc(mod_names[[m]])))

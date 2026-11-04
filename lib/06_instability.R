@@ -235,14 +235,16 @@ metric_definitions <- function(thresholds) {
 # Modal peaks inside one range (local maxima of the frequency table)
 find_modal_peaks <- function(x, max_peaks = 1, span = 3) {
   if (!length(x)) return(data.frame(peak_rank = NA_integer_, peak_length = NA_real_, peak_frequency = NA_real_))
-  tb <- table(x); len <- as.numeric(names(tb)); fr <- as.numeric(tb)
-  if (length(fr) < span || length(fr) < 3) {
-    i <- which.max(fr); return(data.frame(peak_rank = 1L, peak_length = len[i], peak_frequency = fr[i]))
-  }
-  pk <- pracma::findpeaks(fr, minpeakdistance = 1, npeaks = max(1, max_peaks), sortstr = TRUE)
+  # Frequencies over every whole length from min to max (zeros included, so peaks are
+  # judged on consecutive units), padded with a zero at each end so a peak at the first
+  # or last length counts; peaks closer than `span` units are merged into the taller
+  r <- round(x)
+  len <- seq(min(r), max(r)); fr <- as.numeric(tabulate(r - min(r) + 1L, nbins = length(len)))
+  if (length(fr) < 3) { i <- which.max(fr); return(data.frame(peak_rank = 1L, peak_length = len[i], peak_frequency = fr[i])) }
+  pk <- pracma::findpeaks(c(0, fr, 0), minpeakdistance = max(1, span), npeaks = max(1, max_peaks), sortstr = TRUE)
   if (is.null(pk)) { i <- which.max(fr); return(data.frame(peak_rank = 1L, peak_length = len[i], peak_frequency = fr[i])) }
   pk <- matrix(pk, ncol = 4)
-  data.frame(peak_rank = seq_len(nrow(pk)), peak_length = len[pk[, 2]], peak_frequency = pk[, 1])
+  data.frame(peak_rank = seq_len(nrow(pk)), peak_length = len[pk[, 2] - 1L], peak_frequency = pk[, 1])
 }
 
 aggregate_controls <- function(values, method) {

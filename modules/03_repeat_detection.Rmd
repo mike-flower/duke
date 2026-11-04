@@ -69,7 +69,7 @@ dt_compact(tracts %>% dplyr::transmute(tract, motif, reference = basename(path_r
 if (nrow(composites)) dt_compact(composites %>% dplyr::transmute(measure = name, tracts, mode), caption = "Combined measures")
 ```
 
-The first tract (**`r primary`**) is the primary measure: it is used for allele clustering, waterfalls and the UMI shortened-molecule filter, and its ranges in the settings file apply to every other measure that has no ranges of its own.
+The first tract (**`r primary`**) is the primary measure: it is used for allele clustering and waterfalls`r if (isTRUE(params$umi)) " and the UMI shortened-molecule filter" else ""`, and its ranges in the settings file apply to every other measure that has no ranges of its own.
 
 **Outputs:**
 
@@ -170,11 +170,11 @@ cat(sprintf("\n\nTracts come from %d references. %s of %s reads (%.1f%%) aligned
 
 # Flank length
 
-**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence, primers and UMI). Their combined length is the read length minus the repeat tracts (the primary tract and any other tract on the same reference, such as CCG). Every read in a sample comes from the same amplicon, so it should be almost the same in every read; the commonest value in a sample is its *usual* flank length. A sample can have two usual lengths, when one allele carries an insertion or deletion in its flank: every length carried by at least 5% of the sample's reads counts as usual (up to four), so an expanded allele with its own flank structure is included, and each read is judged against the nearest one. One bar per sample, sorted by the share of reads at exactly the usual length: each bar is split into the reads at that length (darkest), 1 base off, 2–5, 6–10, 11–50 and more than 50 bases off (lightest). A sample whose bar is mostly dark has clean flanks; a light block in one sample, or a group of samples, is where to look.
+**How to read this.** The *flanks* are the parts of each read on either side of the repeat tract (the amplicon sequence and primers`r if (isTRUE(params$umi)) ", and the UMI" else ""`). Their combined length is the read length minus the repeat tracts (the primary tract and any other tract on the same reference, such as CCG). Every read in a sample comes from the same amplicon, so it should be almost the same in every read; the commonest value in a sample is its *usual* flank length. A sample can have two usual lengths, when one allele carries an insertion or deletion in its flank: every length carried by at least 5% of the sample's reads counts as usual (up to four), so an expanded allele with its own flank structure is included, and each read is judged against the nearest one. One bar per sample, sorted by the share of reads at exactly the usual length: each bar is split into the reads at that length (darkest), 1 base off, 2–5, 6–10, 11–50 and more than 50 bases off (lightest). A sample whose bar is mostly dark has clean flanks; a light block in one sample, or a group of samples, is where to look.
 
 This check comes straight after tract detection because the optional flank filter (`rm_flank_length_outliers`, `r if (isTRUE(params$rm_flank_length_outliers)) "on in this run" else "off in this run"`) acts here: `r if (isTRUE(params$rm_flank_length_outliers)) "reads it removes are left out of every later section and module" else "with it off, every read is kept"`.
 
-**What it shows.** Reads 1–2 bases off are normal: single-base insertions or deletions are the commonest PacBio error, and a flank of a few hundred bases often carries one. Reads more than 10 bases off are truncated reads, chimeras or a shifted tract boundary. When nearly all reads are within a few bases, differences in read length come from the repeat itself, not from the flanks. At HTT a sample can legitimately carry two flank lengths when its alleles differ in the CCG tract, which is why the optional flank filter is off by default.
+**What it shows.** Reads 1–2 bases off are normal: single-base insertions or deletions are the commonest PacBio error, and a flank of hundreds or thousands of bases often carries one. Reads more than 10 bases off are truncated reads, chimeras or a shifted tract boundary. When nearly all reads are within a few bases, differences in read length come from the repeat itself, not from the flanks. At HTT a sample can legitimately carry two flank lengths when its alleles differ in the CCG tract, which is why the optional flank filter is off by default.
 
 ```{r flank_qc, fig.height=min(30, 2.2 + 0.16 * uniqueN(read_tracts$file_stem))}
 fq <- read_tracts[!is.na(left), .(file_stem, qname, flank_total = nchar(left) + nchar(right))]
@@ -190,7 +190,7 @@ for (t in setdiff(tracts$tract[tracts$ref_group == pg], primary)) {
   }
 }
 # A sample can have two usual flank lengths (e.g. an indel in one allele's flank): every value
-# carrying at least 20% of the sample's reads counts as usual (at most 3, always the commonest),
+# carrying at least 5% of the sample's reads counts as usual (at most 4, always the commonest),
 # and each read is judged against the nearest of them
 fq[, modal := { tb <- sort(table(flank_total), decreasing = TRUE); as.numeric(names(tb)[1]) }, by = file_stem]
 fq[, dev := { tb <- sort(table(flank_total), decreasing = TRUE); u <- as.numeric(names(tb)[seq_len(min(4, max(1, sum(tb / sum(tb) >= 0.05))))])
@@ -401,7 +401,7 @@ pure_sum <- rbindlist(lapply(tracts$tract, function(t) {
 }))
 ```
 
-`r paste(sprintf("For %s in this run, **pure** was shorter than **full** in %s of reads; where it was, by a median of %s units, and %s of reads had **pure** below half of **full** (possible only with two or more breaks).", pure_sum$tract, percent(pure_sum$short, 0.1), format(pure_sum$median_loss), percent(pure_sum$below_half, 0.1)), collapse = " ")`
+`r paste(ifelse(is.na(pure_sum$median_loss), sprintf("For %s in this run, **pure** equalled **full** in every read.", pure_sum$tract), sprintf("For %s in this run, **pure** was shorter than **full** in %s of reads; where it was, by a median of %s units, and %s of reads had **pure** below half of **full** (possible only with two or more breaks).", pure_sum$tract, percent(pure_sum$short, 0.1), format(pure_sum$median_loss), percent(pure_sum$below_half, 0.1))), collapse = " ")`
 
 ## Where the tract is broken
 
@@ -455,7 +455,7 @@ dt_full(modal_method, caption = "Modal tract length per sample by counting metho
 
 # Sequence between tracts
 
-`r if (any(grepl("^between_", names(read_tracts)))) "**How to read this.** For each pair of consecutive tracts, the sequence between them in each read, as the share of each sample's reads (the six commonest sequences across the cohort are named and the rest pooled as other). The commonest sequence is usually the reference structure. A sequence carried by a large share of some samples' reads and few of the others' is an allele with a different interruption structure (at HTT, for example, a duplicated CAACAG or the loss of the CAA and CCA interruptions, which leaves the tracts adjacent); one at a low share in every sample is sequencing error at the junction. The table lists every sequence, including those pooled as other; per-sample shares are in the between_tracts sheet of repeat_detection.xlsx and the cohort list in between_tracts_cohort." else ""`
+`r if (any(grepl("^between_", names(read_tracts)))) "**How to read this.** For each pair of consecutive tracts, the sequence between them in each read, as the share of each sample's reads (the six commonest sequences across the cohort are named and the rest pooled as other). The commonest sequence is usually the reference structure. A sequence carried by a large share of some samples' reads and few of the others' is an allele with a different interruption structure (at HTT, for example, a duplicated CAACAG or the loss of the CAA and CCA interruptions, which leaves the tracts adjacent); one at a low share in every sample is sequencing error at the junction. The table lists every sequence, including those pooled as other; per-sample shares are in the between_tracts sheet of repeat_detection.xlsx and the cohort list in between_tracts_cohort." else "Not applicable: this run has one tract, or no tracts that share a reference, so there is no sequence between tracts."`
 
 ```{r between, eval=any(grepl("^between_", names(read_tracts))), fig.height=5}
 bcols <- grep("^between_", names(read_tracts), value = TRUE)

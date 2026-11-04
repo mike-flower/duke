@@ -30,7 +30,8 @@ format_default <- function(x, type) {
 }
 
 format_help <- function(h) {
-  h <- gsub("'([^']+)'", "`\\1`", h)   # 'longest' -> `longest`
+  # 'longest' -> `longest`; a quote with a letter before it is an apostrophe (allele's), not the start of a name
+  h <- gsub("(?<![A-Za-z])'([^']+?)'(?![A-Za-z])", "`\\1`", h, perl = TRUE)
   gsub("\\|", "\\\\|", h)
 }
 

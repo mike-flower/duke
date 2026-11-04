@@ -13,6 +13,41 @@
 # ------------------------------------------------------------------------------
 # Excel export
 # ------------------------------------------------------------------------------
+# openxlsx (4.2.5) links every sheet to a drawing part (xl/drawings/drawing1.xml) that it does
+# not write. Excel ignores the broken link, but Python (openpyxl, pandas) refuses the file. The
+# link is removed after saving; if the zip tool is missing the file is left as openxlsx wrote it.
+drop_missing_drawings <- function(path) {
+  if (!nzchar(Sys.which("zip"))) return(invisible(FALSE))
+  path <- normalizePath(path)
+  tmp <- tempfile("xlsx_"); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  if (is.null(tryCatch(utils::unzip(path, exdir = tmp), error = function(e) NULL))) return(invisible(FALSE))
+  ws <- file.path(tmp, "xl", "worksheets")
+  changed <- FALSE
+  for (r in list.files(file.path(ws, "_rels"), pattern = "\\.rels$", full.names = TRUE)) {
+    x <- paste(readLines(r, warn = FALSE), collapse = "")
+    rel <- regmatches(x, gregexpr("<Relationship [^>]*/>", x))[[1]]
+    tgt <- sub('.*Target="([^"]+)".*', "\\1", rel)
+    gone <- rel[!grepl('TargetMode="External"', rel) & !file.exists(file.path(ws, tgt))]
+    if (!length(gone)) next
+    for (g in gone) x <- sub(g, "", x, fixed = TRUE)
+    writeLines(x, r)
+    sh <- file.path(ws, sub("\\.rels$", "", basename(r)))
+    if (file.exists(sh)) {
+      y <- paste(readLines(sh, warn = FALSE), collapse = "\n")
+      for (id in sub('.*Id="([^"]+)".*', "\\1", gone)) y <- gsub(sprintf('<(drawing|legacyDrawing) r:id="%s"/>', id), "", y)
+      writeLines(y, sh)
+    }
+    changed <- TRUE
+  }
+  if (!changed) return(invisible(FALSE))
+  out <- tempfile(fileext = ".xlsx")
+  wd <- setwd(tmp); on.exit(setwd(wd), add = TRUE)
+  fl <- list.files(".", recursive = TRUE, all.files = TRUE)
+  ok <- utils::zip(out, c("[Content_Types].xml", setdiff(fl, "[Content_Types].xml")), flags = "-q -X") == 0
+  if (ok && file.exists(out)) file.copy(out, path, overwrite = TRUE)
+  invisible(ok)
+}
+
 write_excel_function <- function(named_list, path, overwrite_sheet = TRUE) {
   named_list <- Filter(function(x) !is.null(x) && is.data.frame(x), named_list)
   if (length(named_list) == 0) return(invisible(NULL))
@@ -50,6 +85,7 @@ write_excel_function <- function(named_list, path, overwrite_sheet = TRUE) {
     openxlsx::writeData(wb, export_name, as.data.frame(named_list[[table_name]]))
   }
   openxlsx::saveWorkbook(wb, file = path, overwrite = TRUE)
+  drop_missing_drawings(path)
   invisible(path)
 }
 

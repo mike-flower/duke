@@ -90,7 +90,7 @@ dist_rows <- function(d, title = NULL, xlab = "Repeat length", binwidth = 1, bw 
 # Ridge plot of several samples (or one): each sample's read length distribution as a
 # grey density (bandwidth 1 unit, scaled to its own height), the molecule density as a
 # teal line on the same row when there are molecules, every read (up to dots_max per
-# sample, drawn at random) as a dot just below the ridge, and the reads' modal length
+# sample, drawn at random) as a dot in a band along the bottom of the ridge, and the modal length
 # as a red dashed line with its value. `rd` and `md` have columns label and length;
 # label is a factor whose first level is drawn at the top.
 # main_unit = "Molecules" draws molecules alone in place of reads (rd then holds molecules, md is NULL).
@@ -107,17 +107,27 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
   }, by = label][, base := idx[as.character(label)]][, top := base + 0.85 * y]
   rdn <- dens(rd)
   set.seed(123)
-  # Each read is a dot inside its sample's ridge: jittered sideways by up to 0.35 units, so reads of
-  # one whole length do not stack into a bar, and placed at random between the baseline and the
-  # ridge's height at that length, so the dots fill the shape and stay within their own sample
+  # Each read is a dot in a band of fixed height along the bottom of its sample's ridge,
+  # jittered sideways by up to 0.35 units so reads of one whole length do not stack into a
+  # line. The band is the same height at every length (not the ridge's height), so sparse
+  # reads away from the peak, such as a PCR smear, stay as visible as the dense ones under it
   dots <- rd[, .SD[sample(.N, min(.N, dots_max))], by = label][, length := length + stats::runif(.N, -0.35, 0.35)]
-  dots[, h := { r <- rdn[label == .BY$label]
-                 if (data.table::uniqueN(r$x) < 2) rep(0.85, .N) else stats::approx(r$x, r$top - r$base, xout = length, rule = 2, ties = max)$y }, by = label]
-  dots[, y := idx[as.character(label)] + stats::runif(.N, 0.02, 0.98) * pmax(h, 0.02)]
+  dots[, y := idx[as.character(label)] + stats::runif(.N, 0.02, 0.24)]
+  # Each dot is coloured by how many of its sample's reads share its whole length, as a share
+  # of the sample's commonest length (log scale), so the densest lengths (the mode and the
+  # steps between whole units) stand out instead of merging into a solid block
+  cnt <- rd[, .(n = .N), by = .(label, unit_len = round(length))][, rel := n / max(n), by = label]
+  dots[, unit_len := round(length)]
+  dots <- cnt[, .(label, unit_len, rel)][dots, on = .(label, unit_len)]
+  data.table::setorder(dots, rel)   # densest drawn last, on top
   modal <- rd[, .(modal = { tb <- table(round(length)); as.numeric(names(tb)[which.max(tb)]) }), by = label][, base := idx[as.character(label)]]
   p <- ggplot2::ggplot() +
-    ggplot2::geom_ribbon(data = rdn, ggplot2::aes(x, ymin = base, ymax = top, group = label), fill = "grey90", colour = NA) +
-    ggplot2::geom_point(data = dots, ggplot2::aes(length, y), size = 0.35, alpha = 0.35, colour = "black", stroke = 0) +
+    ggplot2::geom_ribbon(data = rdn, ggplot2::aes(x, ymin = base, ymax = top, group = label), fill = if (mu == "molecules") "#d5ecee" else "grey90", colour = NA) +
+    ggplot2::geom_point(data = dots, ggplot2::aes(length, y, fill = pmax(rel, 0.001)), shape = 21, size = 0.6, alpha = 0.7, colour = "transparent", stroke = 0) +
+    ggplot2::scale_fill_viridis_c(option = "D", end = 0.9, trans = "log10", limits = c(0.001, 1), oob = scales::squish,
+                                  breaks = c(0.001, 0.01, 0.1, 1), labels = c("0.1%", "1%", "10%", "100%"),
+                                  name = sprintf("Dot colour: %s at that length, as %% of the commonest length", mu),
+                                  guide = ggplot2::guide_colourbar(barheight = grid::unit(0.5, "lines"), barwidth = grid::unit(9, "lines"), title.position = "top", order = 2)) +
     ggplot2::geom_line(data = rdn, ggplot2::aes(x, top, group = label, colour = main_unit), linewidth = 0.3)
   mmodal <- NULL
   if (!is.null(md) && nrow(md)) {
@@ -127,9 +137,10 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
       mmodal <- md[, .(modal = { tb <- table(round(length)); as.numeric(names(tb)[which.max(tb)]) }), by = label][, base := idx[as.character(label)]]
     }
   }
-  lab <- if (main_unit == "Molecules") c(Molecules = "Molecules (UMI-collapsed; grey fill, dots)") else
+  lab <- if (main_unit == "Molecules") c(Molecules = "Molecules (UMI-collapsed; pale teal fill, dots)") else
     c(Reads = "Reads (grey fill, dots)", Molecules = "Molecules (UMI-collapsed)")
-  p <- p + ggplot2::scale_colour_manual(values = c(Reads = "grey25", Molecules = "#00838f"), breaks = names(lab), labels = lab, name = NULL)
+  p <- p + ggplot2::scale_colour_manual(values = c(Reads = "grey25", Molecules = "#00838f"), breaks = names(lab), labels = lab, name = NULL,
+                                       guide = ggplot2::guide_legend(order = 1))
   # Modal lengths: the main unit's in red, labelled to the right; the molecules' (when drawn
   # over reads) in teal, labelled to the left, so the two can be read side by side
   if (!is.null(mmodal) && nrow(mmodal))
@@ -141,8 +152,8 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
     ggplot2::coord_cartesian(xlim = xlim) +
     ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(10)) +
     ggplot2::labs(x = xlab, y = NULL, title = title,
-                  subtitle = subtitle %||% sprintf("Grey = %s: density, scaled to each sample's height%s\nDots inside each ridge = %s %s; red = the %s' modal length%s",
-                                                   if (mu == "molecules") "molecules (UMI-collapsed)" else "reads",
+                  subtitle = subtitle %||% sprintf("%s = %s: density, scaled to each sample's height%s\nDots along the bottom of each ridge = %s %s, one per dot at its length,\ncoloured by how common that length is; red = the %s' modal length%s",
+                                                   if (mu == "molecules") "Pale teal" else "Grey", if (mu == "molecules") "molecules (UMI-collapsed)" else "reads",
                                                    if (!is.null(md) && nrow(md)) ", teal line = molecules (UMI-collapsed)" else "",
                                                    if (rd[, max(.N), by = label][, max(V1)] > dots_max) paste("up to", format(dots_max, big.mark = ","), "random") else "all", mu, mu,
                                                    if (!is.null(mmodal) && nrow(mmodal)) ", teal = the molecules'" else "")) +

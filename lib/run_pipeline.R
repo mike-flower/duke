@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.5"
+duke_version <- "3.3.7"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -21,19 +21,22 @@ duke_version <- "3.3.5"
   `1` = c("dir_data", "data_signature", "import_patterns", "import_recursive", "r1_pattern", "r2_pattern", "select_one_of_pair",
           "downsample", "np_min", "check_duplicate_readnames", "trim", "path_trim_patterns",
           "trim_max_mismatch", "trim_with_indels"),
-  `2` = c("minimap2_args", "path_manual_exclusions", "ref_signature"),
-  `3` = c("tracts_table", "composites_table", "rm_flank_length_outliers", "flank_iqr_multiplier"),
+  `2` = c("minimap2_args", "path_manual_exclusions", "ref_signature", "keep_bam", "visualise_alignment_downsample"),
+  `3` = c("tracts_table", "composites_table", "rm_flank_length_outliers", "flank_iqr_multiplier", "export_read_counts"),
   `4` = c("umi", "umi_flank_5", "umi_flank_3", "umi_flank_max_mismatch", "umi_search_window", "umi_len_min",
           "umi_len_max", "umi_cluster_max_dist", "umi_min_reads", "umi_collapse_stat", "umi_top_cluster_k",
           "umi_top_cluster_w", "umi_top_cluster_wfrac", "umi_top_cluster_min_share", "umi_shortened_filter", "umi_shortened_min_units", "umi_shortened_min_share"),
+  # (not settings_signature: Module 4 uses the settings file only to group one figure, and
+  # adding or editing the settings must not re-run UMI collapsing and everything after it)
   `5` = c("cluster", "cluster_by", "cluster_unit", "repeat_cluster_max", "repeat_cluster_min_prop", "repeat_cluster_downsample",
           "haplotype_cluster_max", "haplotype_cluster_downsample", "haplotype_region", "haplotype_trim_length",
-          "consensus_threshold", "consensus_downsample", "consensus_parts", "call_variants", "allele_bam_method", "waterfall", "waterfall_downsample",
+          "consensus_threshold", "consensus_downsample", "consensus_parts", "call_variants", "allele_minor_share", "allele_support_reads",
+          "allele_bam", "allele_bam_reads", "allele_bam_method", "allele_bam_minimap2", "waterfall", "waterfall_downsample",
           "waterfall_per_cluster", "waterfall_flank_bp"),
   `6` = c("settings_signature", "range_peak_span", "range_min_n", "group_control", "control_sample_selection",
           "control_setpoint_metric", "control_aggregation_method", "expansion_thresholds", "cohort_plot_by", "time_label",
           "headline_metrics", "headline_setpoint_type", "plot_ranges", "measure_pairs", "pair_max_points"),
-  `7` = c("sample_cards", "repeat_histogram_binwidth", "settings_signature", "plot_every_range", "plot_sample_ranges"))
+  `7` = c("sample_cards", "repeat_histogram_binwidth", "settings_signature", "plot_every_range", "plot_sample_ranges", "plot_dots_max"))
 .module_upstream <- list(`1` = character(0), `2` = "1", `3` = "2", `4` = "3", `5` = c("3", "4"),
                          `6` = c("3", "4"), `7` = c("3", "4", "6"))
 
@@ -66,7 +69,7 @@ module_hashes <- function(p) {
   def <- resolve_plot_types(list(plots = "all"))
   for (m in names(h)) {
     ty <- cat_$type[cat_$module == as.integer(m)]
-    mine <- sort(intersect(p$plot_types %||% def, ty)); dflt <- sort(intersect(def, ty))
+    mine <- sort(intersect(if (is.null(p$plot_types)) def else p$plot_types, ty)); dflt <- sort(intersect(def, ty))
     units_changed <- any(cat_$units[cat_$module == as.integer(m)]) && !identical(sort(p$plot_units %||% "combined"), "combined")
     if (!identical(mine, dflt) || units_changed)
       h[[m]] <- paste0(h[[m]], "-p", substr(digest::digest(list(mine, if (units_changed) sort(p$plot_units)), algo = "md5"), 1, 6))
@@ -167,6 +170,10 @@ stored_hash <- function(path) {
 run_duke <- function(user_params, duke_root = getwd()) {
   duke_root <- normalizePath(duke_root)
   setwd(duke_root)
+  # Reports use en dashes and other non-ASCII text; under a non-UTF-8 locale (e.g. "C" on
+  # some nodes) R writes them as <U+2013>
+  if (!isTRUE(l10n_info()$`UTF-8`))
+    for (loc in c("C.UTF-8", "en_GB.UTF-8", "en_US.UTF-8")) if (nzchar(suppressWarnings(Sys.setlocale("LC_CTYPE", loc)))) break
   p <- resolve_params(user_params)
   # A settings path that was given but does not exist is almost always a typo: stop now
   # rather than run every other module and silently skip Module 6
@@ -207,17 +214,21 @@ run_duke <- function(user_params, duke_root = getwd()) {
 
   results_dir <- file.path(p$dir_out, "module_data")
   dir.create(results_dir, showWarnings = FALSE)
-  if (!is.na(p$reuse_from %||% NA)) reuse_earlier_run(p, hashes, results_dir)
+  reused <- if (!is.na(p$reuse_from %||% NA)) reuse_earlier_run(p, hashes, results_dir) else character(0)
+  # Modules whose results in dir_out belong to this run (run now, resumed or reused); the
+  # run summary and index use only these, not files an earlier run left behind
+  current <- character(0)
   for (m in as.character(sort(unique(p$run_modules)))) {
     cat("\n-----------------------------------------------------------------\n")
     cat("Module ", m, ": ", .module_names[[m]], "\n", sep = "")
+    if (m %in% reused) { cat("Reused from", p$reuse_from, "\n"); current <- c(current, m); next }
     if (m == "4" && !isTRUE(p$umi)) { cat("Skipped (umi = FALSE)\n"); next }
     if (m == "5" && !isTRUE(p$cluster) && !isTRUE(p$waterfall)) { cat("Skipped (cluster = FALSE and waterfall = FALSE)\n"); next }
     if (m == "6" && (is.na(p$path_settings) || !file.exists(p$path_settings))) {
       cat("Skipped (no settings file - set path_settings to calculate instability metrics)\n"); next }
     out_path <- file.path(results_dir, .module_data[[m]])
     if (isTRUE(p$resume) && identical(stored_hash(out_path), hashes[[m]])) {
-      cat("Skipped - results found with identical parameters\n"); next
+      cat("Skipped - results found with identical parameters\n"); current <- c(current, m); next
     }
     if (file.exists(out_path)) cat("Parameters or upstream results changed - re-running\n")
     # Every upstream module must hold results made with the current parameters,
@@ -232,6 +243,9 @@ run_duke <- function(user_params, duke_root = getwd()) {
     }
     p$module_hash <- hashes[[m]]
     t0 <- Sys.time()
+    # Clear the previous result first: a module saves its data before its report is
+    # finished, so if this run stopped part-way the old hash must not let a resume skip it
+    unlink(c(out_path, paste0(out_path, ".hash")))
     # Each run renders in its own working folder. By default rmarkdown writes its working
     # files (the .knit.md and the figure folder) next to the Rmd, i.e. in the shared repo,
     # so two runs rendering the same module at once could delete each other's figures.
@@ -243,9 +257,14 @@ run_duke <- function(user_params, duke_root = getwd()) {
                       knit_root_dir = duke_root, quiet = TRUE)
     unlink(c(work_dir, file.path(p$dir_out, paste0(tools::file_path_sans_ext(.module_files[[m]]), "_files"))), recursive = TRUE)
     if (file.exists(out_path)) writeLines(c(hashes[[m]], paste("duke", duke_version)), paste0(out_path, ".hash"))
+    current <- c(current, m)
     cat("Done in", format_elapsed(as.numeric(difftime(Sys.time(), t0, units = "secs"))), "\n")
   }
 
+  # Modules already current before this run's list (e.g. run_modules = 6:7 after a full run)
+  for (m in setdiff(names(.module_data), current))
+    if (identical(.data_hash(stored_hash(file.path(results_dir, .module_data[[m]]))), .data_hash(hashes[[m]]))) current <- c(current, m)
+  p$current_modules <- current
   rs <- tryCatch(write_run_summary(p), error = function(e) { cat("\nRun summary not written:", conditionMessage(e), "\n"); NULL })
   if (!is.null(rs)) cat("\nRun summary: run_summary.xlsx (one row per sample, from every module)\n")
   ix <- tryCatch(write_run_index(p, rs), error = function(e) { cat("\n00_index.html not written:", conditionMessage(e), "\n"); NULL })

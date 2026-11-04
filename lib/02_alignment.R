@@ -57,13 +57,13 @@ parse_reference_sequence <- function(ref_path) {
   args <- strsplit(minimap2_args %||% "-x sr -w 1", "\\s+")[[1]]
   args[args == "-ax"] <- "-x"
   args <- args[!args %in% c("-a", "--MD", "--cs")]
-  status <-system2("minimap2", c("-a", args, ref_path, query_path), stdout = sam_path, stderr = FALSE)
+  status <-system2("minimap2", c("-a", args, shQuote(ref_path), shQuote(query_path)), stdout = sam_path, stderr = FALSE)
   if (!file.exists(sam_path) || file.size(sam_path) == 0) {
     unlink(c(ref_path, sam_path)); stop("minimap2 produced no output for ", basename(stem), " / ", ref_name)
   }
   bam_path <- paste0(stem, "-", ref_name, ".bam")
-  system2("samtools", c("sort", "-o", bam_path, sam_path), stdout = FALSE, stderr = FALSE)
-  system2("samtools", c("index", bam_path), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("sort", "-o", shQuote(bam_path), shQuote(sam_path)), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("index", shQuote(bam_path)), stdout = FALSE, stderr = FALSE)
   bam <- Rsamtools::scanBam(bam_path, param = Rsamtools::ScanBamParam(
     what = c("qname", "flag", "rname", "strand", "pos", "mapq", "cigar"), tag = "NM"))[[1]]
   if (keep_bam && !is.null(bam_dir)) {
@@ -91,7 +91,8 @@ parse_reference_sequence <- function(ref_path) {
 # Full alignment step for one sample and one reference
 process_sample_alignment <- function(sample, reads, ref, out_dir, minimap2_args,
                                      keep_bam = FALSE, bam_dir = NULL, exclusions = NULL) {
-  cache <- file.path(out_dir, paste0("align_v31_", ref$ref_id, "_", sample, ".RData"))
+  # With keep_bam the BAM is copied out during alignment, so a cache made without it is not used
+  cache <- file.path(out_dir, paste0("align_v31_", ref$ref_id, "_", sample, if (isTRUE(keep_bam)) "_bam", ".RData"))
   if (file.exists(cache) && safe_load_cache(cache, environment())) return(result)
 
   n_input <- length(reads)

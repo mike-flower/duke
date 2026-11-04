@@ -5,9 +5,10 @@
 # ------------------------------------------------------------------------------
 # Repeat-length clustering
 # ------------------------------------------------------------------------------
-# The number of clusters is chosen by a Gaussian mixture (BIC) on a subsample,
-# the full data are clustered with k-means at that k, and any cluster holding
-# fewer than min_prop of the reads is merged into its nearest neighbour. The
+# The number of clusters is chosen by a Gaussian mixture (BIC) on a subsample, and
+# every value is assigned by that mixture (k-means at that k only if the mixture
+# fails); any cluster holding fewer than min_prop of the values is merged into its
+# nearest neighbour. The
 # merge step stops the expansion smear of an unstable allele being cut into
 # many small clusters (the old version gave 3-20 clusters for 15% of samples).
 cluster_by_repeat_length <- function(values, cluster_max = 6L, min_prop = 0.05, downsample = 10000L) {
@@ -544,15 +545,12 @@ write_allele_vcf <- function(alleles, variants, ref, motifs_txt, path) {
   if (length(body)) body <- body[order(as.integer(vapply(strsplit(body, "\t"), `[`, "", 2)))]
   writeLines(c(hdr, body), path)
   if (nzchar(Sys.which("bgzip")) && nzchar(Sys.which("tabix"))) {
-    system2("bgzip", c("-f", "-k", path), stdout = FALSE, stderr = FALSE)
-    system2("tabix", c("-f", "-p", "vcf", paste0(path, ".gz")), stdout = FALSE, stderr = FALSE)
+    system2("bgzip", c("-f", "-k", shQuote(path)), stdout = FALSE, stderr = FALSE)
+    system2("tabix", c("-f", "-p", "vcf", shQuote(paste0(path, ".gz"))), stdout = FALSE, stderr = FALSE)
   }
   invisible(path)
 }
 
-# Reads of one sample aligned to the whole reference (minimap2), with HP = allele
-# (1 shorter, 2 longer, 3+ other clusters), XR = primary repeat length and, with UMIs,
-# MI = molecule. In IGV, group or colour reads by the HP tag to see each allele's reads.
 # Allele BAMs for short amplicons, written without a general aligner. Each read is already
 # split into its left flank, repeat region and right flank (Module 3), so its alignment to
 # the reference is built from those parts: each flank is aligned to its reference flank
@@ -639,19 +637,22 @@ write_allele_bam_flanks <- function(d, ref, path, work_dir = tempdir()) {
   writeLines(c("@HD\tVN:1.6\tSO:unsorted", sprintf("@SQ\tSN:%s\tLN:%d", ref$ref_id, nchar(ref$full)),
                "@PG\tID:duke\tPN:duke\tDS:flank alignments with the repeat as one insertion at the N block", rec), sam)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  system2("samtools", c("sort", "-o", path, sam), stdout = FALSE, stderr = FALSE)
-  system2("samtools", c("index", path), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("sort", "-o", shQuote(path), shQuote(sam)), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("index", shQuote(path)), stdout = FALSE, stderr = FALSE)
   unlink(sam)
   invisible(path)
 }
 
+# Reads of one sample aligned to the whole reference (minimap2), with HP = allele
+# (1 shorter, 2 longer, 3+ other clusters), XR = primary repeat length and, with UMIs,
+# MI = molecule. In IGV, group or colour reads by the HP tag to see each allele's reads.
 write_allele_bam <- function(d, ref, path, preset = "-x map-hifi", threads = 1L, work_dir = tempdir()) {
   if (!nrow(d)) return(invisible(NULL))
   stem <- file.path(work_dir, basename(sub("\\.bam$", "", path)))
   ref_fa <- paste0(stem, "-ref.fa"); reads_fa <- paste0(stem, "-reads.fa"); sam <- paste0(stem, ".sam")
   Biostrings::writeXStringSet(Biostrings::DNAStringSet(stats::setNames(ref$full, ref$ref_id)), ref_fa)
   Biostrings::writeXStringSet(Biostrings::DNAStringSet(stats::setNames(paste0(d$left, d$mid, d$right), d$qname)), reads_fa)
-  args <- c("-a", strsplit(preset, "\\s+")[[1]], "-t", threads, ref_fa, reads_fa)
+  args <- c("-a", strsplit(preset, "\\s+")[[1]], "-t", threads, shQuote(ref_fa), shQuote(reads_fa))
   system2("minimap2", args, stdout = sam, stderr = FALSE)
   x <- readLines(sam); is_h <- startsWith(x, "@")
   rec <- x[!is_h]; q <- sub("\t.*$", "", rec)
@@ -659,8 +660,8 @@ write_allele_bam <- function(d, ref, path, preset = "-x map-hifi", threads = 1L,
   rec <- paste0(rec, tag[match(q, d$qname)])
   writeLines(c(x[is_h], rec), sam)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  system2("samtools", c("sort", "-o", path, sam), stdout = FALSE, stderr = FALSE)
-  system2("samtools", c("index", path), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("sort", "-o", shQuote(path), shQuote(sam)), stdout = FALSE, stderr = FALSE)
+  system2("samtools", c("index", shQuote(path)), stdout = FALSE, stderr = FALSE)
   unlink(c(ref_fa, reads_fa, sam))
   invisible(path)
 }
@@ -820,15 +821,22 @@ create_waterfall_plot <- function(d, title, flank_bp = 60L, max_reads = 1000L, l
   # labels are distinct lengths rather than read quantiles (which repeat the
   # length of a dominant allele many times)
   brk <- waterfall_breaks(d$length)
+  # A few very long reads (e.g. one chimera) would stretch the x-axis for every other read,
+  # so the axis stops at the 99.5th percentile of read width; the rows still show their length
+  wd <- nchar(d$mid) + nchar(rgt)
+  x_hi <- max(stats::quantile(wd, 0.995, names = FALSE), stats::median(wd)) + 5
+  cut_n <- sum(wd > x_hi)
   ggplot2::ggplot(pd, ggplot2::aes(pos, read_order, fill = base)) +
     ggplot2::geom_raster() +
     ggplot2::geom_vline(xintercept = -0.5, linetype = "dashed", linewidth = 0.3) +
     ggplot2::scale_fill_manual(values = cols, name = "Base") +
     ggplot2::scale_y_continuous(breaks = brk, labels = round(d$length[brk]), expand = c(0, 0)) +
     ggplot2::scale_x_continuous(expand = c(0, 0)) +
+    ggplot2::coord_cartesian(xlim = c(-flank_bp - 1, x_hi)) +
     ggplot2::labs(title = title,
-                  subtitle = sprintf(paste0("%s of %s ", unit_word, ", ordered by repeat length; %d bp of flank shown either side; dashed line = tract start"),
-                                     format(nrow(d), big.mark = ","), format(n_total, big.mark = ","), flank_bp),
+                  subtitle = sprintf(paste0("%s of %s ", unit_word, ", ordered by repeat length; %d bp of flank shown either side; dashed line = tract start%s"),
+                                     format(nrow(d), big.mark = ","), format(n_total, big.mark = ","), flank_bp,
+                                     if (cut_n == 1) "\nthe longest row runs past the right edge" else if (cut_n > 1) sprintf("\nthe %d longest rows run past the right edge", cut_n) else ""),
                   x = "Position relative to tract start (bp)", y = length_label) +
     ggplot2::theme_bw()
 }

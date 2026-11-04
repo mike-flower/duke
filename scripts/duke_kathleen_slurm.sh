@@ -1,9 +1,9 @@
 #!/bin/bash -l
-#SBATCH --job-name=duke_80t_2G_48h
-#SBATCH --nodes=2
-#SBATCH --ntasks=80
-#SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=2G
+#SBATCH --job-name=duke_40c_4G_48h
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=40
+#SBATCH --mem-per-cpu=4G
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/duke_%j.out
 #SBATCH --error=logs/duke_%j.err
@@ -11,10 +11,11 @@
 #SBATCH --mail-user=michael.flower@ucl.ac.uk
 
 # ==============================================================================
-# Duke 3.3.0 - New Kathleen Job Script (Slurm)
-# Config: 80 tasks across 2 nodes, 2GB/task = 160GB total, 48h
-# Note: submit with sbatch (not qsub); no chmod needed
-# See README.md for resource guidance and SGE vs Slurm command reference
+# Duke - Kathleen job script (Slurm)
+# Duke runs samples in parallel on one node only, so this asks for one node: 40 cores,
+# 4 GB per core, 48 h (match the node size). Threads come from $SLURM_CPUS_PER_TASK.
+# Submit with sbatch (not qsub). Before the first run, edit --job-name, --mail-user,
+# the cd line (your Duke folder), the minimap2 PATH line and the paths below.
 # ==============================================================================
 
 # Environment
@@ -29,14 +30,14 @@ mkdir -p logs
 echo "R:        $(R --version | head -1)"
 echo "samtools: $(samtools --version | head -1)"
 echo "minimap2: $(minimap2 --version)"
-echo "Nodes: $SLURM_JOB_NUM_NODES  Tasks: $SLURM_NTASKS  Job: $SLURM_JOB_ID"
+echo "Cores: $SLURM_CPUS_PER_TASK  Job: $SLURM_JOB_ID"
 echo ""
 
 cd ~/Scratch/bin/duke
 
 # ==============================================================================
 # EDIT PATHS BELOW
-# Note: --threads is set automatically from $SLURM_NTASKS
+# Note: --threads is set automatically from $SLURM_CPUS_PER_TASK
 # ==============================================================================
 
 ./duke \
@@ -44,7 +45,7 @@ cd ~/Scratch/bin/duke
   --dir_out /home/skgtmdf/Scratch/data/2025.12.17_pb_test/result_duke \
   --path_ref /home/skgtmdf/Scratch/refs/HTTset20/HTTset20_cagcaa.fasta \
   --path_settings /home/skgtmdf/Scratch/data/2025.12.17_pb_test/settings/settings_duke.xlsx \
-  --threads $SLURM_NTASKS \
+  --threads $SLURM_CPUS_PER_TASK \
   --resume TRUE
 
 # Optional additions: add any of these on new lines after --resume TRUE, putting a

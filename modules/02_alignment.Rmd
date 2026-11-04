@@ -95,8 +95,12 @@ funnel <- dplyr::bind_rows(lapply(results, function(r) dplyr::bind_rows(lapply(r
 strand_steps <- dplyr::bind_rows(lapply(results, function(r) dplyr::bind_rows(lapply(r, `[[`, "strand"))))
 rm(results); if (params$free_memory) { rm(sequences); invisible(gc()) }
 timings["Alignment and filtering"] <- proc.time()["elapsed"] - .t
-cat(sprintf("%s of %s reads (%.1f%%) span both flanks in the correct order.",
-            comma(sum(funnel$final)), comma(sum(funnel$input)), 100 * sum(funnel$final) / max(1, sum(funnel$input))))
+# With several references the funnel has a row per sample and reference, each with the
+# sample's whole input, so the input is counted once per sample
+n_input <- sum(funnel[!duplicated(funnel$file_stem), "input"])
+cat(sprintf("%s of %s reads (%.1f%%) span both flanks in the correct order%s.",
+            comma(sum(funnel$final)), comma(n_input), 100 * sum(funnel$final) / max(1, n_input),
+            if (length(unique(funnel$ref_id)) > 1) " of one of the references" else ""))
 ```
 
 ## Read accounting
@@ -128,14 +132,16 @@ dt_full(funnel, caption = "Reads per sample after each alignment step")
 
 **What is measured.** The reference is split at its N block into a left flank (everything before the repeat) and a right flank (everything after). Ideally each flank aligns right up to the repeat: the left flank to its last base, the right flank from its first. A flank alignment **stops short** when the aligner leaves a few bases next to the repeat unaligned, because they differ from the reference there. Each point is one sample: the percentage of its reads in which the left or right flank alignment stops at least one base short of the repeat.
 
-**Does it matter?** No reads are lost: Module 3 searches `r params$rpt_flank_pad` bases into each flank, so the tract is still found and measured in full. What the plot tells you is whether the sequence right next to the repeat matches the reference. A rate that is the same in every sample comes from the reference itself, for example a flank that begins with a second repeat (such as a CCG tract after a CAG tract) whose length differs between alleles, so the aligner starts that flank a few bases in; the typical number of bases is in the table below. A sample with a much higher rate than the others has a sequence next to the repeat that the others lack, for example an interruption variant.
+**Does it matter?** No reads are lost: Module 3 searches `r params$rpt_flank_pad` bases into each flank, so the tract is still found and measured in full. What the plot tells you is whether the sequence right next to the repeat matches the reference. A rate that is the same in every sample comes from the reference itself, for example a flank that begins with a second repeat (such as a CCG tract after a CAG tract) whose length differs between alleles, so the aligner starts that flank a few bases in; how many bases are left unaligned (the median among the reads that stop short) is in the per-sample table under *Strand* (`median_left_shortfall`, `median_right_shortfall`). A sample with a much higher rate than the others has a sequence next to the repeat that the others lack, for example an interruption variant.
 
 ```{r shortfall, fig.height=5}
 sf <- dplyr::bind_rows(lapply(names(alignments), function(r) {
   a <- alignments[[r]]
   if (!nrow(a)) return(NULL)
   a[, .(prop_left_short = mean(left_end_shortfall > 0), prop_right_short = mean(right_start_shortfall > 0),
-        median_left_shortfall = as.numeric(median(left_end_shortfall)), median_right_shortfall = as.numeric(median(right_start_shortfall))), by = file_stem][, ref_id := r]
+        # median shortfall among the reads that stop short (over all reads it is almost always 0)
+        median_left_shortfall = if (any(left_end_shortfall > 0)) as.numeric(median(left_end_shortfall[left_end_shortfall > 0])) else 0,
+        median_right_shortfall = if (any(right_start_shortfall > 0)) as.numeric(median(right_start_shortfall[right_start_shortfall > 0])) else 0), by = file_stem][, ref_id := r]
 }))
 p_sf <- sf %>% pivot_longer(c(prop_left_short, prop_right_short), names_to = "flank", values_to = "pct") %>%
   dplyr::mutate(flank = ifelse(flank == "prop_left_short", "Left flank", "Right flank")) %>%

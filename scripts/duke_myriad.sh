@@ -12,9 +12,12 @@
 #$ -m bea
 
 # ==============================================================================
-# Duke 3.3.0 - Myriad Job Script
-# Recommended config: 12 cores, 64GB/core, 48h, 500GB tmpfs
-# See README.md for resource guidance and alternative configurations
+# Duke - Myriad job script (SGE)
+# Resources: 12 cores, 64 GB per core (on Myriad, mem is per core: 768 GB in all), 48 h,
+# 500 GB tmpfs. Duke runs on one node. A small run (tens of samples) needs far less,
+# e.g. -pe smp 6 and -l mem=32G; a run that only rebuilds reports needs 1 core and 8G.
+# Before the first run, edit: -N (job name), -wd (your Duke folder), -M (your email),
+# the minimap2 PATH line, and the paths below. See README.md, "Running on Myriad".
 # ==============================================================================
 
 # Environment

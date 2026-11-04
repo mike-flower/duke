@@ -67,7 +67,7 @@ duke_param_spec <- function() {
     .p("na_repeat_handling", "keep", "chr", "Repeats",
        "Reads that align but have no tract: 'keep' (no length; counted in the detection rate only), 'convert_to_zero' (length 0, as in v2; falls into ranges starting at 0 or NA) or 'filter' (removed)"),
     .p("composites", character(0), "chrvec", "Repeats",
-       "Combined measures, e.g. 'CAG_CCG_sum=CAG+CCG:sum' (pure units added) or 'CAG_CCG_span=CAG+CCG:span' (first tract start to last tract end)"),
+       "Combined measures, e.g. 'CAG_CCG_sum=CAG+CCG:sum' (each tract's count added, under its count_method) or 'CAG_CCG_span=CAG+CCG:span' (first tract start to last tract end)"),
     .p("export_read_counts", TRUE, "lgl", "Repeats", "Write per-read lengths to 03_repeat_detection/read_repeat_counts/"),
     .p("rm_flank_length_outliers", FALSE, "lgl", "Repeats", "Remove reads with outlying combined flank length"),
     .p("flank_iqr_multiplier", 1.5, "num", "Repeats", "IQR multiplier for the flank length filter"),
@@ -84,8 +84,8 @@ duke_param_spec <- function() {
     .p("umi_min_reads", 3L, "int", "UMI", "Minimum reads for a molecule to be kept"),
     .p("umi_collapse_stat", "top_cluster", "chr", "UMI", "Rule that turns the reads of a molecule into its one length: 'top_cluster', 'max_supported', 'mode', 'median' or 'mean' (all are compared in the Module 4 report)"),
     .p("umi_top_cluster_k", 2L, "int", "UMI", "top_cluster: reads required in the window"),
-    .p("umi_top_cluster_w", 3, "num", "UMI", "top_cluster: constant part of the window half-width (repeats)"),
-    .p("umi_top_cluster_wfrac", 0.10, "num", "UMI", "top_cluster: length-proportional part of the window half-width"),
+    .p("umi_top_cluster_w", 3, "num", "UMI", "top_cluster: the window reaches 2 × w + wfrac × length repeats below its top read; w is the constant part"),
+    .p("umi_top_cluster_wfrac", 0.10, "num", "UMI", "top_cluster: the length-proportional part of the window (see umi_top_cluster_w)"),
     .p("umi_top_cluster_min_share", 0.2, "num", "UMI", "top_cluster: share of the molecule's reads the window must also hold, so a few stray long reads cannot set the length (0 = only umi_top_cluster_k reads needed)"),
     .p("umi_shortened_filter", TRUE, "lgl", "UMI", "Drop molecules where many reads are much longer than the molecule (most likely a longer template whose reads were shortened in PCR): the shortened-molecule filter"),
     .p("umi_shortened_min_units", 20, "num", "UMI", "Shortened-molecule filter: how many units longer than its molecule a read must be to count as long"),
@@ -104,14 +104,14 @@ duke_param_spec <- function() {
     .p("haplotype_trim_length", "auto", "chr", "Allele structure", "'auto', a number of bases, or 'NA' for no trimming"),
     .p("consensus_threshold", 0.5, "num", "Allele structure", "Minimum agreement for a consensus base"),
     .p("consensus_downsample", 50L, "int", "Allele structure", "Maximum reads per consensus alignment"),
-    .p("consensus_parts", FALSE, "lgl", "Allele structure", "Also write each allele's left flank, repeat region and right flank consensus as their own FASTA files (alleles_left.fasta, alleles_mid.fasta, alleles_right.fasta) beside alleles.fasta"),
+    .p("consensus_parts", FALSE, "lgl", "Allele structure", "Also write each allele's left flank, repeat region and right flank as 'alleles_left.fasta', 'alleles_mid.fasta' and 'alleles_right.fasta' beside 'alleles.fasta'"),
     .p("call_variants", TRUE, "lgl", "Allele structure", "Call variants in each cluster consensus against the reference"),
     .p("allele_minor_share", 0.2, "num", "Allele structure",
        "Also report a substitution carried by at least this share of an allele's reads when it is not in the allele's consensus (NA = off)"),
     .p("allele_support_reads", 5000L, "int", "Allele structure", "Maximum reads per allele used to count each variant's read support"),
     .p("allele_bam", TRUE, "lgl", "Allele structure", "Write a BAM per sample of reads aligned to the whole reference, tagged by allele (HP)"),
     .p("allele_bam_reads", 2000L, "int", "Allele structure", "Maximum reads per allele in the allele BAMs"),
-    .p("allele_bam_method", "auto", "chr", "Allele structure", "How reads are placed on the reference in the allele BAMs: 'flanks' (each flank aligned to its reference flank, the repeat as one insertion at the N block; for short amplicons), 'minimap2', or 'auto' (flanks when the reads' flanks are under 1,000 bp in total, as on a short UMI amplicon, otherwise minimap2)"),
+    .p("allele_bam_method", "auto", "chr", "Allele structure", "How reads are placed on the reference in the allele BAMs: 'flanks' aligns each read's left and right flank to the reference flanks and writes the repeat region as one insertion at the N block (for short amplicons, which minimap2 leaves unmapped); 'minimap2' aligns whole reads; 'auto' uses flanks when the reads' flanks total under 1,000 bp"),
     .p("allele_bam_minimap2", "-x map-hifi", "chr", "Allele structure", "minimap2 options for the allele BAMs when minimap2 is used (e.g. -x map-ont for nanopore reads)"),
     .p("waterfall", TRUE, "lgl", "Allele structure", "Write per-sample waterfall plots"),
     .p("waterfall_downsample", 1000L, "int", "Allele structure", "Maximum reads per waterfall"),
@@ -151,7 +151,7 @@ duke_param_spec <- function() {
     .p("plots", "all", "chrvec", "Runtime", "Plot types to save: 'all' (default; every type except sample_density, sample_histogram and waterfall_cluster), a list of types, or 'all' with '-type' to leave types out, e.g. 'all,-waterfall,sample_density'. The README lists every type"),
     .p("plot_units", "combined", "chrvec", "Runtime", "For plots that can show reads and molecules: 'combined' (both in one figure, default), 'reads', 'molecules', or a list, e.g. 'combined,reads,molecules' for all three"),
     .p("plot_dpi", 150L, "int", "Runtime", "Resolution of saved plots"),
-    .p("plot_per_sample", TRUE, "lgl", "Runtime", "Write the per-sample plots (one figure per sample) in Modules 2, 4, 5 and 7"),
+    .p("plot_per_sample", TRUE, "lgl", "Runtime", "Write the per-sample plots (one figure per sample) in Modules 2, 4, 5, 6 and 7"),
     .p("threads", 4L, "int", "Runtime", "CPU cores"),
     .p("resume", TRUE, "lgl", "Runtime", "Reuse a module's results when the parameters that affect it are unchanged"),
     .p("free_memory", TRUE, "lgl", "Runtime", "Drop large objects from memory once a module has finished with them (at present the imported read sequences, after Module 2 has aligned them). Changes no results; called remove_intermediate before v3.3.2"),
@@ -242,6 +242,24 @@ resolve_params <- function(user = list()) {
   if (!is.finite(p$umi_top_cluster_min_share) || p$umi_top_cluster_min_share < 0 || p$umi_top_cluster_min_share > 1)
     stop("umi_top_cluster_min_share must be between 0 and 1")
   if (length(p$reuse_modules) && is.na(p$reuse_from)) stop("reuse_modules needs reuse_from (the earlier run's output folder)")
+  # Settings with a fixed set of choices: a typo would otherwise silently act as the default
+  one_of <- function(name, choices) {
+    v <- p[[name]]
+    if (length(v) && !all(is.na(v)) && !all(v %in% choices))
+      stop(name, " must be ", paste0("'", choices, "'", collapse = ", "), " (got '", paste(v, collapse = ","), "')", call. = FALSE)
+  }
+  one_of("select_one_of_pair", c("R1", "R2", "all"))
+  one_of("na_repeat_handling", c("keep", "convert_to_zero", "filter"))
+  one_of("rpt_return_option", c("longest", "first"))
+  one_of("haplotype_region", c("left", "right", "both"))
+  one_of("cluster_by", c("repeat", "haplotype"))
+  one_of("control_sample_selection", c("flagged", "earliest", "all"))
+  one_of("headline_setpoint_type", c("control_relative", "sample_relative"))
+  # Clustering on molecules works on molecule lengths, so the length clusters must come first
+  if (isTRUE(p$cluster) && identical(p$cluster_by[1], "haplotype") && "repeat" %in% p$cluster_by &&
+      (identical(p$cluster_unit, "molecules") || (identical(p$cluster_unit, "auto") && isTRUE(p$umi))))
+    stop("cluster_by = 'haplotype,repeat' clusters read lengths within each haplotype, which cannot be done on molecules: ",
+         "use cluster_by = 'repeat,haplotype', or cluster_unit = 'reads'", call. = FALSE)
   bad_u <- setdiff(p$plot_units, c("combined", "reads", "molecules"))
   if (length(bad_u)) stop("plot_units must be any of 'combined', 'reads', 'molecules' (got ", paste(bad_u, collapse = ", "), ")")
   p$plot_types <- resolve_plot_types(p)

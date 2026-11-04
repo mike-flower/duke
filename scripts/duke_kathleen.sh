@@ -1,9 +1,9 @@
 #!/bin/bash -l
 #$ -S /bin/bash
-#$ -N duke_160c_2G_48h
+#$ -N duke_40c_4G_48h
 #$ -l h_rt=48:00:00
-#$ -pe mpi 160
-#$ -l mem=2G
+#$ -pe mpi 40
+#$ -l mem=4G
 #$ -wd /home/skgtmdf/Scratch/bin/duke
 #$ -o logs/duke_$JOB_ID.out
 #$ -e logs/duke_$JOB_ID.err
@@ -11,9 +11,11 @@
 #$ -m bea
 
 # ==============================================================================
-# Duke 3.3.0 - Old Kathleen Job Script
-# Config: 160 cores requested, 80 used (2G/core = 320GB total); threads set automatically from $NSLOTS
-# See README.md for resource guidance and Kathleen-specific notes
+# Duke - Kathleen job script (SGE)
+# Duke runs samples in parallel on one node only, so request one node's cores: 40 cores,
+# 4 GB per core, 48 h (check the node size on Kathleen and match it). Threads are set
+# from $NSLOTS. Before the first run, edit -N, -wd, -M, the minimap2 PATH line and the
+# paths below. Myriad (duke_myriad.sh) suits most runs.
 # ==============================================================================
 
 # Environment

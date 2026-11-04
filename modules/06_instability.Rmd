@@ -127,7 +127,7 @@ timings["Load"] <- proc.time()["elapsed"] - .t
 How each measure's ranges are defined: a measure with its own `analysis_ranges_<measure>` column uses ranges on its own scale; otherwise reads are selected by their **`r primary`** length using the primary ranges, and the metrics are calculated on that measure. The selection is not applied to the other measure's own length: in a `r primary` range of 40–50, a combined measure such as a sum can run above 50. Every length is in units of that measure's motif (a pentanucleotide tract in 5 bp units), and a combined measure whose tracts have motifs of different lengths is in bp.
 
 ```{r range_overview}
-ro <- as.data.table(range_table)[, .(samples = uniqueN(file_stem), ranges = paste(unique(range_label), collapse = "; ")),
+ro <- as.data.table(range_table)[, .(samples = uniqueN(file_stem), ranges = paste(unique(range_text), collapse = "; ")),
                                  by = .(measure, range_measure, range_name)]
 dt_full(ro, caption = "Ranges by measure (range_measure = the length used to select the reads)")
 ```
@@ -198,7 +198,7 @@ timings["Distributions"] <- proc.time()["elapsed"] - .t
 
 ## Reads and molecules in each range
 
-Each point is one sample: how many reads (and molecules) fall in each range of the primary measure. The dashed line is `range_min_n` (`r params$range_min_n`): a sample with fewer reads (or molecules) than this in a range gets no statistics or metrics for that range (they are left blank, with the count kept in `n_used`), and a control sample below it is left out of that range's group setpoint. This stops a few stray reads – from a PCR smear, or from another sample through barcode cross-talk – from giving a modal length or an instability index, as in a range above the normal allele of a sample with no expanded allele. `r rc_few <- distribution_summary[too_few == TRUE & n_used > 0, .N]; if (rc_few) sprintf('In this run %d sample–range combinations had at least one read but fewer than %d.', rc_few, params$range_min_n) else ''`
+Each point is one sample: how many reads (and molecules) fall in each range of the primary measure. The dashed line is `range_min_n` (`r params$range_min_n`): a sample with fewer reads (or molecules) than this in a range gets no statistics or metrics for that range (they are left blank, with the count kept in `n_used`), and a control sample below it is left out of that range's group setpoint. This stops a few stray reads – from a PCR smear, or from another sample through barcode cross-talk – from giving a modal length or an instability index, as in a range above the normal allele of a sample with no expanded allele. `r rc_few <- distribution_summary[measure == primary & too_few == TRUE & n_used > 0, .N, by = unit]; if (nrow(rc_few)) sprintf('In this run, for %s, %s sample–range combinations had at least one read or molecule but fewer than %d.', primary, paste(sprintf('%d (%s)', rc_few$N, rc_few$unit), collapse = ' and '), params$range_min_n) else ''`
 
 ```{r range_counts, fig.height=5}
 draw_units(function(us, u) {
@@ -208,12 +208,13 @@ if (!nrow(rc)) return(NULL)
 rl <- as.data.table(range_table)[measure == primary, .(range_text = if (uniqueN(range_text) == 1) range_text[1] else "varies by sample"), by = .(analysis_range_name = range_name)]
 rc <- rl[rc, on = "analysis_range_name"][, unit := factor(unit, levels = c("reads", "molecules"))]
 rc[, xlab := factor(paste0(analysis_range_name, "\n", range_text), levels = unique(paste0(rl$analysis_range_name, "\n", rl$range_text)[order(rl$analysis_range_name)]))]
-ggplot(rc, aes(xlab, pmax(n_total, 1), colour = unit)) +
+# n_used: the count the range_min_n cut-off is applied to (after any floor)
+ggplot(rc, aes(xlab, pmax(n_used, 1), colour = unit)) +
   geom_boxplot(outlier.shape = NA, fill = NA, position = position_dodge(0.8)) +
   geom_point(position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.8), alpha = 0.6, size = 1.2) +
   geom_hline(yintercept = params$range_min_n, linetype = "dashed", colour = "grey30") +
   scale_y_log10(labels = comma) + scale_colour_manual(values = unit_cols, breaks = names(unit_cols), labels = unit_labs, name = NULL) +
-  labs(x = "Analysis range", y = "Count in range (log scale)", title = sprintf("Count per range, %s: %s", unit_title[[u]], primary),
+  labs(x = "Analysis range", y = "Count in range, after any floor (log scale)", title = sprintf("Count per range, %s: %s", unit_title[[u]], primary),
        subtitle = sprintf("Dashed line = range_min_n (%d): below it a range gets no statistics or metrics", params$range_min_n)) +
   theme_bw() + theme(axis.text.x = element_text(size = 7))
 }, function(u) plot_path(plots_dir, "counts_per_range", primary, unit = u), 11, 5)
@@ -263,8 +264,9 @@ if (nrow(cp)) draw_units(function(us, u) {
     geom_jitter(width = 0.12, height = 0, size = 2, alpha = 0.8) +
     facet_grid(analysis_range_name ~ group_label, scales = "free_y", labeller = labeller(group_label = as_labeller(wrap_label))) +
     scale_colour_manual(values = unit_cols, guide = "none") + scale_x_discrete(labels = unit_labs) +
-    labs(x = NULL, y = paste("Control sample", gsub("_", " ", sp_metric)), title = sprintf("Control samples and group setpoints, %s: %s", unit_title[[u]], primary),
-         subtitle = "Points = control samples; bar = the group setpoint") + theme_bw() + theme(strip.text = element_text(size = 7))
+    labs(x = NULL, y = paste("Control sample", gsub("_", " ", sp_metric)), title = sprintf("Control samples and group setpoints,\n%s: %s", unit_title[[u]], primary),
+         subtitle = "Points = control samples; bar = the group setpoint (a manual control length in the settings file replaces it)") +
+    theme_bw() + theme(strip.text = element_text(size = 7), plot.title.position = "plot")
 }, function(u) plot_path(plots_dir, "control_setpoints", primary, unit = u), min(40, 3 + 2.2 * uniqueN(cp$group_label)), 2 + 2.5 * length(plot_ranges_c))
 ```
 
@@ -283,6 +285,7 @@ if (nrow(group_controls)) {
 manual <- as.data.table(range_table)[!is.na(manual_control), .(file_stem, measure, analysis_range_name = range_name, manual_control)]
 setp <- manual[setp, on = .(file_stem, measure, analysis_range_name)]
 setp[, control_source := fifelse(!is.na(manual_control), "manual", fifelse(!is.na(control_setpoint), "group control", NA_character_))]
+setp[, group_setpoint := control_setpoint]   # kept, to show beside a manual length
 setp[!is.na(manual_control), `:=`(control_setpoint = manual_control, control_sd = NA_real_, control_n = NA_integer_)]
 inst_list <- list()
 for (u in names(wide)) {
@@ -319,14 +322,24 @@ instability_metrics <- cz[instability_metrics, on = .(file_stem, unit, measure, 
 instability_metrics[setpoint_type == "control_relative" & control_sd > 0, z_score := (own - control_setpoint) / control_sd]
 instability_metrics[, c("own", "control_setpoint", "control_sd") := NULL]
 # Samples and ranges whose control setpoint came from the settings file, listed in the report
-manual_used <- unique(setp[control_source == "manual", .(file_stem, measure, analysis_range_name, manual_control)])
+# with the group control it replaces and the sample's own value, so a stale or mistyped value stands out
+manual_used <- unique(setp[control_source == "manual", .(file_stem, group_label, unit, measure, analysis_range_name, manual_control,
+                                                          group_control = round(group_setpoint, 1), sample_own = round(own, 1))])
+rb <- unique(as.data.table(range_table)[, .(file_stem, measure, analysis_range_name = range_name,
+                                           lo = fifelse(range_measure == measure, lo, NA_real_), hi = fifelse(range_measure == measure, hi, NA_real_))], by = c("file_stem", "measure", "analysis_range_name"))
+manual_used <- rb[manual_used, on = .(file_stem, measure, analysis_range_name)]
+manual_used[, check := fcase((!is.na(lo) & manual_control < lo) | (!is.na(hi) & manual_control > hi), "outside the range",
+                             !is.na(group_control) & abs(manual_control - group_control) >= 5, "5+ units from the group control",
+                             default = "")]
+manual_used[, c("lo", "hi") := NULL]
 timings["Instability metrics"] <- proc.time()["elapsed"] - .t
 ```
 
-`r if (nrow(manual_used)) sprintf("**Manual control lengths used.** The settings file gives a manual control length for %d sample(s) and %d range(s); there it replaces the group control (setpoint_source = manual in the instability_metrics sheet). Check these are intended: a value left in the settings file from an earlier analysis also overrides the group control.", uniqueN(manual_used$file_stem), uniqueN(manual_used[, .(measure, analysis_range_name)])) else "No manual control lengths are given in the settings file, so every control-relative setpoint comes from the group controls."`
+`r if (nrow(manual_used)) sprintf("**Manual control lengths used.** The settings file gives a manual control length for %d sample(s) and %d range(s); there it replaces the group control (setpoint_source = manual in the instability_metrics sheet). Check these are intended: a value left in the settings file from an earlier analysis also overrides the group control. The table gives, beside each manual length, the group control it replaces and the sample's own %s; %s", uniqueN(manual_used$file_stem), uniqueN(manual_used[, .(measure, analysis_range_name)]), gsub("_", " ", sp_metric), { nb <- manual_used[check != "", uniqueN(paste(file_stem, measure, analysis_range_name))]; if (nb) sprintf("**%d sample-range(s) are flagged** in the check column, with a manual length outside the range or 5 or more units from the group control.", nb) else "none lies outside its range or 5 or more units from the group control." }) else "No manual control lengths are given in the settings file, so every control-relative setpoint comes from the group controls."`
 
 ```{r manual_used_table, eval=nrow(manual_used) > 0}
-dt_full(manual_used[, .(sample = short_labels(file_stem), measure, range = analysis_range_name, manual_control)],
+setorder(manual_used, -check, analysis_range_name, file_stem)
+dt_full(manual_used[, .(file_stem, group = group_label, unit, measure, range = analysis_range_name, manual_control, group_control, sample_own, check)],
         caption = "Samples and ranges whose control setpoint is the manual control length from the settings file")
 ```
 
@@ -363,7 +376,7 @@ timecourse_plot <- function(d, title) {
                          axis.text.x = if (k == length(hl)) element_text() else element_blank())
   })
   patchwork::wrap_plots(rows, ncol = 1) + patchwork::plot_annotation(title = title,
-    subtitle = sprintf("Points = samples; lines = mean at each time.\nInstability metrics %s; setpoint = %s.", gsub("_", " ", hl_type), gsub("_", " ", sp_metric)))
+    subtitle = sprintf("Points = samples; %s.\nInstability metrics %s; setpoint = %s.", if (has_time) "lines = mean at each time" else "boxes = spread across samples", gsub("_", " ", hl_type), gsub("_", " ", sp_metric)))
 }
 n_groups <- length(unique(instability_metrics$group_label))
 tc_w <- min(40, 3.5 + 3.6 * n_groups); tc_h <- min(45, 2.1 * length(hl) + 2)
@@ -469,7 +482,7 @@ for (pr in pairs) {
       br[, panel := factor(paste0(range, " (", rl$range_label[match(range, rl$range)], ")"), levels = unique(paste0(rl$range, " (", rl$range_label, ")"))[order(rl$range)])]
       for (s in unique(br$file_stem)) {
         ds <- br[file_stem == s]; ds[, panel := droplevels(panel)]
-        p <- ggplot(ds, aes(a, b)) + geom_jitter(width = 0.25, height = 0.25, alpha = 0.3, size = 0.6) +
+        p <- ggplot(ds, aes(a, b)) + geom_jitter(width = 0.25, height = 0.25, alpha = 0.3, size = 0.6, colour = if (u == "reads") "grey25" else "#00838f") +
           facet_wrap(~ panel, scales = "free") +
           labs(x = paste(A, "length"), y = paste(B, "length"), title = sprintf("%s: %s against %s, %s", s, B, A, unit_title[[u]]),
                subtitle = sprintf("One panel per %s range; each point = one %s (up to %s per range), jittered by up to 0.25", A, if (u == "reads") "read" else "UMI-collapsed molecule", comma(params$pair_max_points))) + theme_bw()

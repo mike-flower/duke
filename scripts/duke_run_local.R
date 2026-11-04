@@ -22,25 +22,25 @@ setwd(duke_root)
 source("lib/load_all.R")
 
 params <- list(
-  # --- Paths -------------------------------------------------------------------
+  # --- Paths ---------------------------------------------------------------------
   # Input directory of BAM / FASTQ / FASTA files (required)
   dir_data = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2026.03.16-dev-yas/data",
   # Output directory (required)
   dir_out = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2026.03.16-dev-yas/result_duke",
-  # Reference FASTA with NNNNN marking the repeat region (required unless every
-  # tract in path_tracts names its own reference)
+  # Reference FASTA with NNNNN marking the repeat region (required unless every tract in
+  # path_tracts names its own reference)
   path_ref = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/www/HTTset20_cagcaa.fasta",
   # Settings .xlsx/.csv (ranges, groups, controls, time). Needed for Module 6
   path_settings = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/demo/2026.03.16-dev-yas/settings/settings_duke.xlsx",
-  # Optional tracts table (.csv or .xlsx sheet 'tracts'; optional sheet
-  # 'composites'). NA = one tract from rpt_pattern and path_ref
+  # Optional tracts table (.csv or .xlsx sheet 'tracts'; optional sheet 'composites'). NA
+  # = one tract from rpt_pattern and path_ref
   path_tracts = NA_character_,
   # Adapter CSV (adapter_name, adapter_sequence), used when trim = TRUE
   path_trim_patterns = "/Users/michaelflower/my_bin/repeat_instability/othello/duke/www/adapters.csv",
   # Optional read exclusions file (file_name, read_name, reason)
   path_manual_exclusions = NA_character_,
 
-  # --- Import ------------------------------------------------------------------
+  # --- Import --------------------------------------------------------------------
   # Regex patterns for files to import
   import_patterns = c("\\.fastq$", "\\.fastq\\.gz$", "\\.fq$", "\\.fq\\.gz$", "\\.fasta$", "\\.fa$", "\\.bam$"),
   # Search dir_data recursively
@@ -55,20 +55,21 @@ params <- list(
   downsample = NA_integer_,
   # Drop PacBio HiFi reads with fewer passes than this (NA = no filter)
   np_min = NA_integer_,
-  # Maximum points in the PacBio passes-vs-length plot
+  # Not used since v3.3.2 (the pass-count plot now counts every read); kept so older
+  # parameter files still run
   pacbio_scatter_downsample = 50000L,
-  # Remove duplicate read names, keeping the longest. Off by default: PacBio
-  # and ONT read names are unique, and the check removed 0 reads in 36 M
+  # Remove duplicate read names, keeping the longest. Off by default: PacBio and ONT read
+  # names are unique, and the check removed 0 reads in 36 M
   check_duplicate_readnames = FALSE,
-  # Trim adapters from read ends. Off by default: demultiplexed HiFi reads are
-  # already trimmed (20 of 36 M reads were trimmed in the msn run)
+  # Trim adapters from read ends. Off by default: demultiplexed HiFi reads are already
+  # trimmed (20 of 36 M reads were trimmed in the msn run)
   trim = FALSE,
   # Maximum errors in an adapter match
   trim_max_mismatch = 3L,
   # Allow indels in adapter matching
   trim_with_indels = TRUE,
 
-  # --- Alignment ---------------------------------------------------------------
+  # --- Alignment -----------------------------------------------------------------
   # minimap2 arguments for aligning reads to each flank
   minimap2_args = "-t 1 -x sr -w 1",
   # Keep the per-sample flank BAMs in 02_alignment/bam/ for IGV
@@ -78,7 +79,7 @@ params <- list(
   # Maximum reads per alignment plot
   visualise_alignment_downsample = 1000L,
 
-  # --- Repeats -----------------------------------------------------------------
+  # --- Repeats -------------------------------------------------------------------
   # Repeat motif (used when there is no tracts table)
   rpt_pattern = "CAG",
   # Name for the single tract (default: the motif)
@@ -97,16 +98,19 @@ params <- list(
   rpt_max_tract_gap = 18L,
   # Which tract to keep when several are found: 'longest' or 'first'
   rpt_return_option = "longest",
-  # Bases either side of the flank boundaries searched for the tract, so a
-  # tract can extend past where the aligner placed the flank
+  # Bases either side of the flank boundaries searched for the tract, so a tract can
+  # extend past where the aligner placed the flank
   rpt_flank_pad = 30L,
-  # Primary count: 'full' (tract length / motif length), 'match' (exact units)
-  # or 'pure' (longest uninterrupted run)
+  # Primary count: 'full' (tract length / motif length), 'match' (exact units) or 'pure'
+  # (longest uninterrupted run)
   repeat_count_method = "full",
-  # Reads with no tract: 'convert_to_zero', 'filter' or 'keep'
-  na_repeat_handling = "convert_to_zero",
-  # Combined measures, e.g. 'CAG_CCG_sum=CAG+CCG:sum' (pure units added) or
-  # 'CAG_CCG_span=CAG+CCG:span' (first tract start to last tract end)
+  # Reads that align but have no tract: 'keep' (no length; counted in the detection rate
+  # only), 'convert_to_zero' (length 0, as in v2; falls into ranges starting at 0 or NA)
+  # or 'filter' (removed)
+  na_repeat_handling = "keep",
+  # Combined measures, e.g. 'CAG_CCG_sum=CAG+CCG:sum' (each tract's count added, under
+  # its count_method) or 'CAG_CCG_span=CAG+CCG:span' (first tract start to last tract
+  # end)
   composites = character(0),
   # Write per-read lengths to 03_repeat_detection/read_repeat_counts/
   export_read_counts = TRUE,
@@ -115,7 +119,7 @@ params <- list(
   # IQR multiplier for the flank length filter
   flank_iqr_multiplier = 1.5,
 
-  # --- UMI ---------------------------------------------------------------------
+  # --- UMI -----------------------------------------------------------------------
   # Extract UMIs and collapse reads to molecules
   umi = FALSE,
   # Sequence immediately 5' of the UMI (default M13-F)
@@ -134,32 +138,42 @@ params <- list(
   umi_cluster_max_dist = 1L,
   # Minimum reads for a molecule to be kept
   umi_min_reads = 3L,
-  # Per-molecule length: 'top_cluster', 'max_supported', 'mode', 'median' or 'mean'
+  # Rule that turns the reads of a molecule into its one length: 'top_cluster',
+  # 'max_supported', 'mode', 'median' or 'mean' (all are compared in the Module 4 report)
   umi_collapse_stat = "top_cluster",
   # top_cluster: reads required in the window
   umi_top_cluster_k = 2L,
-  # top_cluster: constant part of the window half-width (repeats)
+  # top_cluster: the window reaches 2 <c3><97> w + wfrac <c3><97> length repeats below
+  # its top read; w is the constant part
   umi_top_cluster_w = 3,
-  # top_cluster: length-proportional part of the window half-width
+  # top_cluster: the length-proportional part of the window (see umi_top_cluster_w)
   umi_top_cluster_wfrac = 0.1,
-  # top_cluster: share of the molecule's reads the window must also hold (0 = only
-  # umi_top_cluster_k reads needed)
+  # top_cluster: share of the molecule's reads the window must also hold, so a few stray
+  # long reads cannot set the length (0 = only umi_top_cluster_k reads needed)
   umi_top_cluster_min_share = 0.2,
-  # Drop molecules where at least umi_shortened_min_share of the reads are at least
-  # umi_shortened_min_units longer than the molecule (a longer template shortened in PCR)
+  # Drop molecules where many reads are much longer than the molecule (most likely a
+  # longer template whose reads were shortened in PCR): the shortened-molecule filter
   umi_shortened_filter = TRUE,
+  # Shortened-molecule filter: how many units longer than its molecule a read must be to
+  # count as long
   umi_shortened_min_units = 20,
+  # Shortened-molecule filter: share of the reads of a molecule that must be long for the
+  # molecule to be flagged as shortened
   umi_shortened_min_share = 0.2,
 
-  # --- Allele structure --------------------------------------------------------
+  # --- Allele structure ----------------------------------------------------------
   # Cluster reads into alleles, build consensus sequences and call variants
   cluster = FALSE,
   # 'repeat', 'haplotype', or 'repeat,haplotype'
   cluster_by = "repeat",
+  # What the repeat lengths are clustered on: 'molecules' (the length of each kept UMI
+  # molecule, and every read takes the cluster of its molecule), 'reads', or 'auto'
+  # (molecules when umi = TRUE, otherwise reads)
+  cluster_unit = "auto",
   # Maximum repeat-length clusters per sample
   repeat_cluster_max = 6L,
-  # Clusters holding fewer than this proportion of reads are merged into their
-  # nearest neighbour
+  # Clusters holding fewer than this proportion of reads are merged into their nearest
+  # neighbour
   repeat_cluster_min_prop = 0.05,
   # Reads used to choose the number of repeat clusters
   repeat_cluster_downsample = 10000L,
@@ -175,9 +189,14 @@ params <- list(
   consensus_threshold = 0.5,
   # Maximum reads per consensus alignment
   consensus_downsample = 50L,
+  # Also write each allele's left flank, repeat region and right flank as
+  # 'alleles_left.fasta', 'alleles_mid.fasta' and 'alleles_right.fasta' beside
+  # 'alleles.fasta'
+  consensus_parts = FALSE,
   # Call variants in each cluster consensus against the reference
   call_variants = TRUE,
-  # Also report a substitution carried by at least this share of an allele's reads when not in its consensus (NA = off)
+  # Also report a substitution carried by at least this share of an allele's reads when
+  # it is not in the allele's consensus (NA = off)
   allele_minor_share = 0.2,
   # Maximum reads per allele used to count each variant's read support
   allele_support_reads = 5000L,
@@ -185,7 +204,14 @@ params <- list(
   allele_bam = TRUE,
   # Maximum reads per allele in the allele BAMs
   allele_bam_reads = 2000L,
-  # minimap2 options for the allele BAMs (e.g. -x map-ont for nanopore reads)
+  # How reads are placed on the reference in the allele BAMs: 'flanks' aligns each read's
+  # left and right flank to the reference flanks and writes the repeat region as one
+  # insertion at the N block (for short amplicons, which minimap2 leaves unmapped);
+  # 'minimap2' aligns whole reads; 'auto' uses flanks when the reads' flanks total under
+  # 1,000 bp
+  allele_bam_method = "auto",
+  # minimap2 options for the allele BAMs when minimap2 is used (e.g. -x map-ont for
+  # nanopore reads)
   allele_bam_minimap2 = "-x map-hifi",
   # Write per-sample waterfall plots
   waterfall = TRUE,
@@ -196,10 +222,12 @@ params <- list(
   # Also write one waterfall per cluster
   waterfall_per_cluster = FALSE,
 
-  # --- Instability -------------------------------------------------------------
+  # --- Instability ---------------------------------------------------------------
   # Window for modal peak detection
   range_peak_span = 3L,
-  # Fewest reads (or molecules) a sample needs in a range for its statistics and metrics
+  # Fewest reads (or molecules) a sample needs in a range for that range's statistics and
+  # metrics to be calculated; below it they are left blank, and a control sample is left
+  # out of the setpoint
   range_min_n = 50L,
   # Calculate group control setpoints
   group_control = TRUE,
@@ -213,43 +241,69 @@ params <- list(
   expansion_thresholds = c(5L, 10L),
   # Dimensions for cohort plots: group, time
   cohort_plot_by = c("group", "time"),
-  time_label = "Time (days)",   # axis label for the settings file's time column
+  # Axis label for the time column of the settings file, with its unit
+  time_label = "Time (days)",
   # Metrics drawn as timecourses by group
   headline_metrics = c("modal_length", "median_length", "mean_length", "instability_index", "expansion_index", "contraction_index", "share_5plus_above_setpoint", "share_5plus_below_setpoint"),
   # Setpoint type for headline plots: 'control_relative' or 'sample_relative'
   headline_setpoint_type = "control_relative",
   # Ranges drawn inline (default: the first two ranges of the primary measure)
   plot_ranges = character(0),
-  # Pairs of measures to plot against each other per read, e.g. 'CAG:CCG'
-  # (default: every pair of tracts)
+  # Pairs of measures to plot against each other per read, e.g. 'CAG:CCG' (default: every
+  # pair of tracts)
   measure_pairs = character(0),
   # Maximum reads per sample in per-read pair plots
   pair_max_points = 4000L,
 
-  # --- Repeat lengths ----------------------------------------------------------
+  # --- Repeat lengths ------------------------------------------------------------
   # Write one summary figure per sample
   sample_cards = TRUE,
   # Histogram bin width in repeat units
   repeat_histogram_binwidth = 1L,
-  # Draw the by-group distribution figures for every range of the primary measure, not only plot_ranges
-  plot_every_range = FALSE,
-  # Also draw density and histogram figures for every sample and range (many figures on a large run)
+  # Save the by-group distribution figures for every analysis range of the primary
+  # measure (FALSE: only plot_ranges, the ones shown in the report)
+  plot_every_range = TRUE,
+  # Also draw a density and a histogram figure for every sample, for all lengths and for
+  # each range drawn (many figures on a large run)
   plot_sample_ranges = FALSE,
   # Reads drawn as dots per sample in the density (ridge) figures
   plot_dots_max = 2000L,
 
-  # --- Runtime -----------------------------------------------------------------
+  # --- Runtime -------------------------------------------------------------------
+  # An earlier run's output folder to take module results from, so those modules are not
+  # re-run. A module is reused only when its results were made with the same settings as
+  # this run (its own and every upstream module's); it keeps that run's report and
+  # figures
+  reuse_from = NA_character_,
+  # With reuse_from: the modules to reuse, e.g. 1:4 (default: every module made by this
+  # Duke version whose results still match; a module made by an earlier version is reused
+  # only when named here). A module named here that cannot be reused stops the run before
+  # it starts
+  reuse_modules = integer(0),
+  # Plot types to save: 'all' (default; every type except sample_density,
+  # sample_histogram and waterfall_cluster), a list of types, or 'all' with '-type' to
+  # leave types out, e.g. 'all,-waterfall,sample_density'. The README lists every type
+  plots = "all",
+  # For plots that can show reads and molecules: 'combined' (both in one figure,
+  # default), 'reads', 'molecules', or a list, e.g. 'combined,reads,molecules' for all
+  # three
+  plot_units = "combined",
   # Resolution of saved plots
   plot_dpi = 150L,
-  # Write per-sample plots in Modules 2 and 3
+  # Write the per-sample plots (one figure per sample) in Modules 2, 4, 5, 6 and 7
   plot_per_sample = TRUE,
   # CPU cores
   threads = 3L,
   # Reuse a module's results when the parameters that affect it are unchanged
   resume = TRUE,
-  # Free memory between steps
+  # Drop large objects from memory once a module has finished with them (at present the
+  # imported read sequences, after Module 2 has aligned them). Changes no results; called
+  # remove_intermediate before v3.3.2
   free_memory = TRUE,
-  # Delete temp/ (per-sample caches) at the end
+  # Delete temp/ at the end of the run. temp/ holds per-sample working caches (UMI
+  # collapsing, clustering) that let a re-run after a crash pick up part-way through a
+  # module; a re-run with changed settings adds new caches beside the old ones, so delete
+  # temp/ (or set this TRUE) once a run is final
   remove_temp = FALSE,
   # Modules to run
   run_modules = 1:7

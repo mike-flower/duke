@@ -72,6 +72,11 @@ have_m6 <- file.exists(m6)
 if (have_m6) { safe_load_module(m6, 6); settings <- module6_output$settings; range_table <- as.data.table(module6_output$range_table)
                dist <- module6_output$distribution_summary } else { settings <- NULL; range_table <- NULL; dist <- NULL }
 samples <- unique(lengths$file_stem)
+# Samples marked exclude in the settings file are left out here too, as in Module 6
+if (have_m6 && !is.null(module6_output$excluded) && NROW(module6_output$excluded) && "file_stem" %in% names(module6_output$excluded))
+  samples <- setdiff(samples, module6_output$excluded$file_stem)
+lengths <- lengths[file_stem %in% samples]
+if (!is.null(mol)) mol <- mol[file_stem %in% samples]
 meta <- data.table(file_stem = samples)
 if (!is.null(settings)) meta <- as.data.table(settings)[, .(file_stem, group, time)][meta, on = "file_stem"] else meta[, `:=`(group = NA_character_, time = NA_real_)]
 meta[, group_label := ifelse(is.na(group), "ungrouped", group)]
@@ -139,12 +144,12 @@ timings["Heatmaps"] <- proc.time()["elapsed"] - .t
 
 # Distributions by group
 
-For each group, its samples stacked in time order, for the `r primary` length: all lengths, then the reads in each range drawn (`r if (length(group_ranges)) paste(group_ranges, collapse = ", ") else "none"`), selected as in Module 6. Two figures are made for each group and each of these:
+For each group, its samples stacked in time order, for the `r primary` length: all lengths, then the reads in each range saved (`r if (length(group_ranges)) paste(group_ranges, collapse = ", ") else "none"`), selected as in Module 6. Two figures are made for each group and each of these:
 
-- **Density (ridge).** Each sample's reads as a grey density, scaled to the sample's own height, so its shape is visible whatever its depth`r if (!is.null(mol)) ", with the molecules as a teal line on the same row" else ""`. Inside each ridge, every read is a dot (up to `r format(params$plot_dots_max, big.mark = ",")` per sample, drawn at random, spread slightly sideways and scattered between the baseline and the ridge), so the dots stay within their own sample and where reads are sparse – a thin expansion tail, a few outliers – they can be seen individually; the red dashed line is the reads' modal length. In the all-lengths figure the largest allele sets the height, so look at the range figures for the shape of a smaller one.
+- **Density (ridge).** Each sample's reads as a grey density, scaled to the sample's own height, so its shape is visible whatever its depth`r if (!is.null(mol)) ", with the molecules as a teal line on the same row" else ""`. Along the bottom of each ridge, every read is a dot (up to `r format(params$plot_dots_max, big.mark = ",")` per sample, drawn at random, spread slightly sideways) in a band of the same height at every length, so the dots are dense under a peak and sparse along a PCR smear or a thin expansion tail, where the density line is too flat to show how many reads there are. Each dot is coloured by how many of the sample's reads have its length, as a share of the sample's commonest length on a log scale (dark purple = rare, yellow-green = the commonest), so the mode and the steps between whole units show where the dots would otherwise merge into a block; the red dashed line is the reads' modal length`r if (!is.null(mol)) " and the teal dashed line the molecules'" else ""`. In the all-lengths figure the largest allele sets the height, so look at the range figures for the shape of a smaller one.
 - **Histogram.** One row per sample, with reads`r if (!is.null(mol)) " and molecules in separate columns" else ""`, each panel the share of that sample's reads`r if (!is.null(mol)) " (or molecules)" else ""` at each length on its own scale.
 
-The first group's figures are shown here (the density and histogram for all lengths, and the density for each range drawn); every group is in `plots/group_density/{unit}/{all-lengths or range}/` and `plots/group_histogram/…`, named `group_density_{group}_{measure}_{all-lengths or range}_{unit}.png`, where the unit is `combined`, `reads` or `molecules` (`plot_units`).
+The first group's figures are shown here (the density and histogram for all lengths, and the density for each range in `plot_ranges`: `r paste(plot_ranges, collapse = ", ")`); every group is in `plots/group_density/{unit}/{all-lengths or range}/` and `plots/group_histogram/…`, named `group_density_{group}_{measure}_{all-lengths or range}_{unit}.png`, where the unit is `combined`, `reads` or `molecules` (`plot_units`).
 
 ```{r by_group, results='asis', fig.height=5}
 .t <- proc.time()["elapsed"]
@@ -189,11 +194,13 @@ done <- apply_fn(seq_len(nrow(jobs)), function(i) {
 # The first group's figures, shown here from the files just written, so each keeps the
 # height it was saved with (a figure size changed partway through a chunk is ignored)
 g1 <- meta$group_label[1]
-for (f in names(folders)[seq_len(min(length(folders), 3))]) {
+# all lengths, then the ranges drawn in the report (plot_ranges)
+for (f in intersect(c("all-lengths", plot_ranges), names(folders))) {
   files <- c(plot_path(plots_dir, "group_density", g1, primary, f, unit = pu[1]), if (is.na(folders[[f]])) plot_path(plots_dir, "group_histogram", g1, primary, f, unit = pu[1]))
   files <- files[file.exists(files)]
   if (!length(files)) next
-  cat(sprintf("\n\n## %s, %s\n\n", display_group(g1), if (is.na(folders[[f]])) "all lengths" else folders[[f]]))
+  # dashes escaped, so pandoc does not turn "---" in a group name into a dash
+  cat(sprintf("\n\n## %s, %s\n\n", gsub("-", "\\\\-", display_group(g1)), if (is.na(folders[[f]])) "all lengths" else folders[[f]]))
   for (fl in files) cat(sprintf("![](%s)\n\n", md_path(fl)))
 }
 timings["By group"] <- proc.time()["elapsed"] - .t

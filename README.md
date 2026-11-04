@@ -2,27 +2,29 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.5** – see [Changes from v2.3.1](#changes-from-v231)
+**v3.3.7** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+
+**New to Duke?** Read [What Duke does](#what-duke-does), then follow [Installation](#installation) and [Quick start](#quick-start). The rest of this page is reference: look things up as you need them.
 
 ---
 
 ## Contents
 
 - [What Duke does](#what-duke-does)
+- [Terms used in Duke](#terms-used-in-duke)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Input files](#input-files)
+- [Output files](#output-files)
 - [Several repeat tracts in one run](#several-repeat-tracts-in-one-run)
 - [UMIs](#umis)
 - [How repeats are counted](#how-repeats-are-counted)
 - [Instability metrics](#instability-metrics)
-- [Output files](#output-files)
 - [Parameters](#parameters)
 - [Resume](#resume)
-- [HPC deployment](#hpc-deployment)
+- [Running on Myriad](#running-on-myriad)
 - [Common workflows](#common-workflows)
 - [Troubleshooting](#troubleshooting)
-- [Changes from v2.3.1](#changes-from-v231)
 - [Citation and contact](#citation-and-contact)
 
 ---
@@ -39,23 +41,67 @@ A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat co
 | 6. Instability | `06_instability.html` | Distributions and instability metrics per sample, range and measure, for reads and molecules; group controls; timecourses; tract-against-tract plots | a settings file is given |
 | 7. Repeat lengths | `07_repeat_lengths.html` | Every repeat-length figure in one place: cohort heatmaps, density and histogram figures by group (all lengths and each range), optional per-sample figures, and one card per sample | always |
 
-Reads are grey and molecules teal in every figure. Every report has a timing table and an output manifest, and every module writes its tables to one Excel file.
+At the end of every run Duke writes `00_index.html`, which links every report, table and figure, and `run_summary.xlsx`, one row per sample from every module. Reads are grey and molecules teal in every figure. Every report has a timing table and an output manifest, and every module writes its tables to one Excel file.
+
+### Terms used in Duke
+
+| Term | Meaning |
+|---|---|
+| sample, file stem | One input file. Its name without the extension (the file stem) is the sample's identifier in every table and in `00_index.html`. Figures use a short label: the file stem without the dot-separated parts that every sample shares |
+| tract | One run of a repeat motif in the amplicon, e.g. the CAG tract. One tract by default (`rpt_pattern`); several with a [tracts table](#several-repeat-tracts-in-one-run) |
+| composite | A length made from several tracts per read: `sum` (their counts added) or `span` (first tract start to last tract end) |
+| measure | Any tract or composite. Every result is given per measure |
+| primary measure | The first tract. It is the one used to select reads into ranges, for clustering and for waterfalls |
+| UMI, molecule | A UMI is a random barcode added to each template molecule before PCR; reads with the same UMI are copies of one molecule. Module 4 collapses them to one length per molecule, which removes PCR bias and most PCR errors |
+| unit | Whether a result counts reads or molecules. A *combined* figure shows both (reads grey, molecules teal) |
+| range, range01, range02, … | A band of repeat lengths set in the settings file, e.g. `[0-35][36-NA]` (normal and expanded). Ranges are named `range01`, `range02`, … in the order of their brackets, and both bounds are included |
+| setpoint | The length that instability is measured from: the sample's own median (`sample_relative`) or that of its group's control samples (`control_relative`) |
+| allele 1, allele 2 | The two largest clusters of a sample in Module 5, numbered by length (1 = shorter); further clusters are 3 upwards |
+| np | The number of passes behind a PacBio HiFi read (more passes, more accurate) |
 
 ---
 
 ## Installation
 
+**1. Get Duke.**
+
+```bash
+git clone https://github.com/mike-flower/duke.git
+cd duke
+```
+
+**2. Install the R packages** (in R, once):
+
 ```r
-install.packages(c("data.table", "dplyr", "tidyr", "tibble", "ggplot2", "ggridges", "patchwork", "scales",
+install.packages(c("data.table", "dplyr", "tidyr", "tibble", "ggplot2", "patchwork", "scales", "RColorBrewer",
                    "DT", "rmarkdown", "knitr", "openxlsx", "readxl", "mclust", "cluster", "pracma",
-                   "digest", "pbapply", "pbmcapply"))
+                   "digest", "pbapply", "pbmcapply", "ragg"))
 if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
 BiocManager::install(c("Biostrings", "ShortRead", "Rsamtools", "GenomicAlignments", "DECIPHER", "pwalign"))
 ```
 
-`pwalign` exists from Bioconductor 3.19; on older versions Duke uses the aligner in `Biostrings`. minimap2, samtools and pandoc must be on the `PATH`.
+`ragg` draws figures much faster (without it Duke uses the cairo device). `pwalign` exists from Bioconductor 3.19; on older versions skip it and Duke uses the aligner in `Biostrings`. `rstudioapi` is optional: with it, `scripts/duke_run_local.R` finds the Duke folder when sourced in RStudio.
 
-**HPC:** `export R_LIBS_USER=~/R/library` and load the R and samtools modules (the job scripts do this).
+**3. Install the command-line tools.** minimap2, samtools and pandoc must be on the `PATH`; bgzip and tabix (from htslib) are optional and add a compressed, indexed copy of the VCF. On a Mac, `brew install minimap2 samtools pandoc htslib`; with conda, `conda install -c bioconda minimap2 samtools htslib`. RStudio comes with pandoc, but the command line needs its own copy.
+
+**4. Check.** `./duke --help` lists every option. If it fails, the message names the missing package or tool.
+
+**On Myriad**, install on a login node (compute nodes have no internet access), into your own R library:
+
+```bash
+cd ~/Scratch/bin
+git clone https://github.com/mike-flower/duke.git
+git clone https://github.com/lh3/minimap2.git
+cd minimap2
+make
+cd ..
+module load r/recommended
+mkdir -p ~/R/library
+export R_LIBS_USER=~/R/library
+R
+```
+
+then run the `install.packages` and `BiocManager::install` lines above in R and quit. The job scripts load R and samtools, set `R_LIBS_USER` and put `~/Scratch/bin/minimap2` on the `PATH`. To update Duke later: `cd ~/Scratch/bin/duke` and `git pull`.
 
 **Layout:**
 ```
@@ -67,8 +113,10 @@ duke/
 │   ├── duke_run.R            # all parameters with defaults, cluster paths
 │   ├── duke_run_local.R      # the same, laptop paths
 │   ├── duke_cli.R            # used by ./duke
+│   ├── duke_myriad.sh, duke_kathleen.sh, duke_kathleen_slurm.sh   # job scripts
 │   ├── update_readme_params.R  # rewrites the parameter tables in this README from lib/params.R
-│   ├── duke_myriad.sh, duke_kathleen.sh, duke_kathleen_slurm.sh
+│   └── update_run_scripts.R    # rewrites duke_run.R and duke_run_local.R from lib/params.R
+├── logs/                     # one folder per run: run log, resolved parameters and tracts
 └── www/                      # example reference, tracts table and settings files
 ```
 
@@ -76,14 +124,27 @@ duke/
 
 ## Quick start
 
+You need a folder of reads (one BAM, FASTQ or FASTA file per sample) and a reference with the repeat masked by `N`s (`www/HTTset20_cagcaa.fasta` for HTT CAG). Give full paths: Duke runs from its own folder, so a relative path is read from there (`www/...` works for that reason).
+
+**1. A first look, without a settings file.** Write each run to a new folder, named with the Duke version, so earlier results are kept.
+
 ```bash
-./duke --dir_data ~/data/run1 --dir_out ~/data/run1/result_duke \
-       --path_ref www/HTTset20_cagcaa.fasta --path_settings ~/data/run1/settings_duke.xlsx --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.7 --path_ref www/HTTset20_cagcaa.fasta --threads 8
 ```
 
-`./duke --help` lists every option by module with its default. Add `--dry_run` to any command to print the resolved parameters and tracts without running anything.
+Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus sequences and variants. Without a settings file every module runs except Module 6. Open `00_index.html` in the output folder: Modules 1 and 2 show whether the reads and alignment are good, and the Module 3 and Module 7 length plots show where each sample's alleles are, so where to put the ranges.
 
-From R or RStudio, edit the paths in `scripts/duke_run_local.R` and source it. Every parameter is listed there with its default and a one-line explanation.
+**2. Write a settings file.** Copy `www/settings_example.xlsx`: one row per sample with its file name, ranges, and optionally group, time and control status (see [Settings file](#settings-file-path_settings-needed-for-module-6)).
+
+**3. Run again with the settings file**, into the same folder:
+
+```bash
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.7 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
+```
+
+[Resume](#resume) keeps Modules 1–5, as nothing that affects them changed, and runs Modules 6 and 7. Edit the settings and run again as often as needed.
+
+**Other ways to run.** Add `--dry_run` to any command to check the input paths and print the parameters it would use, without running anything. `./duke --help` lists every option by module with its default. From R or RStudio, edit the paths in `scripts/duke_run_local.R` and source it; every parameter is listed there with its default and a one-line explanation. On Myriad, see [Running on Myriad](#running-on-myriad).
 
 ---
 
@@ -104,17 +165,17 @@ One row per sample, `.xlsx` (first sheet) or `.csv`:
 | Column | Required | Example | Meaning |
 |---|---|---|---|
 | `file_name` | yes | `sample_01.bam` | The input file (with or without extension) |
-| `analysis_ranges` | yes | `[0-35][36-NA]` | Ranges on the primary measure (the first tract in the tracts table, or the single tract from `rpt_pattern`), in units of its motif, one bracket each; `NA` = unbounded |
-| `floor` | no | `[3][3]` | Remove lengths with fewer reads than this (a value below 1 is a fraction of the modal bin); 1 keeps all |
+| `analysis_ranges` | yes | `[0-35][36-NA]` | Ranges on the primary measure (the first tract in the tracts table, or the single tract from `rpt_pattern`), in units of its motif, one bracket each, named `range01`, `range02`, … in order. Both bounds are included (`[36-NA]` is 36 and above); `NA` = unbounded |
+| `floor` | no | `[3][3]` | Per range: leave out lengths with fewer reads (or molecules) than this; a value below 1 is a share of the commonest length's count (`0.1` = 10%, as in Lee et al. 2010). Blank, 0 or 1 keeps every length |
 | `max_peaks` | no | `[2][1]` | Modal peaks reported per range |
 | `group` | no | `QS5` | Group for controls, timecourses and plots |
 | `time` | no | `0`, `49` | Time point |
 | `group_control_sample` | no | `TRUE` | The sample is a control for its group |
-| `exclude` | no | `TRUE` | Leave the sample out of Module 6 |
+| `exclude` | no | `TRUE` | Leave the sample out of Modules 6 and 7 |
 | `manual_control_repeat_length` | no | `[14][120]` | Control setpoint per range; where given, it replaces the group control for that sample and range. Leave blank to use the group control |
 | `analysis_ranges_<measure>` (and `floor_<measure>`, `max_peaks_<measure>`, `manual_control_repeat_length_<measure>`) | no | `[NA-8][9-NA]` | Ranges for another tract or composite on its own scale (see below) |
 
-Rows whose file is not in `dir_data` are ignored, so one platemap-wide settings file can serve every run; if a file appears in more than one row, the first row is used. Group and range names may contain any characters; those that are unsafe in file names are replaced with `-` in output paths only. Examples: `www/settings_example.xlsx`, `www/settings_example_two_tracts.xlsx`.
+Rows whose file is not in `dir_data` are ignored, so one platemap-wide settings file can serve every run; if a file appears in more than one row, the first row is used. Group and range names may contain any characters; those that are unsafe in file names are replaced with `-` in output paths only. Examples: `www/settings_example.xlsx`, `www/settings_example_two_tracts.xlsx` (copy one and replace the rows with your samples).
 
 ### Other optional files
 
@@ -140,184 +201,9 @@ Rows whose file is not in `dir_data` are ignored, so one platemap-wide settings 
 
 ---
 
-## Several repeat tracts in one run
-
-The default is one tract: `rpt_pattern` (CAG) in `path_ref`. To measure more, give a tracts table (`path_tracts`, `.csv` or `.xlsx` with a sheet `tracts`), one row per tract in 5' to 3' order. Any number of tracts works.
-
-| Column | Required | Meaning |
-|---|---|---|
-| `tract` | yes | Name used in every column, plot and file (letters, digits, `_`, `-`) |
-| `motif` | yes | Repeat unit, e.g. `CAG` |
-| `path_ref` | no | Reference whose N block holds this tract; blank = `path_ref` |
-| `count_method`, `min_repeats`, `max_mismatch`, `start_perfect_repeats`, `end_perfect_repeats`, `max_gap`, `max_tract_gap`, `return_option`, `flank_pad`, `na_handling` | no | Per-tract overrides of the global `rpt_*` settings; blank = the global value |
-
-**One reference or several.** Tracts that share a reference are found inside its one N block, each searched downstream of the one before; this suits adjacent tracts such as HTT CAG and CCG (`www/HTTset20_cag_ccg.fasta`), and Duke also reports the sequence between them per read (e.g. `CAACAGCCGCCA`), which identifies the interruption variant. Tracts far apart, or in different amplicons, get their own reference each; reads are then aligned to every reference and the tracts are joined by read name. Both can be mixed.
-
-**Composite measures.** A combined length per read, set with `composites` (`--composites "CAG_CCG_sum=CAG+CCG:sum,CAG_CCG_span=CAG+CCG:span"`) or a `composites` sheet in the tracts workbook (`name`, `tracts`, `mode`):
-
-- `sum` – the tracts' counts added (pure repeat content only; in bp when the motifs differ in length);
-- `span` – from the start of the first tract to the end of the last, divided by the motif length, so any sequence between the tracts is included (in bp when the motifs differ in length). For HTT, span = CAG + CCG + 4 for the standard allele.
-
-**What you get for every tract and composite (each a "measure"):**
-
-- Module 3: detection rate, counts by every method, modal by method, and the per-read export (`CAG_full`, `CAG_match`, `CAG_pure`, `CCG_full`, ..., `CAG_CCG_sum`, `CAG_CCG_span`).
-- Module 6: distributions and the full set of instability metrics, per measure. A measure without its own `analysis_ranges_<measure>` column uses the primary tract's ranges: the reads are chosen by their CAG length (e.g. the expanded allele) and the metrics are calculated on that measure. With its own column the ranges are on its own scale. The primary range selects reads only; it does not cut the other measure, so in a CAG range of 40–50 a read with CAG 48 and CCG 10 has a sum of 58 and is kept. All lengths are in units of the measure's own motif, so with a CAG primary and a pentanucleotide tract, `analysis_ranges` is in CAG units and `analysis_ranges_<pentanucleotide tract>` in 5 bp units.
-- Module 6, comparing tracts: for each pair (`measure_pairs`, default every pair of tracts), the mean change in tract B against the change in tract A from the sample median, per group, plus a per-read scatter and a Spearman correlation per sample. This shows whether CAG instability carries CCG with it.
-- Module 7: a heatmap per measure, and a row per measure on each sample card.
-
-The first tract is the primary measure: it is used for the read selection above, the legacy `repeat_count_*` columns, clustering and waterfalls. Example tables: `www/tracts_example.csv`, `www/tracts_example.xlsx`.
-
----
-
-## UMIs
-
-`umi = TRUE` turns on Module 4. The read layout assumed is `flank_5 – UMI – flank_3 – amplicon`, as in the custom PacBio UMI design (v4.07):
-
-| Parameter | Default | Design element |
-|---|---|---|
-| `umi_flank_5` | `GTAAAACGACGGCCAGT` | M13-F |
-| `umi_flank_3` | `GGCGACCCTGGAAAAGCTGATGAA` | ciosiF+1 |
-| `umi_len_min`, `umi_len_max` | 12, 16 | N14 UMI, allowing for indels |
-
-Set these to match your own oligos. Reads are oriented to the reference first, so the flanks are searched on the forward strand.
-
-**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is one molecule. Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: the median of the longest window of reads of half-width `w` + `wfrac` × length that holds at least `umi_top_cluster_k` reads and at least `umi_top_cluster_min_share` (default 20%) of the molecule's reads, so a few stray long reads cannot set the length of a large molecule. PCR slippage mostly shortens reads, so the longest well-supported length is the best estimate of the template. A length halfway between two whole units goes to the one more of the molecule's reads sit on. Finally, a molecule where at least `umi_shortened_min_share` (20%) of the reads are at least `umi_shortened_min_units` (20) units longer than the molecule itself is flagged and, with `umi_shortened_filter` (on by default), dropped: such a molecule most likely came from a longer template whose first copies were shortened in PCR, so its length is too short. This is judged from the molecule's own reads, with no alleles involved.
-
-**Why the shortened-molecule filter (`umi_shortened_filter`).** In the 2026 jasmine run (66 samples, a 14-CAG and a ~130-CAG allele), 64% of the molecules called between the two alleles held at least 20% of their reads 20 or more units longer than the molecule, against about 4% of molecules at either allele; 65% of those long reads sat within 15 units of the sample's expanded peak. Almost all of these molecules had only 3–5 reads (79% flagged at 3–5 reads, 1–2% at 11 or more), so they are expanded templates sampled too few times for the full-length reads to be found. The filter cut the share of molecules above 30 CAG that sat between the alleles from a median of 14.7% to 5.7% per sample, close to the 3.9–4.0% seen when `umi_min_reads` was raised to 6 or 11 instead, while keeping the shallow molecules that show no long reads. Its cost is that about 11% of genuine 3–5-read molecules are also flagged, because one stray read is already 20% of them; this is similar at every length, so it does not bias the distribution. Set `umi_shortened_filter = FALSE` to keep these molecules; Module 4 always shows what the filter removes.
-
-**Why repeat length is not used to form molecules.** Molecules are formed from the UMI sequences alone, and nothing about alleles is assumed. PCR slippage and deletion can make reads of one molecule differ by tens of units (a 125-CAG molecule can give reads of 10 CAG or fewer), which is exactly the error collapsing is meant to remove, so length cannot say which reads belong together. Two molecules sharing a UMI by chance is rare (Module 4 reports the expected rate), and PCR chimeras are a minority of a family's reads. Earlier v3 versions split a UMI family whose reads fell on both sides of an allele boundary; this was removed in v3.0.4 because it turned slipped copies of one molecule into a second, artificial molecule and assumed every sample has one short and one long allele.
-
-**Report.** Extraction outcome per sample (found, no 5' flank, no 3' flank, wrong length), UMI length, reads per molecule, UMI neighbours against the number expected by chance (a check that clustering merges errors, not distinct UMIs), within-molecule read error against molecule length for every measure, the share of each sample's reads more than 10 units from their molecule (a measure of PCR damage), molecules holding reads much longer than themselves, a comparison of the six length rules (tests of each, and where they differ), and reads against molecules.
-
-**Downstream.** Modules 6 and 7 report every distribution and metric for reads and for molecules (`unit` column). Each measure is collapsed separately, so a molecule's `CAG_CCG_sum` is the collapsed sum, not the sum of the collapsed CAG and CCG. `04_umi/molecules/{sample}.tsv.gz` lists every molecule.
-
-### UMI parameters (Module 4)
-
-<!-- params:UMI:start -->
-
-| Parameter | Default | Format | What it does |
-|---|---|---|---|
-| `umi` | `FALSE` | TRUE / FALSE | Extract UMIs and collapse reads to molecules |
-| `umi_flank_5` | `GTAAAACGACGGCCAGT` | text | Sequence immediately 5' of the UMI (default M13-F) |
-| `umi_flank_3` | `GGCGACCCTGGAAAAGCTGATGAA` | text | Sequence immediately 3' of the UMI (default ciosiF+1) |
-| `umi_flank_max_mismatch` | `3` | whole number | Edits allowed when locating each UMI flank (indel tolerant) |
-| `umi_search_window` | `250` | whole number | The 5' flank must start within this many bases of the read start |
-| `umi_len_min` | `12` | whole number | Shortest UMI accepted |
-| `umi_len_max` | `16` | whole number | Longest UMI accepted |
-| `umi_cluster_max_dist` | `1` | whole number | Edit distance for directional UMI clustering (0 = exact match; 1 or 2) |
-| `umi_min_reads` | `3` | whole number | Minimum reads for a molecule to be kept |
-| `umi_collapse_stat` | `top_cluster` | text | Rule that turns the reads of a molecule into its one length: `top_cluster`, `max_supported`, `mode`, `median` or `mean` (all are compared in the Module 4 report) |
-| `umi_top_cluster_k` | `2` | whole number | top_cluster: reads required in the window |
-| `umi_top_cluster_w` | `3` | number | top_cluster: constant part of the window half-width (repeats) |
-| `umi_top_cluster_wfrac` | `0.1` | number | top_cluster: length-proportional part of the window half-width |
-| `umi_top_cluster_min_share` | `0.2` | number | top_cluster: share of the molecule's reads the window must also hold, so a few stray long reads cannot set the length (0 = only umi_top_cluster_k reads needed) |
-| `umi_shortened_filter` | `TRUE` | TRUE / FALSE | Drop molecules where many reads are much longer than the molecule (most likely a longer template whose reads were shortened in PCR): the shortened-molecule filter |
-| `umi_shortened_min_units` | `20` | number | Shortened-molecule filter: how many units longer than its molecule a read must be to count as long |
-| `umi_shortened_min_share` | `0.2` | number | Shortened-molecule filter: share of the reads of a molecule that must be long for the molecule to be flagged as shortened |
-
-<!-- params:UMI:end -->
-
----
-
-## How repeats are counted
-
-Duke counts the **repeat tract itself**: the run of CAG units, without the interruptions and sequence that follow it. For a 47Q HTT allele (`(CAG)n CAA CAG CCG CCA (CCG)7`): standard 45 CAG, DOI (loss of CAA CAG duplicated) 43 CAG, LOI (loss of interruption, CAA → CAG) 47 CAG.
-
-A tract is a run of motif matches, with gaps of up to `rpt_max_gap` bases inside a run and `rpt_max_tract_gap` between runs merged. It must start and end with `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` perfect units, which trims e.g. a trailing `CAACAG` off the CAG tract. The search covers the sequence between the two flank alignments plus `rpt_flank_pad` bases (30) either side, because the aligner sometimes places the last unit inside a flank (the cause of the 1-unit under-count of LOI alleles in v2).
-
-Three counts per tract:
-
-| Method | Definition |
-|---|---|
-| `full` (default) | tract length in bp ÷ motif length |
-| `match` | exact motif matches in the tract |
-| `pure` | the longest uninterrupted run |
-
-**Why `full` is the default.** A single wrong base inside the tract breaks it into two runs. `full` runs across it (the gap is within `rpt_max_gap`), `match` loses one unit, and `pure` drops to the longer of the two pieces. Sequencing errors inside long repeats are common enough for this to matter: in the 2026 jasmine MSH3ko/MLH1ko UMI run (PacBio HiFi, read quality about Q42 overall), in one sample 6% of reads with a 14-CAG tract but 58% of reads with a ~130-CAG tract had a broken tract, with breaks at random positions, so the median `pure` count of the long allele was 88 against 132 for `full` and 131 for `match`. `pure` is only the right count where the question is a real interruption, and Module 3 shows which situation you are in.
-
-Module 3 compares the methods read by read, so no assumption about alleles or controls is needed: the share of reads where `match` or `pure` differs from `full` at each tract length (per sample and pooled), each count against `full` for every read, and where along the tract the breaks fall (flat = sequencing errors; a sharp peak = a real interruption). The tables are in `repeat_detection.xlsx` (`method_agreement`, `method_by_length`, `modal_by_method`).
-
-### Repeat detection parameters (Module 3)
-
-These settings apply to every tract unless the tracts table overrides them for one tract. The tracts-table column is the parameter name without `rpt_` (`flank_pad`, `max_gap`, ...), except `count_method` for `repeat_count_method` and `na_handling` for `na_repeat_handling`.
-
-<!-- params:Repeats:start -->
-
-| Parameter | Default | Format | What it does |
-|---|---|---|---|
-| `rpt_pattern` | `CAG` | text | Repeat motif (used when there is no tracts table) |
-| `rpt_tract_name` | – | text | Name for the single tract (default: the motif) |
-| `rpt_min_repeats` | `2` | whole number | Minimum tract length in repeat units |
-| `rpt_max_mismatch` | `0` | whole number | Mismatches allowed per repeat unit |
-| `rpt_start_perfect_repeats` | `2` | whole number | Perfect units required at the start of a tract |
-| `rpt_end_perfect_repeats` | `2` | whole number | Perfect units required at the end of a tract |
-| `rpt_max_gap` | `6` | whole number | Maximum bases between units inside a tract |
-| `rpt_max_tract_gap` | `18` | whole number | Maximum gap between sub-tracts before they are merged |
-| `rpt_return_option` | `longest` | text | Which tract to keep when several are found: `longest` or `first` |
-| `rpt_flank_pad` | `30` | whole number | Bases either side of the flank boundaries searched for the tract, so a tract can extend past where the aligner placed the flank |
-| `repeat_count_method` | `full` | text | Primary count: `full` (tract length / motif length), `match` (exact units) or `pure` (longest uninterrupted run) |
-| `na_repeat_handling` | `keep` | text | Reads that align but have no tract: `keep` (no length; counted in the detection rate only), `convert_to_zero` (length 0, as in v2; falls into ranges starting at 0 or NA) or `filter` (removed) |
-| `composites` | – | text list | Combined measures, e.g. `CAG_CCG_sum=CAG+CCG:sum` (pure units added) or `CAG_CCG_span=CAG+CCG:span` (first tract start to last tract end) |
-| `export_read_counts` | `TRUE` | TRUE / FALSE | Write per-read lengths to 03_repeat_detection/read_repeat_counts/ |
-| `rm_flank_length_outliers` | `FALSE` | TRUE / FALSE | Remove reads with outlying combined flank length |
-| `flank_iqr_multiplier` | `1.5` | number | IQR multiplier for the flank length filter |
-
-<!-- params:Repeats:end -->
-
----
-
-## Instability metrics
-
-For each sample × measure × range × unit, with setpoint s and d = length – s per read:
-
-| Metric | Definition |
-|---|---|
-| `instability_index` (II) | mean(d) = EI + CI. With a modal setpoint this is the instability index of Lee et al. (2010); their threshold of 10% of the modal peak is `floor = 0.1` in the settings file |
-| `expansion_index` (EI) | sum of positive d ÷ n |
-| `contraction_index` (CI) | sum of negative d ÷ n |
-| `mean_change_above_setpoint` | mean d of the reads above s: how large a typical expansion is (`mean_expansion_size` before v3.1; "expansion index" in v2) |
-| `mean_change_below_setpoint` | mean d of the reads below s (`mean_contraction_size` before v3.1; "contraction index" in v2) |
-| `share_at_setpoint`, `share_above_setpoint`, `share_below_setpoint` | share within ±0.5 of s, above, below (`prop_at`, `prop_above`, `prop_below` before v3.1); `n_at_setpoint` etc. are the counts |
-| `share_kplus_above_setpoint`, `share_kplus_below_setpoint` | share at least k units above / below s, e.g. `share_5plus_above_setpoint` (`expansion_thresholds`, default 5 and 10; `prop_above_k` before v3.1) |
-| `expansion_ratio`, `contraction_ratio` | reads above / at s, below / at s (unstable when few reads sit at s) |
-| `modal_minus_setpoint`, `median_minus_setpoint`, `mean_minus_setpoint` | the sample's modal, median and mean minus s (`modal_diff` etc. before v3.1) |
-| `z_score` | (sample value – control setpoint) ÷ SD across the control samples; blank with manual controls or a single control |
-
-Every column, with its units, is also listed in the `definitions` sheet of `instability.xlsx`.
-
-Two setpoints are reported (`setpoint_type`):
-
-- `sample_relative` – the sample's own `control_setpoint_metric` (median by default; `modal_length` gives Lee's II);
-- `control_relative` – that metric aggregated (`control_aggregation_method`) across the group's control samples, so the metrics measure change since the control (e.g. t = 0). Where the settings file gives a `manual_control_repeat_length` for a sample and range, it replaces the group control there (a blank cell uses the group control); `setpoint_source` records which was used, and Module 6 lists the samples where a manual length was used.
-
-Distribution statistics (modal, median, mean, SD, IQR, 5th and 95th percentiles, skewness, kurtosis) are in `distribution_summary`.
-
-### Instability parameters (Module 6)
-
-<!-- params:Instability:start -->
-
-| Parameter | Default | Format | What it does |
-|---|---|---|---|
-| `range_peak_span` | `3` | whole number | Window for modal peak detection |
-| `range_min_n` | `50` | whole number | Fewest reads (or molecules) a sample needs in a range for that range's statistics and metrics to be calculated; below it they are left blank, and a control sample is left out of the setpoint |
-| `group_control` | `TRUE` | TRUE / FALSE | Calculate group control setpoints |
-| `control_sample_selection` | `flagged` | text | `flagged`, `earliest` or `all` |
-| `control_setpoint_metric` | `median_length` | text | `modal_length`, `mean_length` or `median_length` |
-| `control_aggregation_method` | `median` | text | `mean`, `median` or `trimmed_mean` across control samples |
-| `expansion_thresholds` | `5, 10` | whole-number list | k for proportion of reads at least k units above / below the setpoint |
-| `cohort_plot_by` | `group, time` | text list | Dimensions for cohort plots: group, time |
-| `time_label` | `Time (days)` | text | Axis label for the time column of the settings file, with its unit |
-| `headline_metrics` | `modal_length, median_length, mean_length, instability_index, expansion_index, contraction_index, share_5plus_above_setpoint, share_5plus_below_setpoint` | text list | Metrics drawn as timecourses by group |
-| `headline_setpoint_type` | `control_relative` | text | Setpoint type for headline plots: `control_relative` or `sample_relative` |
-| `plot_ranges` | – | text list | Ranges drawn inline (default: the first two ranges of the primary measure) |
-| `measure_pairs` | – | text list | Pairs of measures to plot against each other per read, e.g. `CAG:CCG` (default: every pair of tracts) |
-| `pair_max_points` | `4000` | whole number | Maximum reads per sample in per-read pair plots |
-
-<!-- params:Instability:end -->
-
----
-
 ## Output files
+
+Open **`00_index.html`** first: it links every report, table and figure, by sample, range and group. **`run_summary.xlsx`** has one row per sample with the results of every module.
 
 ```
 result_duke/
@@ -325,9 +211,9 @@ result_duke/
 ├── 02_alignment.html             02_alignment/alignment.xlsx (read_accounting), plots/ (alignment/), bam/ (keep_bam)
 ├── 03_repeat_detection.html      03_repeat_detection/repeat_detection.xlsx, read_repeat_counts/{sample}.tsv.gz, plots/
 ├── 04_umi.html                   04_umi/umi.xlsx, molecules/{sample}.tsv.gz, plots/ (reads_vs_molecules/)
-├── 05_allele_structure.html      05_allele_structure/allele_structure.xlsx, consensus/alleles.fasta, variants/alleles.vcf, bam/, plots/ (alleles/, clusters/, waterfall/)
+├── 05_allele_structure.html      05_allele_structure/allele_structure.xlsx, consensus/alleles.fasta, variants/alleles.vcf (.vcf.gz), bam/, plots/ (alleles/, clusters/, waterfall/)
 ├── 06_instability.html           06_instability/instability.xlsx, instability_metrics.tsv, distribution_summary.tsv, plots/ (timecourse/, pair_trend/, pair_correlation/, pair_scatter/)
-├── 07_repeat_lengths.html        07_repeat_lengths/repeat_lengths.xlsx, plots/ (heatmap/, group_density/, group_histogram/, sample_ranges/, sample_card/)
+├── 07_repeat_lengths.html        07_repeat_lengths/repeat_lengths.xlsx, plots/ (heatmap/, group_density/, group_histogram/, sample_ranges/, sample_card/; optional sample_density/, sample_histogram/)
 ├── 00_index.html                 start here: links every report, table and figure, by sample, range and group
 ├── run_summary.xlsx              one row per sample from every module, headline metrics, column and file guide (+ .tsv copies)
 ├── module_data/                  one .RData per module (used by resume)
@@ -404,18 +290,191 @@ Every saved figure is named **`{plot type}_{sample, group or measure}_{measure}_
 | `sample_density` | 7 | one per sample | yes | no | One sample's ridge for all lengths and each range (one file each) |
 | `sample_histogram` | 7 | one per sample | yes | no | One sample's histogram for all lengths and each range (one file each) |
 
-`00_index.html` at the top of the output folder links every saved figure, arranged by sample, range and group.
-
 Key tables:
 
-- `00_index.html`: start here – links everything.
-- `run_summary.xlsx`: one row per sample with the results of every module.
-
+- `run_summary.xlsx`: one row per sample with the results of every module (sheet `samples`), the headline metrics for every range and unit, and guides to its columns and to every output file.
 - `06_instability/instability.xlsx`: `instability_metrics` (one row per sample × unit × measure × range × setpoint type; the column names used by v2 scripts are kept), `distribution_summary`, `modal_peaks`, `group_controls`, `pair_stats`, `range_table`.
 - `03_repeat_detection/read_repeat_counts/{sample}.tsv.gz`: one row per read with every tract's counts and structure, the composites, and the v2 columns `repeat_count_full`, `repeat_count_match`, `repeat_count_tracts`.
 - `02_alignment/alignment.xlsx`, sheet `read_accounting`: reads per sample at every step from input to analysed.
 
-Logs go to `logs/<date_time>/` in the Duke folder: the run log, the resolved parameters as R code and the resolved tracts table.
+Logs go to `logs/<date_time>/` in the Duke folder, not the output folder, so runs from one Duke folder share it: the run log, the resolved parameters as R code and the resolved tracts table. The run log's first lines give the output folder.
+
+---
+
+## Several repeat tracts in one run
+
+The default is one tract: `rpt_pattern` (CAG) in `path_ref`. To measure more, give a tracts table (`path_tracts`, `.csv` or `.xlsx` with a sheet `tracts`), one row per tract in 5' to 3' order. Any number of tracts works.
+
+| Column | Required | Meaning |
+|---|---|---|
+| `tract` | yes | Name used in every column, plot and file (letters, digits, `_`, `-`) |
+| `motif` | yes | Repeat unit, e.g. `CAG` |
+| `path_ref` | no | Reference whose N block holds this tract; blank = `path_ref` |
+| `count_method`, `min_repeats`, `max_mismatch`, `start_perfect_repeats`, `end_perfect_repeats`, `max_gap`, `max_tract_gap`, `return_option`, `flank_pad`, `na_handling` | no | Per-tract overrides of the global `rpt_*` settings; blank = the global value |
+
+**One reference or several.** Tracts that share a reference are found inside its one N block, each searched downstream of the one before; this suits adjacent tracts such as HTT CAG and CCG (`www/HTTset20_cag_ccg.fasta`), and Duke also reports the sequence between them per read (e.g. `CAACAGCCGCCA`), which identifies the interruption variant. Tracts far apart, or in different amplicons, get their own reference each; reads are then aligned to every reference and the tracts are joined by read name. Both can be mixed.
+
+**Composite measures.** A combined length per read, set with `composites` (`--composites "CAG_CCG_sum=CAG+CCG:sum,CAG_CCG_span=CAG+CCG:span"`) or a `composites` sheet in the tracts workbook (`name`, `tracts`, `mode`):
+
+- `sum` – the tracts' counts added, each counted by its `count_method` (`full` by default, so interruptions inside a tract are counted); in bp when the motifs differ in length;
+- `span` – from the start of the first tract to the end of the last, divided by the motif length, so any sequence between the tracts is included (in bp when the motifs differ in length). For HTT, span = CAG + CCG + 4 for the standard allele.
+
+**What you get for every tract and composite (each a "measure"):**
+
+- Module 3: detection rate, counts by every method, modal by method, and the per-read export (`CAG_full`, `CAG_match`, `CAG_pure`, `CCG_full`, ..., `CAG_CCG_sum`, `CAG_CCG_span`).
+- Module 6: distributions and the full set of instability metrics, per measure. A measure without its own `analysis_ranges_<measure>` column uses the primary tract's ranges: the reads are chosen by their CAG length (e.g. the expanded allele) and the metrics are calculated on that measure. With its own column the ranges are on its own scale. The primary range selects reads only; it does not cut the other measure, so in a CAG range of 40–50 a read with CAG 48 and CCG 10 has a sum of 58 and is kept. All lengths are in units of the measure's own motif, so with a CAG primary and a pentanucleotide tract, `analysis_ranges` is in CAG units and `analysis_ranges_<pentanucleotide tract>` in 5 bp units.
+- Module 6, comparing tracts: for each pair (`measure_pairs`, default every pair of tracts), the mean change in tract B against the change in tract A from the sample median, per group, plus a per-read scatter and a Spearman correlation per sample. This shows whether CAG instability carries CCG with it.
+- Module 7: a heatmap per measure, and a row per measure on each sample card.
+
+The first tract is the primary measure: it is used for the read selection above, the legacy `repeat_count_*` columns, clustering and waterfalls. Example tables: `www/tracts_example.csv`, `www/tracts_example.xlsx`.
+
+---
+
+## UMIs
+
+`umi = TRUE` turns on Module 4. The read layout assumed is `flank_5 – UMI – flank_3 – amplicon`, as in the custom PacBio UMI design (v4.07):
+
+| Parameter | Default | Design element |
+|---|---|---|
+| `umi_flank_5` | `GTAAAACGACGGCCAGT` | M13-F |
+| `umi_flank_3` | `GGCGACCCTGGAAAAGCTGATGAA` | ciosiF+1 |
+| `umi_len_min`, `umi_len_max` | 12, 16 | N14 UMI, allowing for indels |
+
+Set these to match your own oligos. Reads are oriented to the reference first, so the flanks are searched on the forward strand.
+
+**Steps.** Each flank is found by exact match, then with up to `umi_flank_max_mismatch` edits (indels allowed); the UMI is the sequence between them. UMIs are clustered with the umi_tools directional method (a UMI joins a neighbour within `umi_cluster_max_dist` edits that has at least 2n – 1 of its reads). Each UMI family is one molecule. Molecules with fewer than `umi_min_reads` reads are dropped. Each molecule's length is `top_cluster` by default: counting down from the longest read, the first window of lengths 2 × `umi_top_cluster_w` + `umi_top_cluster_wfrac` × length units deep that holds at least `umi_top_cluster_k` reads and at least `umi_top_cluster_min_share` (default 20%) of the molecule's reads, and the median of the reads in it, so a few stray long reads cannot set the length of a large molecule. PCR slippage mostly shortens reads, so the longest well-supported length is the best estimate of the template. A length halfway between two whole units goes to the one more of the molecule's reads sit on. Finally, a molecule where at least `umi_shortened_min_share` (20%) of the reads are at least `umi_shortened_min_units` (20) units longer than the molecule itself is flagged and, with `umi_shortened_filter` (on by default), dropped: such a molecule most likely came from a longer template whose first copies were shortened in PCR, so its length is too short. This is judged from the molecule's own reads, with no alleles involved.
+
+**Why the shortened-molecule filter (`umi_shortened_filter`).** In the 2026 jasmine run (66 samples, a 14-CAG and a ~130-CAG allele), 64% of the molecules called between the two alleles held at least 20% of their reads 20 or more units longer than the molecule, against about 4% of molecules at either allele; 65% of those long reads sat within 15 units of the sample's expanded peak. Almost all of these molecules had only 3–5 reads (79% flagged at 3–5 reads, 1–2% at 11 or more), so they are expanded templates sampled too few times for the full-length reads to be found. The filter cut the share of molecules above 30 CAG that sat between the alleles from a median of 14.7% to 5.7% per sample, close to the 3.9–4.0% seen when `umi_min_reads` was raised to 6 or 11 instead, while keeping the shallow molecules that show no long reads. Its cost is that about 11% of genuine 3–5-read molecules are also flagged, because one stray read is already 20% of them; this is similar at every length, so it does not bias the distribution. Set `umi_shortened_filter = FALSE` to keep these molecules; Module 4 always shows what the filter removes.
+
+**Why repeat length is not used to form molecules.** Molecules are formed from the UMI sequences alone, and nothing about alleles is assumed. PCR slippage and deletion can make reads of one molecule differ by tens of units (a 125-CAG molecule can give reads of 10 CAG or fewer), which is exactly the error collapsing is meant to remove, so length cannot say which reads belong together. Two molecules sharing a UMI by chance is rare (Module 4 reports the expected rate), and PCR chimeras are a minority of a family's reads. Earlier v3 versions split a UMI family whose reads fell on both sides of an allele boundary; this was removed in v3.0.4 because it turned slipped copies of one molecule into a second, artificial molecule and assumed every sample has one short and one long allele.
+
+**Report.** Extraction outcome per sample (found, no 5' flank, no 3' flank, wrong length), UMI length, reads per molecule, UMI neighbours against the number expected by chance (a check that clustering merges errors, not distinct UMIs), within-molecule read error against molecule length for every measure, the share of each sample's reads more than 10 units from their molecule (a measure of PCR damage), molecules holding reads much longer than themselves, a comparison of the six length rules (`top_cluster` by reads alone and by reads and share, `max_supported`, `mode`, `median` and `mean`: tests of each, and where they differ), and reads against molecules.
+
+**Downstream.** Modules 6 and 7 report every distribution and metric for reads and for molecules (`unit` column). Each measure is collapsed separately, so a molecule's `CAG_CCG_sum` is the collapsed sum, not the sum of the collapsed CAG and CCG. `04_umi/molecules/{sample}.tsv.gz` lists every molecule.
+
+### UMI parameters (Module 4)
+
+<!-- params:UMI:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `umi` | `FALSE` | TRUE / FALSE | Extract UMIs and collapse reads to molecules |
+| `umi_flank_5` | `GTAAAACGACGGCCAGT` | text | Sequence immediately 5' of the UMI (default M13-F) |
+| `umi_flank_3` | `GGCGACCCTGGAAAAGCTGATGAA` | text | Sequence immediately 3' of the UMI (default ciosiF+1) |
+| `umi_flank_max_mismatch` | `3` | whole number | Edits allowed when locating each UMI flank (indel tolerant) |
+| `umi_search_window` | `250` | whole number | The 5' flank must start within this many bases of the read start |
+| `umi_len_min` | `12` | whole number | Shortest UMI accepted |
+| `umi_len_max` | `16` | whole number | Longest UMI accepted |
+| `umi_cluster_max_dist` | `1` | whole number | Edit distance for directional UMI clustering (0 = exact match; 1 or 2) |
+| `umi_min_reads` | `3` | whole number | Minimum reads for a molecule to be kept |
+| `umi_collapse_stat` | `top_cluster` | text | Rule that turns the reads of a molecule into its one length: `top_cluster`, `max_supported`, `mode`, `median` or `mean` (all are compared in the Module 4 report) |
+| `umi_top_cluster_k` | `2` | whole number | top_cluster: reads required in the window |
+| `umi_top_cluster_w` | `3` | number | top_cluster: the window reaches 2 × w + wfrac × length repeats below its top read; w is the constant part |
+| `umi_top_cluster_wfrac` | `0.1` | number | top_cluster: the length-proportional part of the window (see umi_top_cluster_w) |
+| `umi_top_cluster_min_share` | `0.2` | number | top_cluster: share of the molecule's reads the window must also hold, so a few stray long reads cannot set the length (0 = only umi_top_cluster_k reads needed) |
+| `umi_shortened_filter` | `TRUE` | TRUE / FALSE | Drop molecules where many reads are much longer than the molecule (most likely a longer template whose reads were shortened in PCR): the shortened-molecule filter |
+| `umi_shortened_min_units` | `20` | number | Shortened-molecule filter: how many units longer than its molecule a read must be to count as long |
+| `umi_shortened_min_share` | `0.2` | number | Shortened-molecule filter: share of the reads of a molecule that must be long for the molecule to be flagged as shortened |
+
+<!-- params:UMI:end -->
+
+---
+
+## How repeats are counted
+
+Duke counts the **repeat tract itself**: the run of CAG units, without the interruptions and sequence that follow it. For a 47Q HTT allele (`(CAG)n CAA CAG CCG CCA (CCG)7`): standard 45 CAG, DOI (duplication of the interruption, CAA CAG CAA CAG) 43 CAG, LOI (loss of interruption, CAA → CAG) 47 CAG.
+
+A tract is a run of motif matches, with gaps of up to `rpt_max_gap` bases inside a run and `rpt_max_tract_gap` between runs merged. It must start and end with `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats` perfect units, which trims e.g. a trailing `CAACAG` off the CAG tract. The search covers the sequence between the two flank alignments plus `rpt_flank_pad` bases (30) either side, because the aligner sometimes places the last unit inside a flank (the cause of the 1-unit under-count of LOI alleles in v2).
+
+Three counts per tract:
+
+| Method | Definition |
+|---|---|
+| `full` (default) | tract length in bp ÷ motif length |
+| `match` | exact motif matches in the tract |
+| `pure` | the longest uninterrupted run |
+
+**Why `full` is the default.** A single wrong base inside the tract breaks it into two runs. `full` runs across it (the gap is within `rpt_max_gap`), `match` loses one unit, and `pure` drops to the longer of the two pieces. Sequencing errors inside long repeats are common enough for this to matter: in the 2026 jasmine MSH3ko/MLH1ko UMI run (PacBio HiFi, read quality about Q42 overall), in one sample 6% of reads with a 14-CAG tract but 58% of reads with a ~130-CAG tract had a broken tract, with breaks at random positions, so the median `pure` count of the long allele was 88 against 132 for `full` and 131 for `match`. `pure` is only the right count where the question is a real interruption, and Module 3 shows which situation you are in.
+
+Module 3 compares the methods read by read, so no assumption about alleles or controls is needed: the share of reads where `match` or `pure` differs from `full` at each tract length (per sample and pooled), each count against `full` for every read, and where along the tract the breaks fall (flat = sequencing errors; a sharp peak = a real interruption). The tables are in `repeat_detection.xlsx` (`method_agreement`, `method_by_length`, `modal_by_method`).
+
+### Repeat detection parameters (Module 3)
+
+These settings apply to every tract unless the tracts table overrides them for one tract. The tracts-table column is the parameter name without `rpt_` (`flank_pad`, `max_gap`, ...), except `count_method` for `repeat_count_method` and `na_handling` for `na_repeat_handling`.
+
+<!-- params:Repeats:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `rpt_pattern` | `CAG` | text | Repeat motif (used when there is no tracts table) |
+| `rpt_tract_name` | – | text | Name for the single tract (default: the motif) |
+| `rpt_min_repeats` | `2` | whole number | Minimum tract length in repeat units |
+| `rpt_max_mismatch` | `0` | whole number | Mismatches allowed per repeat unit |
+| `rpt_start_perfect_repeats` | `2` | whole number | Perfect units required at the start of a tract |
+| `rpt_end_perfect_repeats` | `2` | whole number | Perfect units required at the end of a tract |
+| `rpt_max_gap` | `6` | whole number | Maximum bases between units inside a tract |
+| `rpt_max_tract_gap` | `18` | whole number | Maximum gap between sub-tracts before they are merged |
+| `rpt_return_option` | `longest` | text | Which tract to keep when several are found: `longest` or `first` |
+| `rpt_flank_pad` | `30` | whole number | Bases either side of the flank boundaries searched for the tract, so a tract can extend past where the aligner placed the flank |
+| `repeat_count_method` | `full` | text | Primary count: `full` (tract length / motif length), `match` (exact units) or `pure` (longest uninterrupted run) |
+| `na_repeat_handling` | `keep` | text | Reads that align but have no tract: `keep` (no length; counted in the detection rate only), `convert_to_zero` (length 0, as in v2; falls into ranges starting at 0 or NA) or `filter` (removed) |
+| `composites` | – | text list | Combined measures, e.g. `CAG_CCG_sum=CAG+CCG:sum` (each tract's count added, under its count_method) or `CAG_CCG_span=CAG+CCG:span` (first tract start to last tract end) |
+| `export_read_counts` | `TRUE` | TRUE / FALSE | Write per-read lengths to 03_repeat_detection/read_repeat_counts/ |
+| `rm_flank_length_outliers` | `FALSE` | TRUE / FALSE | Remove reads with outlying combined flank length |
+| `flank_iqr_multiplier` | `1.5` | number | IQR multiplier for the flank length filter |
+
+<!-- params:Repeats:end -->
+
+---
+
+## Instability metrics
+
+For each sample × measure × range × unit, with setpoint s and d = length – s per read:
+
+| Metric | Definition |
+|---|---|
+| `instability_index` (II) | mean(d) = EI + CI. With a modal setpoint this is the instability index of Lee et al. (2010); their threshold of 10% of the modal peak is `floor = 0.1` in the settings file |
+| `expansion_index` (EI) | sum of positive d ÷ n |
+| `contraction_index` (CI) | sum of negative d ÷ n |
+| `mean_change_above_setpoint` | mean d of the reads above s: how large a typical expansion is (`mean_expansion_size` before v3.1; "expansion index" in v2) |
+| `mean_change_below_setpoint` | mean d of the reads below s (`mean_contraction_size` before v3.1; "contraction index" in v2) |
+| `share_at_setpoint`, `share_above_setpoint`, `share_below_setpoint` | share within ±0.5 of s, above, below (`prop_at`, `prop_above`, `prop_below` before v3.1); `n_at_setpoint` etc. are the counts |
+| `share_kplus_above_setpoint`, `share_kplus_below_setpoint` | share at least k units above / below s, e.g. `share_5plus_above_setpoint` (`expansion_thresholds`, default 5 and 10; `prop_above_k` before v3.1) |
+| `expansion_ratio`, `contraction_ratio` | reads above / at s, below / at s (unstable when few reads sit at s) |
+| `modal_minus_setpoint`, `median_minus_setpoint`, `mean_minus_setpoint` | the sample's modal, median and mean minus s (`modal_diff` etc. before v3.1) |
+| `z_score` | (sample value – control setpoint) ÷ SD across the control samples; blank with manual controls or a single control |
+
+Every column, with its units, is also listed in the `definitions` sheet of `instability.xlsx`.
+
+Two setpoints are reported (`setpoint_type`):
+
+- `sample_relative` – the sample's own `control_setpoint_metric` (median by default; `modal_length` gives Lee's II);
+- `control_relative` – that metric aggregated (`control_aggregation_method`) across the group's control samples, so the metrics measure change since the control (e.g. t = 0). Where the settings file gives a `manual_control_repeat_length` for a sample and range, it replaces the group control there (a blank cell uses the group control); `setpoint_source` records which was used, and Module 6 lists the samples where a manual length was used.
+
+Distribution statistics (modal, median, mean, SD, IQR, 5th and 95th percentiles, skewness, kurtosis) are in `distribution_summary`.
+
+### Instability parameters (Module 6)
+
+<!-- params:Instability:start -->
+
+| Parameter | Default | Format | What it does |
+|---|---|---|---|
+| `range_peak_span` | `3` | whole number | Window for modal peak detection |
+| `range_min_n` | `50` | whole number | Fewest reads (or molecules) a sample needs in a range for that range's statistics and metrics to be calculated; below it they are left blank, and a control sample is left out of the setpoint |
+| `group_control` | `TRUE` | TRUE / FALSE | Calculate group control setpoints |
+| `control_sample_selection` | `flagged` | text | `flagged`, `earliest` or `all` |
+| `control_setpoint_metric` | `median_length` | text | `modal_length`, `mean_length` or `median_length` |
+| `control_aggregation_method` | `median` | text | `mean`, `median` or `trimmed_mean` across control samples |
+| `expansion_thresholds` | `5, 10` | whole-number list | k for proportion of reads at least k units above / below the setpoint |
+| `cohort_plot_by` | `group, time` | text list | Dimensions for cohort plots: group, time |
+| `time_label` | `Time (days)` | text | Axis label for the time column of the settings file, with its unit |
+| `headline_metrics` | `modal_length, median_length, mean_length, instability_index, expansion_index, contraction_index, share_5plus_above_setpoint, share_5plus_below_setpoint` | text list | Metrics drawn as timecourses by group |
+| `headline_setpoint_type` | `control_relative` | text | Setpoint type for headline plots: `control_relative` or `sample_relative` |
+| `plot_ranges` | – | text list | Ranges drawn inline (default: the first two ranges of the primary measure) |
+| `measure_pairs` | – | text list | Pairs of measures to plot against each other per read, e.g. `CAG:CCG` (default: every pair of tracts) |
+| `pair_max_points` | `4000` | whole number | Maximum reads per sample in per-read pair plots |
+
+<!-- params:Instability:end -->
 
 ---
 
@@ -517,11 +576,11 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 | `consensus_downsample` | `50` | whole number | Maximum reads per consensus alignment |
 | `consensus_parts` | `FALSE` | TRUE / FALSE | Also write each allele's left flank, repeat region and right flank as `alleles_left.fasta`, `alleles_mid.fasta` and `alleles_right.fasta` beside `alleles.fasta` |
 | `call_variants` | `TRUE` | TRUE / FALSE | Call variants in each cluster consensus against the reference |
-| `allele_minor_share` | `0.2` | number | Also report a substitution carried by at least this share of an allele`s reads when it is not in the allele`s consensus (NA = off) |
+| `allele_minor_share` | `0.2` | number | Also report a substitution carried by at least this share of an allele's reads when it is not in the allele's consensus (NA = off) |
 | `allele_support_reads` | `5000` | whole number | Maximum reads per allele used to count each variant's read support |
 | `allele_bam` | `TRUE` | TRUE / FALSE | Write a BAM per sample of reads aligned to the whole reference, tagged by allele (HP) |
 | `allele_bam_reads` | `2000` | whole number | Maximum reads per allele in the allele BAMs |
-| `allele_bam_method` | `auto` | auto / flanks / minimap2 | How reads are placed on the reference in the allele BAMs: `flanks` aligns each read's left and right flank to the reference flanks and writes the repeat region as one insertion at the N block (for short amplicons, which minimap2 leaves unmapped); `minimap2` aligns whole reads; `auto` uses flanks when the reads' flanks total under 1,000 bp |
+| `allele_bam_method` | `auto` | text | How reads are placed on the reference in the allele BAMs: `flanks` aligns each read's left and right flank to the reference flanks and writes the repeat region as one insertion at the N block (for short amplicons, which minimap2 leaves unmapped); `minimap2` aligns whole reads; `auto` uses flanks when the reads' flanks total under 1,000 bp |
 | `allele_bam_minimap2` | `-x map-hifi` | text | minimap2 options for the allele BAMs when minimap2 is used (e.g. -x map-ont for nanopore reads) |
 | `waterfall` | `TRUE` | TRUE / FALSE | Write per-sample waterfall plots |
 | `waterfall_downsample` | `1000` | whole number | Maximum reads per waterfall |
@@ -550,12 +609,12 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 
 | Parameter | Default | Format | What it does |
 |---|---|---|---|
-| `reuse_from` | – | text | An earlier run`s output folder to take module results from, so those modules are not re-run. A module is reused only when its results were made with the same settings as this run (its own and every upstream module`s); it keeps that run's report and figures |
+| `reuse_from` | – | text | An earlier run's output folder to take module results from, so those modules are not re-run. A module is reused only when its results were made with the same settings as this run (its own and every upstream module's); it keeps that run's report and figures |
 | `reuse_modules` | – | whole-number list | With reuse_from: the modules to reuse, e.g. 1:4 (default: every module made by this Duke version whose results still match; a module made by an earlier version is reused only when named here). A module named here that cannot be reused stops the run before it starts |
 | `plots` | `all` | text list | Plot types to save: `all` (default; every type except sample_density, sample_histogram and waterfall_cluster), a list of types, or `all` with `-type` to leave types out, e.g. `all,-waterfall,sample_density`. The README lists every type |
 | `plot_units` | `combined` | text list | For plots that can show reads and molecules: `combined` (both in one figure, default), `reads`, `molecules`, or a list, e.g. `combined,reads,molecules` for all three |
 | `plot_dpi` | `150` | whole number | Resolution of saved plots |
-| `plot_per_sample` | `TRUE` | TRUE / FALSE | Write the per-sample plots (one figure per sample) in Modules 2, 4, 5 and 7 |
+| `plot_per_sample` | `TRUE` | TRUE / FALSE | Write the per-sample plots (one figure per sample) in Modules 2, 4, 5, 6 and 7 |
 | `threads` | `4` | whole number | CPU cores |
 | `resume` | `TRUE` | TRUE / FALSE | Reuse a module's results when the parameters that affect it are unchanged |
 | `free_memory` | `TRUE` | TRUE / FALSE | Drop large objects from memory once a module has finished with them (at present the imported read sequences, after Module 2 has aligned them). Changes no results; called remove_intermediate before v3.3.2 |
@@ -568,7 +627,7 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 
 ## Resume
 
-With `resume = TRUE` (default) a module is reused when its stored parameter hash matches. Each hash covers the parameters that affect that module and the hashes of the modules it depends on, plus the reference and settings files and the list of input files (names, sizes, dates), so changing `rpt_flank_pad` re-runs Modules 3 to 7 but changing a plot setting in Module 7 re-runs Module 7 only. Changes to Duke's own code are not detected: after updating Duke, delete `module_data/` (or use `--resume FALSE`) to re-run everything. If you run only some modules after changing a parameter that affects an earlier one (e.g. `--run_modules 6` after changing a tract setting), Duke stops and names the module to include, rather than building on out-of-date results.
+With `resume = TRUE` (default) a module is reused when its stored parameter hash matches. Each hash covers the parameters that affect that module and the hashes of the modules it depends on, plus the reference and settings files and the list of input files (names, sizes, dates), so changing `rpt_flank_pad` re-runs Modules 3 to 7 but changing a plot setting in Module 7 re-runs Module 7 only, and adding or editing the settings file re-runs Modules 6 and 7 only (Module 4 uses it to group one figure, which keeps the groups it had when Module 4 last ran). Changes to Duke's own code are not detected within one folder: after updating Duke, write to a new output folder (recommended; use `reuse_from` to take unchanged modules from the old one) or use `--resume FALSE`. If you run only some modules after changing a parameter that affects an earlier one (e.g. `--run_modules 6` after changing a tract setting), Duke stops and names the module to include, rather than building on out-of-date results.
 
 ### Reusing modules from an earlier run (`reuse_from`, `reuse_modules`)
 
@@ -589,17 +648,32 @@ Typical use: a new Duke version changes only the later modules (e.g. clustering 
 
 ---
 
-## HPC deployment
+## Running on Myriad
 
-| Cluster | Best for | Scheduler | Script |
-|---|---|---|---|
-| Myriad | up to ~500 samples | SGE (`-pe smp`) | `scripts/duke_myriad.sh` |
-| Old Kathleen | 1000+ samples | SGE (`-pe mpi`) | `scripts/duke_kathleen.sh` |
-| New Kathleen | 1000+ samples | Slurm | `scripts/duke_kathleen_slurm.sh` |
+Duke runs on one node, with `--threads` set to the cores the job asks for. Install it first ([Installation](#installation), *On Myriad*).
 
-Edit the paths in the script, then `qsub scripts/duke_myriad.sh` (or `sbatch` for Slurm). `--threads` is set from `$NSLOTS` / `$SLURM_NTASKS`. Each script lists the optional additions (tracts, UMIs, clustering, trimming) as comments.
+**1. Make a job script** for each run, from `scripts/duke_myriad.sh`, and keep it with your other job scripts. Edit:
 
-Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data read so far), `qdel <id>`, `qacct -j <id>` (SGE); `squeue -u $USER`, `scancel <id>`, `sacct -j <id>` (Slurm). Duke's progress goes to the scheduler's `logs/duke_<id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's warnings and messages go to the run log only. Loading R on a compute node can take a few minutes before the first Duke line appears, and on shared filesystems new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file.
+- `-N`: the job name, e.g. `duke-cagccg-337` (change it for each new version or run, so the queue and logs say which is which);
+- `-wd`: your Duke folder (`~/Scratch/bin/duke`), so the scheduler's logs go to its `logs/`;
+- `-M`: your email address, for the start, end and abort emails;
+- the resources: `-pe smp` (cores), `-l mem` (memory **per core** on Myriad) and `-l h_rt` (time). The template asks for 12 cores × 64 GB; a run of tens of samples needs far less (6 cores and `mem=32G`), and a run that only rebuilds reports from reused modules needs 1 core and 8 GB;
+- the `export PATH=...minimap2` line, if minimap2 is not in `~/Scratch/bin/minimap2`;
+- the paths after `./duke`: `--dir_data`, a new `--dir_out` for each run, `--path_ref`, `--path_settings`, and any other options (the script lists common ones as comments).
+
+**2. Submit and follow it.**
+
+```bash
+qsub /path/to/your_job_script.sh
+qstat -u $USER
+tail -f ~/Scratch/bin/duke/logs/duke_<job id>.out
+```
+
+Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's warnings and messages go to the run log only. Loading R on a compute node can take a few minutes before the first Duke line appears, and new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file. `qstat -j <id> | grep usage` shows CPU time and memory so far, `qdel <id>` stops a job and `qacct -j <id>` gives the resources a finished job used. A waiting job's resources can be changed with `qalter`, e.g. `qalter -pe smp 1 -l mem=8G <id>`.
+
+**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.7 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
+
+**Other clusters.** `scripts/duke_kathleen.sh` (SGE, `-pe mpi`) and `scripts/duke_kathleen_slurm.sh` (Slurm, `sbatch`; monitor with `squeue -u $USER`, `scancel <id>`, `sacct -j <id>`) ask for one whole node, as Duke cannot spread one run across nodes. A run that fits on Myriad is simplest there.
 
 **Run time.** On 2 cores, 14 PacBio samples of 2,500 reads run Modules 1 to 7 with clustering in about 3 minutes. On a full run (Myriad, 6 cores, 66 PacBio samples, 21 M reads, 2026 jasmine UMI run), Module 1 took 28 min, Module 2 35 min to 1 h 12 min (depending on what else shared the node) and Module 3 about 1 h, against about 1.5 h, 6.5 h and 7.5 h for the same data in v2.3.1. Run time grows roughly in proportion to the number of reads; trimming and clustering, when switched on, add to it. Module 1 holds the reads in memory: about 12.5 GB for 21 M reads.
 
@@ -607,9 +681,9 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 
 ## Common workflows
 
-**First look at new data** – run without a settings file; every module except 6 runs (4 only with `umi = TRUE`), and the Module 3 and 7 plots show where to put the ranges.
+**First look at new data** – run without a settings file; every module except 6 runs (4 only with `umi = TRUE`, 5 with `cluster = TRUE` or `waterfall = TRUE`), and the Module 3 and 7 plots show where to put the ranges (see [Quick start](#quick-start)).
 
-**Add or change the settings** – `./duke ... --path_settings new.xlsx --run_modules 6,7` (Modules 1–3 are reused).
+**Add or change the settings** – the same command with `--path_settings new.xlsx`; Modules 1–5 are reused and 6 and 7 re-run. `--run_modules 6,7` does the same without checking the earlier modules.
 
 **CAG and CCG in one run** – `--path_ref www/HTTset20_cag_ccg.fasta --path_tracts www/tracts_example.csv --composites "CAG_CCG_sum=CAG+CCG:sum,CAG_CCG_span=CAG+CCG:span"`; add `analysis_ranges_CCG` to the settings for CCG ranges on the CCG scale.
 
@@ -630,227 +704,10 @@ Monitoring: `qstat -u $USER`, `qstat -j <id> | grep usage` (CPU time and data re
 - **Module 6 skipped** – no settings file was given (`path_settings` unset).
 - **"None of the ... file names in the settings file match"** – `file_name` must be the input file name, with or without its extension; the message shows examples from both sides.
 - **"No analysis ranges could be read from the settings file"** – the matching rows have no `analysis_ranges`.
-- **Results did not change after updating Duke** – resume reused old modules; delete `module_data/`.
+- **Results did not change after updating Duke** – resume reused modules made by the old version; write to a new output folder, or use `--resume FALSE`.
+- **"Module N needs Module M results made with the current parameters"** – a parameter of an earlier module changed; add that module to `run_modules` (or run every module: resume reuses what is still current).
+- **"... must be ..." at the start** – a setting with fixed choices is misspelt; the message lists the choices.
 - **"umi_min_reads must exceed umi_top_cluster_k"** – with exactly k reads `top_cluster` returns their median; raise `umi_min_reads` or change the statistic.
-
----
-
-## Changes from v2.3.1
-
-**New**
-- Several tracts in one run (any number), on one shared reference or separate references, with the sequence between adjacent tracts reported per read, `sum` and `span` composite measures, per-tract metrics, and tract-against-tract plots and correlations.
-- Optional UMI module (Module 4): flank-based extraction with user-set flanks (default M13-F / ciosiF+1), directional clustering, `top_cluster` collapse; every Module 6 and 7 result for reads and for molecules.
-- Modal, median and mean length by every counting method (Module 3).
-- Read accounting from input to analysed reads (Module 2), carried onto every sample card.
-- Sample cards: one figure per sample with every measure; cohort heatmaps; timecourses by group for the headline metrics.
-- `--dry_run`; `./duke --help` grouped by module; logs per run with the resolved parameters and tracts.
-
-**Changed**
-- Counts are pure units with a 30 bp search pad beyond the flank boundaries: LOI alleles are no longer under-counted by 1. Expect +1 in most LOI reads and in about 1% of standard-allele reads (reads with a sequencing error that turns CAA into CAG).
-- `expansion_index` and `contraction_index` are now the sums of positive and negative changes divided by n, so they add up to II; the v2 quantities are now `mean_expansion_size` and `mean_contraction_size`. `prop_above_k` / `prop_below_k` added.
-- Manual control lengths are opt-in (`use_manual_controls`); in v2 they were applied whenever present.
-- Defaults: `trim`, `check_duplicate_readnames` and `cluster` now FALSE. `na_repeat_handling` is now `keep`: reads that span both flanks but have no tract count against the detection rate but get no length, instead of a length of 0 that fell into ranges starting at 0 or NA (`convert_to_zero` restores v2).
-- Resume refuses to run a module on upstream results made with other parameters (it names the module to add to `run_modules`), and adding or replacing input files re-runs Module 1.
-- Modules reorganised: 4 (allele calling) and 5 (waterfalls) are now Module 5 (allele structure); Module 6 is instability; all repeat-length figures are in Module 7.
-- Module 3 is vectorised (15 s against several minutes on the test set); Module 7 writes about one figure per sample instead of ~18,000 PNGs.
-- Resume uses parameter hashes per module, so a changed parameter re-runs exactly the modules it affects.
-
-**Fixed after the first v3 build**
-- Haplotype clustering compared the full ~2.5 kb flanks of every pair of reads by edit distance (as in v2), which takes hours per sample. It now uses variant k-mers: 14 PacBio samples in 1 min 20 s, and 20,000 reads in under 10 s. Tested with planted variants: haplotypes in 20–50% of reads are found with 98–100% accuracy, and on real data the haplotype split matches the CAG allele in 87–99% of reads.
-- BAMs are read with samtools instead of Rsamtools, so the "[samopen] no @SQ lines in the header" notice no longer appears for every PacBio BAM. The reads, qualities and PacBio tags are identical.
-- The reports no longer load MathJax, which removes pandoc's `--mathjax` warning.
-
-**v3.0.1**
-- Module 1 reads each BAM once: the PacBio tags (np, rq, ec, zm, bq) are kept from the same pass as the sequences instead of being read in a second pass over the whole file. Results are identical; the BAM reading step takes about a third less time.
-
-**v3.0.2**
-- UMI clustering (Module 4) assigned UMIs to their groups by name, which slows down with the square of the number of distinct UMIs: 63,000 UMIs took 100 s and a sample with 300,000 about 40 minutes. It now works by position: 315,000 UMIs in 24 s, with identical groups.
-
-**v3.0.3**
-- Module 3 compares the counting methods read by read: the share of reads where `match` or `pure` differs from `full` at each tract length (per sample and pooled), each count against `full` for every read, and where along the tract the breaks fall, with `method_by_length` added to `repeat_detection.xlsx`. See [Why `full` is the default](#how-repeats-are-counted).
-- UMI allele boundary (Module 4): where the two alleles are far apart, the gap between them is nearly empty and the old rule placed the boundary anywhere in it; in the 2026 jasmine run it fell between 20 and 106 CAG depending on the sample, and where it fell inside the lower tail of the expanded allele (about 10 of 66 samples) it split up to 7,900 UMI families per sample that belonged to one molecule. The boundary is now the first point above the shorter allele where the density reaches the floor of the dip (about 20 CAG for a 14/135 sample), found with a smoothing bandwidth of at least one unit so that the gaps between whole-number lengths are not mistaken for it. This changes the Module 4 molecules for those samples. The read-against-molecule plots show the boundary.
-- Module 4 report: a new section, *Families with reads on both alleles*, shows how many UMI families are mixed (per sample, as families and as reads), how large the minority side is, the lengths on each side of every mixed family, and where the minority reads fall, so you can see whether they come from template switching (minority reads at the other allele's peak) or from large slippage or deletion (spread between the alleles), and whether splitting (`umi_split_mixed`, on by default) suits the data. Per-sample counts are in `umi.xlsx` (`mixed_families`).
-- Module 4 report: UMI length as one labelled bar per length (share and read count, accepted and rejected); reads per molecule as one bar per count from 1 to 30, for molecules and for the reads they hold, with the median, commonest and middle 50% of kept molecules, plus molecules against depth per sample; UMI neighbours as the observed against the expected share per sample, with how the expected share is calculated; within-molecule read error against molecule length for every measure (tracts and combined measures) instead of a short/long split; the read-against-molecule distribution as one whole-run summary with one example sample (every sample is still saved).
-- Module 5: the clustering and consensus sections say "Not run" when `cluster = FALSE` instead of describing results that are absent; the waterfall y-axis marks distinct lengths instead of read quantiles (which repeated the dominant allele's length).
-- Module 7: heatmaps on a log colour scale from 0.01% with the top 0.1% of lengths cut, so minor alleles and expansion tails are visible; ridge plots add one panel per plotted range and stop at the 99.9th percentile; samples are labelled by the part of the file name that differs between them.
-- Each module clears its own `plots/` folder before writing, so plots from an earlier run cannot be mistaken for new ones.
-- A `path_settings` that does not exist stops the run at the start (before, Module 6 was skipped without an error), and a settings file whose names match none of the samples says so. `--dry_run` checks that every input path exists.
-- Reports: means are written beside each box (as percentages where the axis is a percentage) instead of over the points; read quality is shown as QV; the read-length histogram has a log count axis; the detection plot shows reads without a tract; the UMI length plot labels only bars with at least 0.1%; Module 1 plots mean rather than median read length against quality; the flank-boundary columns in `alignment.xlsx` are named `prop_left_short` and `prop_right_short`.
-
-**v3.0.4**
-- UMI molecules (Module 4) no longer use repeat length: each UMI family is one molecule. The per-sample allele boundary, the labelling of reads as short or long and the splitting of families with reads on both sides are removed, with `umi_split_mixed` and `umi_allele_min_sep` (both are ignored with a message if set). Splitting turned slipped or deleted copies of one molecule into a second, artificial molecule, and assumed one short and one long allele per sample, which fails for controls, multi-clone samples and multi-tract runs. See [Why repeat length is not used to form molecules](#umis).
-- Module 4 report: the *Families with reads on both alleles* section is replaced by the share of each sample's reads more than 10 units shorter or longer than their own molecule (`reads_far_from_molecule` in `umi.xlsx`), and a comparison of molecule length under four length rules (`length_rule_comparison`). New parameter `umi_top_cluster_min_share` (default 0, the previous behaviour): the `top_cluster` window must also hold this share of the molecule's reads, so a few stray long reads cannot set the length of a large molecule.
-- A molecule length halfway between two whole units (the median of an even number of reads) now goes to the unit more of the molecule's reads sit on (at random if level). Before, plots rounded halves to the even number, which gave molecule histograms a saw-tooth.
-- Module 4 report: reads per molecule shows 1–10 reads singly, then bands up to more than 500; the UMI neighbour plot's lines now join the points they belong to; the UMI length axis stops at 100%.
-- Module 3: break positions are placed at random within their unit, so short tracts no longer give a comb of spikes that looks like interruptions; the reads-without-a-tract plot gives enough decimal places for very small rates and states the count; the disagreement plot draws each length bin at its centre; the *Sequence between tracts* section failed with more than one tract and is fixed.
-- Module 6: timecourse titles give the range as written (`<=35`) rather than `NA-35`. Module 7: sample-card panels stop at the 99.9th percentile of the reads; molecule heatmaps say "molecules", not "reads", for the lengths not drawn.
-
-**v3.0.5**
-- `umi_top_cluster_min_share` is now 0.2 by default: the `top_cluster` window must hold at least 2 reads **and** 20% of the molecule's reads. In the 2026 jasmine run this changed 0.5% of molecules (3,502 of 675,633): 1,329 molecules with a median of 40 reads, most of them at 14 CAG, had been called at the expanded allele because of a few long reads (PCR chimeras) and are now called short; 572 molecules called above the expanded allele were brought down to it; and 837 molecules called at the expanded allele by 2–3 reads, whose other reads sat between the alleles, are now called between. Set it to 0 for the v3.0.4 behaviour.
-- `umi_collapse_stat` can be `top_cluster`, `max_supported` (the longest exact length held by `umi_top_cluster_k` reads), `mode`, `median` or `mean`. Whatever is chosen, Module 4 calculates every rule for every molecule and reports them side by side in *Choosing a molecule's length*: three tests of each rule made on the molecules' own reads with no assumption about alleles (agreement between random halves of a molecule's reads, dependence on read depth, and how many molecules move when stray reads from another molecule are added, as a PCR chimera would), and, at each molecule length, how many molecules each other rule would make shorter or longer (`length_rule_scorecard` and `length_rule_comparison` in `umi.xlsx`). The tests follow the scorecard of the July 2026 development script, without its allele labels.
-- Module 4 report: a new section, *Molecules holding much longer reads*, gives the share of molecules at each length that hold reads at least 20 units longer than the molecule itself (`molecules_with_long_reads` in `umi.xlsx`), as a check for early-cycle PCR deletions creating artificial short molecules. The within-molecule error distribution shows the full range on a log axis with the shares of reads shorter than, equal to and longer than their molecule. Reads per molecule gives each bar's share.
-- Module 3 report: the counting-method disagreement plot adds the curve expected from a single error chance per base, fitted to the data, and gives that chance; the flank-length plot splits reads into exact, 1, 2–5, 6–10, 11–50 and more than 50 bases off the commonest flank length.
-- Module 6 report: the metric definitions are a full-width table; *Group controls* explains how the setpoints are calculated (separately for reads and molecules, from the chosen control samples); *Length by counting method* is removed, as Module 3 covers it read by read (and the `count_methods` sheet with it); *Measures against each other* is renamed *Comparing tracts*, with a description.
-- Every Module 3 and 4 plot now opens with *How to read this* (what the axes are, in plain terms) and *What it shows*.
-
-**v3.0.6**
-- A worker process that is killed during a parallel step (usually for running out of memory) now stops the run with a message. Before, the samples that worker held were dropped from that module without any error.
-- Report text works for any data: no wording assumes two alleles, a normal and an expanded allele, or a particular length. Module 3's *Counts against each other* explains the **pure** wedge with a worked example, draws the half-way line on the **pure** panel, and adds a sentence calculated from the run; *Where the tract is broken* explains the dips at the tract ends from `rpt_start_perfect_repeats` / `rpt_end_perfect_repeats`; the modal-by-method note no longer points to the Module 6 section removed in v3.0.5.
-- Module 4: the second **top_cluster** rule in *Choosing a molecule's length* uses the run's `umi_top_cluster_min_share` (20% when that is 0) instead of a fixed 20%, and is marked "(used)" for any share.
-- Module 4 report: *Reads per molecule* uses a log axis with even bins and marks the median and mean of kept molecules (with the middle 50% and 80% in the subtitle); new per-sample box plots of molecules kept, median reads per kept molecule and share of reads used (`molecules_per_sample.png`). *Error distribution* now shows, for each distance *k*, the share of reads at least *k* units shorter or longer than their molecule, which reads more easily than the histogram. *How well each rule behaves* says for each test whether lower or closer to 0 is better, draws the rule used in orange, and marks the best rule in each test; its table names each column's direction and has a "used" column. *Where the rules differ* names the rule used as the reference (it has no line of its own), gives each rule a fixed, distinct colour, and its table marks the reference row.
-
-**v3.0.7**
-- HTT reference: `www/HTTset20_cagcaa.fasta` (N block over the CAG tract and the CAA CAG after it) is added and is now the recommended CAG reference; `www/HTTset20.fasta` is kept for comparison with earlier runs.
-- A `sum` composite of tracts whose motifs differ in length is now in bp, as `span` already was; before, units of different sizes were added.
-- Module 6 explains that a primary range selects reads but does not cut other measures, and that lengths are in each measure's own motif units.
-- New long-read filter for UMI molecules (`umi_long_read_filter`, on by default; `umi_long_read_units` = 20, `umi_long_read_share` = 0.2): a molecule where at least 20% of the reads are at least 20 units longer than the molecule is dropped, as it most likely came from a longer template whose reads were shortened in PCR. Judged from the molecule's own reads; no alleles involved. See [Why the long-read filter](#umis) for the jasmine evidence.
-- Module 4 report: *Molecules built from a longer template* replaces *Molecules holding much longer reads*: the share of molecules flagged at each length, by reads per molecule; the molecule length distribution with and without the filter, and with `umi_min_reads` raised to 6 and 11 for comparison; the share flagged per sample. *Reads per molecule* colours molecules kept, dropped for too few reads and dropped by the filter. `umi.xlsx` sheets `long_read_flag_by_length` and `long_read_flag_per_sample`; the molecule table carries each molecule's primary length, long reads, their share and the flags.
-- Module 5 fixes, found on a run with CAG and CCG tracts: the tract consensus is now built from reads at the cluster's modal length, and terminal gaps count in every consensus, so a consensus stops where most reads stop (before, it ran to the end of the longest sampled read, e.g. ~590 bp for a 136-unit allele). Flank variants are called with free end gaps on both sequences, so sequence between the primary tract and the reference flank (the rest of an N block that covers several tracts) is no longer forced onto the flank; on that run this removed ~2,350 false calls (~19 per cluster), leaving 20. Reads with no primary tract are left out of the clusters (they formed 1–2 read clusters) and counted in the text. *Clusters per sample* is a bar chart.
-
-**v3.0.8**
-- Module 4 report sections now follow the order of the analysis: *UMI extraction*, *UMI clustering and molecules*, *Molecule length* (how a molecule's length is chosen, the tests of each length rule and where the rules differ; moved up from the end), *Shortened-molecule filter*, *Molecules kept* (the per-sample table, reads per molecule and depth per sample, now after both steps that remove molecules), then *What collapsing removes*.
-- Module 3 report: *Flank length* moved up to straight after tract detection, where the optional flank filter acts, so that every later section shows the reads actually kept; the overview lists the steps in that order.
-- The long-read check is now called the **shortened-molecule filter** throughout the report, so it is not confused with long-read sequencing; parameter names (`umi_long_read_*`) and `umi.xlsx` sheet names are unchanged.
-- *Reads per molecule*: lines on log–log axes, one per group (too few reads, shortened molecule, kept), with heights per read count so they no longer jump where bins widen; kept molecules are visible in the molecule panel.
-- *Molecules and depth per sample*: panel and axis titles say what each point is (one sample) and what is measured in it; the right panel is the share of the sample's reads that ended in kept molecules.
-- *Testing the length rules* (was *How well each rule behaves*): the three tests are named for what they do (two halves of the reads, 3 reads against 20, stray reads added) and introduced with why they are consistency tests.
-- *Error by repeat length*: the y-axis is the read's length relative to its molecule, explained with a worked example in repeat units.
-- *Effect on the molecule length distribution*: log axis with lengths without molecules drawn at a floor, and the unfiltered line dashed and on top, so the region between peaks where the filter acts is visible.
-
-**v3.0.9**
-- Excel outputs open in every reader: a module that writes its workbook in two steps used to re-save it through `openxlsx::loadWorkbook`, which left links to drawing parts that were not in the file; Excel ignored them, but Python (openpyxl/pandas) refused to open the file. The workbook is now rebuilt from its sheets instead.
-- Module 7 sample cards: the y-axis says that the molecule line is scaled to the same total as the reads, so its height can exceed the read count.
-
-**v3.0.10**
-- Module 5 haplotype clustering: the left and right flanks are no longer joined into one sequence for k-mer counting, so no k-mer spans the junction. Junction k-mers combined the bases either side of the tract, so jitter where the tract ends changed ~15 k-mers in the same reads at once, which looks like a real variant; on the jasmine CAG + CCG run this split ~10% of the expanded allele into a second "haplotype" (H2) in 45 of 66 samples, with the same length distribution and a consensus that differed only in the bases next to the tract. On simulated reads the old code split off 9% of reads on boundary jitter alone and missed a real SNP carried by 30% of reads; the new code keeps one cluster for jitter and splits on the SNP. A real variant within ~7 bp of the tract is no longer used for haplotypes.
-- Module 5 report: the variants section says how much flank sequence the consensuses cover (on a UMI amplicon this is ~50 bp left and ~80 bp right of the tract, not the whole reference flank), and says plainly when no consensus differs from the reference, rather than introducing a table that is not there.
-
-**v3.3.5** – file names as sample identifiers, index contents bar
-
-- Run summary and headline metrics: `file_stem` is the first column, the sample's identifier; the short label used in figures follows it as `short_label` (it was `sample`). The headline metrics give each sample's own bounds for each range, which can differ between samples.
-- `00_index.html`: a contents bar that stays at the top of the window; the version, date and sample count on one line and the output folder on the next; *Sample by sample* names each sample by its file name, with group and time under it; *Range by range* lists every version of a range that the settings file sets differently for different samples, with how many samples have each.
-- Module 5: the allele BAM summary prints as text, not as code output.
-
-**v3.3.4** – plot subfolders, 00_index.html, consensus fix
-
-- Plot folders with many files are split into subfolders: by unit (`combined/`, `reads/`, `molecules/`), then by range (`all-lengths/`, `range01/`, …) for the group and per-sample range figures, or by measure or tract pair for the one-per-range figures (timecourses, tract comparison). For example `07_repeat_lengths/plots/sample_density/combined/range02/` and `06_instability/plots/timecourse/combined/CAG/`. File names are unchanged, so a copied file keeps its meaning. See [Plots](#plots).
-- The run index is `00_index.html`, so it sorts above the module reports (an `index.html` left by an earlier version is removed). In *Sample by sample*, the sample column (with its group and time) stays in view when the table is scrolled sideways. The reports table also links the allele FASTA and VCF.
-- Module 5 tract consensus: v3.3.3 combined reads column by column only when they all had the same length between the flanks, but reads at the modal CAG length can still differ by a few bases elsewhere (e.g. 438–444 bp at CAG 134), so they were aligned and the *N* columns remained (*(CAG)70 CANNG (CAG)63* in kxF07--kxR13 of the jasmine run). The consensus now takes, of the reads at the modal CAG length, those of the commonest total length; on that sample's reads it gives a clean (CAG)134 with no N.
-- Module 5 report: *Clusters in every sample* comes first, then the new heading *Allele shares in every sample*, then *One sample's clusters*.
-- Module 6: *Per-sample correlation* has the groups down the y-axis, so long group names no longer overlap.
-
-**v3.3.3** – allele BAMs that show in IGV, cluster figures on molecules, run summary fixes
-
-- Module 5 allele BAMs: on a short UMI amplicon (a few hundred bp, mostly repeat) minimap2 left every read unmapped, so the BAMs showed nothing in IGV. New `allele_bam_method` (default `auto`): reads with short flanks are placed from their flanks – each flank aligned locally to the reference beside the N block, the repeat region written as one insertion and the N block as a deletion – so every read is mapped across the repeat with its flank mismatches and indels shown; long reads still use minimap2. The report gives the locus to paste into IGV.
-- Module 5 figures: the per-sample cluster figures draw what was clustered – one length per molecule when clustering on molecules (they drew every read, so PCR-shortened reads smeared allele 2 down to zero) – with all the sample's lengths in grey behind each cluster, so the split can be checked. *Clusters per sample* (one bar saying how many samples had two clusters) is replaced by `allele_shares`: each sample's reads, and molecules, split between allele 1, allele 2 and extra clusters, with the cluster counts in the subtitle. In *Clusters in every sample* the point size is the molecule share when clustering on molecules.
-- Module 5 consensus: only `alleles.fasta` is written by default; the separate left, repeat and right parts are written with the new `consensus_parts = TRUE`.
-- Module 5 with UMIs: each allele's modal lengths (every tract and combined measure) are taken over its molecules, as the cluster table's are, instead of over its reads; the allele table also gives each allele's molecules and molecule share. The tract consensus is made from reads at the allele's modal molecule length.
-- Module 5 tract consensus: reads of one length are now combined column by column instead of being aligned first. Aligning hundreds of bases of pure CAG could shift some reads by a unit and leave columns with no majority, so an expanded allele came out as, for example, *(CAG)70 CANNG (CAG)63*.
-- Module 5 waterfalls with UMIs: one read per kept molecule, so each allele takes up its share of molecules; before, a 90:10 read split made the expanded allele a thin strip at the top.
-- Run summary: the column called `share_of_reads_in_kept_molecules` held a count of reads; it is now `reads_in_kept_molecules`, with the share in `share_of_umi_reads_in_kept_molecules` (of the reads with a UMI) and `reads_with_umi` beside it. Allele shares are given for reads (`allele1_read_share`) and molecules (`allele1_molecule_share`).
-- Module 6: *Count per range* labels each range with its bounds, as the other range figures do, and the report says when two analysis ranges in the settings file are identical (their results are then the same).
-- Group names in facet strips are no longer wrapped after a full stop, which split numbers such as `0.01uM`.
-- Module 4: the *Molecules kept* text names the `shortened_flag` column correctly.
-- Module 7 per-sample density figures (`sample_density`): the molecules' modal length is marked too (teal, labelled on the left; the reads' stays red, on the right), and the title uses the short sample label so it fits. The *Every range* figures (`sample_ranges`) carry the sample's read accounting, as the sample cards do, and both say in a caption what the red, purple and orange dashed lines are.
-
-**v3.3.2** – allele clustering fixed on expanded alleles, clustering on molecules, a run index and summary, every range saved
-
-- Module 5 clustering: in v3.3.1 every broad mixture component (spread more than a fifth of its length) was left out of the assignment as the PCR smear. The mixture often fits an expanded allele as one broad component (most of all for reads, whose expanded allele is spread by shortened copies), so in 8 of 14 samples of the jasmine UMI run every read went to the normal allele and the sample came out as one cluster from CAG 14 to about 120. A broad component is now left out only when it lies between a narrower peak below it and another component above it (the smear between two alleles); the top component is always kept, as it is the expanded allele. All 14 jasmine samples now give a CAG 14 allele and an expanded allele (CAG 128–139), on reads and on molecules, and the PacBio and simulated test sets give the same alleles as before with tighter boundaries (two alleles a few units apart, such as 14 and 20 beside an expansion, are now also separated).
-- Module 5 clusters on molecules when there are UMIs (new `cluster_unit`, default `auto`): each kept molecule's primary length (its consensus over its reads, from Module 4) is clustered once, and every read takes its molecule's cluster, so PCR copies count once and PCR-shortened reads do not pull the clusters about. Reads not in a kept molecule are left out of the clusters, consensus and waterfalls (the report gives the count). `cluster_unit = reads` clusters each read's own length, as before. The cluster table has a `molecules` column.
-- Run summary: `run_summary.xlsx` at the top of the output folder (and `run_summary_samples.tsv`, `run_summary_headline_metrics.tsv`) brings every module together, one row per sample: group, time and control status, reads at each step (imported, after QC, aligned, with each tract), read length and quality, UMI molecules found and kept, the two alleles' lengths, shares and repeat notation, and the number of extra clusters; a second sheet has the headline metrics for the primary measure for every range and unit, and two more describe the columns and where every output is. It is rebuilt at the end of every run, so it is current even when modules were resumed.
-- Module 6 saves the tract comparison for every range, not only `plot_ranges` (which are still the ones shown in the report), and the folder is tidier: `plots/pairs/{A}_vs_{B}/trend_{range}.png`, `correlation_{range}.png`, and `by_sample/{reads,molecules}/{sample}.png`, one figure per sample with one panel per range (instead of one file per sample and range). `instability_metrics.tsv` and `distribution_summary.tsv` are also written as plain text for R, Python or Prism.
-- `index.html` at the top of the output folder, written at the end of every run: links every report and table, then every figure arranged by what it shows – a table with one row per sample and a column for each kind of per-sample figure, one row per range (Module 6 timecourses and tract comparison, Module 7 group figures), one row per group, and thumbnails of the whole-run figures by module. Figures are found by file name, so the page works when copied with the folder (it needs the PNGs, not the BAMs).
-- Module 7: new *Every range, sample by sample* figures, `plots/sample_ranges/sample_ranges_{sample}_{measure}_{unit}.png`: the sample's primary length for all lengths and in every analysis range, one panel each, with the range's count, modal, median and mean from Module 6. The sample cards still show every measure for the ranges drawn in the report.
-- Module 7 saves the by-group density and histogram figures for every range by default (`plot_every_range = TRUE`).
-- Reads and molecules are named the same way in every figure, reads first: *Reads* (grey) and *Molecules (UMI-collapsed)* (teal) in the Module 6 legends and axes, both named in the Module 7 density legend (it used to show only the molecule line), and in Module 5 the cluster figures say whether clusters were made on reads or on molecules and give each cluster's share of molecules when they were.
-- Module 1: *Pass count against read length* is a tile plot of every read (coloured by the number of reads, log scale) with the median pass count at each length, instead of a scatter of up to 50,000 points that showed as a solid black block; its counts are in `pacbio_np_by_length.tsv`. `pacbio_scatter_downsample` is no longer used.
-- Module 3: the *What a break does to each count* plot is removed; it showed what the two plots before it show (how often and by how much the counting methods differ) in a harder form. Its summary sentence is kept.
-- File names: spaces and characters that cannot be in a file name are replaced together by one `-`, so a group called `QS5 MLH1ko / primer 0.01uM` gives `QS5-MLH1ko-primer-0.01uM`, not `QS5-MLH1ko----primer-0.01uM`. Dashes already in a name (such as `bc1002--bc1050`) are kept.
-- Plot files are named `{plot type}_{sample, group or measure}_{measure}_{range}_{unit}.png`, in a folder named after the plot type (see [Plots](#plots)); before, many were just `{sample}.png` in a folder whose name gave the type, so a copied file lost its meaning. Folders renamed to match: `alignment_by_sample/` is `alignment/`, `pairs/` is `pair_trend/`, `pair_correlation/` and `pair_scatter/`, the Module 7 range folders are `group_density/` and `group_histogram/`, `sample_cards/` is `sample_card/`.
-- Module 5 fix: when every sample had exactly two alleles (no extra clusters), the step that explains extra clusters returned a malformed table and Module 5 stopped (*non-existing column(s): cols[2]='allele'*). Earlier runs always had some sample with an extra cluster, which hid it; the corrected clustering exposed it on the jasmine run.
-- The plot-selection check no longer mistakes a package's `params` function for Duke's settings (it caused a harmless *is.na() applied to ... 'closure'* warning in the log).
-- New `reuse_from` and `reuse_modules` parameters: take chosen modules' results from an earlier run's output folder instead of re-running them, when their settings match (see [Reusing modules from an earlier run](#reusing-modules-from-an-earlier-run-reuse_from-reuse_modules)). Each module's saved hash now also records the Duke version that made it.
-- `remove_intermediate` is renamed `free_memory`, which says what it does: it drops large objects from memory once a module has finished with them, and changes no results. The old name still works, with a message, in job scripts and on the command line; the command line used to stop on any renamed option (including the old `umi_long_read_*` names), and now accepts them.
-- New `plots` parameter: choose which plot types are saved (`all` by default, a list, or `all,-type`). New `plot_units` parameter: reads and molecules combined in one figure (default), and/or reads only and molecules only, for every plot that can show both (Module 6 counts per range, control setpoints, timecourses, instability by range, tract comparison; Module 7 heatmaps, group densities and histograms, sample ranges, sample cards). Every figure title says which it shows.
-
-**v3.3.1** – manual controls by default, cleaner clusters, faster Module 4
-- Manual controls: `use_manual_controls` is gone. A `manual_control_repeat_length` in the settings file now always replaces the group control for that sample and range; a blank cell uses the group control. The Module 6 report lists every manual control used, so an unintended one is easy to spot. Old scripts that still set `use_manual_controls` run with a message.
-- Module 5 clustering: reads are assigned to clusters by the Gaussian mixture itself rather than by k-means on its number of clusters, so two alleles a few units apart (e.g. CAG 14 and 20 in one sample) are no longer merged, while a 17/18 heterozygote stays two alleles. Thin components (under `repeat_cluster_min_prop`) and broad ones (spread more than a fifth of their length: the smear of PCR-shortened reads between alleles) are left out of the assignment, so their reads join the allele that explains them best instead of forming a cluster of their own. Reads between the alleles now mostly join the longer allele, from which they were shortened.
-- Module 5, extra clusters explained: the other tracts (e.g. CCG) are compared too. An extra cluster whose other tract length matches neither allele is reported as likely from another sample; where alleles 1 and 2 differ in another tract, that tract says which allele an extra cluster came from even when no flank variant does. Where the other tract and the flanks point to different alleles, the extra cluster is reported as likely from another sample. The paragraph describing the alleles (and how variant read support is counted) is now printed in full; it used to show its R code. Labels say *Allele 1 (shorter CAG)* / *Allele 2 (longer CAG)* with the primary tract named.
-- Module 4: the long-read filter parameters are renamed `umi_shortened_filter`, `umi_shortened_min_units` and `umi_shortened_min_share` (the old names still work, with a message), so the filter is not read as removing expanded alleles; its plots and Excel sheets are renamed to match. A new line plot shows the share of molecules flagged as shortened at each length in four depth bands, with the run's common lengths marked, and a sentence gives the figures for the run. The length-rule tests now split only the molecules they test (most of their run time in large runs), and every module saves its data with fast compression. The within-molecule error panels cover the lengths of 99.8% of molecules, so a short tract such as CCG is readable.
-- Module 1: the pass-count plot has no fitted line. Module 3: the reads-without-a-tract subtitle gives one count per tract; a read's flank length is judged against the nearest of the sample's usual flank lengths (every length carried by 20% of its reads), so an allele with a flank indel is not reported as off.
-- Module 6: a range with no reads in any sample no longer stops the timecourse plots (it is skipped). *Instability index by range* has one row per group; the time axis label is the new `time_label` parameter (default *Time (days)*). Group names are shown without trailing dashes in Modules 4, 6 and 7, and the long group names in the timecourse, tract-comparison and correlation plots are wrapped rather than cut off. In the tract comparison, a sample's line is drawn only where a bin holds at least 5 reads or molecules, so single molecules no longer give spikes.
-- Plots: saved plots and report figures use the `ragg` PNG device when it is installed, otherwise the cairo PNG device. On Myriad, drawing the Module 6 timecourse plots took about 80 seconds per figure with the default device. Installing `ragg` (`install.packages("ragg")`) is recommended.
-- Module 3 flank check: the combined flank length now excludes every repeat tract on the reference (e.g. CCG), not only the primary tract, and a sample's usual flank lengths are those carried by at least 5% of its reads (up to four), so an expanded allele with its own structure is not reported as off. The sequence-between-tracts explanation now comes before its plot.
-- Module 4: in the within-molecule error plot, a short tract such as CCG is drawn as one bar per length instead of a ribbon.
-- Group names in facet strips (heatmaps, control setpoints) wrap at 24 characters instead of 14.
-- File names: `#` and `%` in sample or group names are replaced in file names, and image links in Module 7 are percent-encoded, so every figure appears in the report.
-
-**v3.3.0** – clearer reports, and where each extra allele comes from
-- Module 5, extra clusters explained: each allele from 3 upwards gets an `origin` in the allele table and under its allele figure, saying whose length it has (allele 1's, allele 2's or its own) and whose flanks, read at the variants that tell alleles 1 and 2 apart. An extra cluster with one allele's length and the other's flanks is marked as a likely PCR chimera; flanks that match each allele at different variants are marked as a third haplotype (another line or a contaminating sample). Read support is now measured in every allele, not only alleles 1 and 2.
-- Module 5 figures: per-sample cluster plots draw one row per cluster on a shared length axis (clusters of the same length no longer hide behind each other), labelled with the allele number and, where reads were split by haplotype, the haplotype – which the text explains is numbered within each length cluster. Allele figures label each row with every tract's length (e.g. CAG 14, CCG 9) and say which allele is shorter. The variant map labels each sample with its alleles' lengths and its panels as the shorter and the longer allele; the `variants` and `variant_support` sheets carry each allele's modal lengths.
-- Module 5: a section on viewing the BAMs and VCF in IGV (the reference with the N block, grouping reads by `HP`) and what the allele FASTA is for. Cluster and consensus caches renamed, so a resumed run never reuses clusters made by an earlier version.
-- Module 3: the flank-length check is one stacked bar per sample; strand plots show the forward-strand share (Module 2 too); the counting methods are defined with a worked example; the gap plot shows how many units full counts beyond match or pure; the full-against-pure scatter is replaced by the share of full that match and pure keep, coloured by the number of breaks in the tract; every sequence between tracts, including those pooled as other, is in a report table and the `between_tracts_cohort` sheet.
-- Module 4: *Reads per molecule* shows molecules and the reads they hold by depth group as bars, with dropped groups shaded; status labels say why molecules were dropped; axes and text say *repeat length* wherever a read's or molecule's tract length is meant.
-- Module 6: timecourses also show the contraction index and the share 5+ units below the setpoint by default, with larger text.
-- Module 7: in the density figures each read's dot sits inside its sample's ridge; the report shows example sample cards for the primary measure only, large enough to read, and the saved cards (every measure) are larger.
-
-**v3.2.3**
-- Module 4 *Reads per molecule*: the reads line and the share of reads in dropped molecules were wrong. Molecules were grouped by their read count and the reads summed within each group, which counted one molecule's reads per group; on the jasmine run this gave 0.0% of reads in molecules with fewer than 3 reads, against the correct 16% shown in the bar beside it.
-- Figures that are drawn tall (Module 4 filter effect by group; Module 7 group densities and histograms and the sample cards) are shown in the report from the saved files, at their full height: a figure size changed inside a report chunk is ignored, so they were squeezed into 5 inches. The Module 4 filter-effect figure is sized by the groups that have samples in the run, not every group in the settings file.
-- Sample cards and per-sample distributions: each row's modal, median and mean are written in its header, so they no longer overlap in short panels.
-- Axes from 0 for the PacBio pass count and read quality (Module 1) and the flank-alignment shortfall (Module 2), so small differences are not magnified; shorter Module 5 variant-map subtitle and two-line Module 4 subtitles, so none is cut off.
-
-**v3.2.2**
-- Module 5 read support for insertions and deletions in repetitive sequence: the read context around each variant is widened (from 8 up to 60 bases each side) until the reference and alternative contexts no longer contain each other, and a read matching both is not counted. Before, a short reference context sat inside the alternative one for a duplicated stretch, so every read counted as reference as well, and a real variant showed ~50% support in both alleles and was marked `LowSupport`. On the RUES2/QS5 MSN run this was a 20 bp duplication at 2068 (`CCGCCTCCGCCGGCGCGGCC`) on the QS5 expanded allele, which now shows 97–100% support in that allele and 2–7% in the other.
-- Module 5 length clusters: neighbouring clusters that are one allele are merged after the Gaussian mixture – a stutter shoulder within max(2, 10% of the length) units holding under half the peak height (e.g. a 6% cluster at 21 next to an allele at 20, which became a spurious allele 2), or two halves of one broad expanded peak with no dip between them (e.g. an expanded allele cut into clusters at 126 and 127). Heterozygotes one or two units apart with similar read counts stay separate.
-- Module 5 variant map: samples are rows and variants columns, so sample names read across; a long insertion or deletion is labelled by its first bases and length.
-- Shorter sample labels in plots: parts of the file name that every sample shares (e.g. `hifi_reads`, `demux`) are dropped as well as a shared start, so `m84277_251024_160109_s2.hifi_reads.bc2001.demux.bc1002--bc1050` shows as `251024_160109_s2.bc2001.bc1002--bc1050`.
-- Module 6: new `range_min_n` (default 50). A sample with fewer reads (or molecules) than this in a range gets no statistics or metrics for that range (`too_few` = TRUE, count kept in `n_used`), and a control sample below it is left out of that range's group setpoint. Before, a few stray reads gave full results: on the RUES2/QS5 run, samples with no expanded allele had 1–27 reads at ≥36 CAG (barcode cross-talk and PCR smear), which gave a control setpoint of 39 from a single read and instability indices of 45–88. The counts plot marks the threshold.
-- Report clarity: mapping quality and base quality are drawn on their full scales (0–60, and from 0), so differences in the second decimal place no longer look large; the read-accounting labels sit beside the boxes; per-sample lines in Module 3 break where a sample has no data instead of jumping across the gap (gap rows lost their position); sample-card modal, median and mean are listed in the panel corner instead of on top of each other; Module 7 shows the density for every range drawn; text about molecules only appears in UMI runs; the Module 3 between-tract text is no longer specific to HTT; Module 5 reports flank coverage in reference bases; cluster counts have whole-number axes.
-
-**v3.2.1**
-- Module 5 runs with clustering off again: the variant map's figure height was worked out from the read-support table even when the chunk was skipped, so a run with `cluster = FALSE` stopped with `object 'support_all' not found`.
-- Module 5 with clustering off no longer shows the allele headings (*Alleles in every sample*, *Variants across the cohort*, *One sample's alleles*) or the note on how alleles are numbered, which were empty.
-
-**v3.2.0** – phased alleles in standard formats, with a review view
-- Module 5 describes each sample by its **alleles**: the two clusters with most reads are alleles 1 and 2, numbered by length (1 = shorter), so the same number means the same kind of allele in every sample; further clusters are 3 upwards. For each allele: the modal length of every measure, and the region between the reference flanks in repeat notation from its consensus, e.g. `(CAG)17 CAACAGCCGCCA (CCG)7 CCTCCT`.
-- **Phased variants with read support.** Each allele's flank consensus is compared with the reference, so every variant belongs to allele 1 or 2. Each variant is counted in the reads of both alleles of its sample (up to `allele_support_reads` per allele): the share of reads carrying it, from reads that contain the variant or the reference base with 8 bases of consensus either side. Substitutions carried by at least `allele_minor_share` (20%) of an allele's reads but not in its consensus are also reported. A consensus variant fewer than half of whose reads carry it is marked not confirmed (FILTER `LowSupport` in the VCF): it usually comes from a consensus misaligned around an indel or in a repeat.
-- **Review view in the report**: a table of every allele in every sample (lengths, repeat notation, variants), a map of every variant's read support in alleles 1 and 2 of every sample, and one figure per sample showing its alleles, their repeat notation and their flank variants on reference coordinates (`plots/alleles/`).
-- **Standard files** replace the per-cluster VCF and FASTA:
-  - `variants/alleles.vcf` – one column per sample, phased (GT allele 1 | allele 2, PS). The region between the reference flanks is one record (REF is the reference N block; ALT the allele sequences in the cohort) with MC (motif count of each tract per haplotype), AL (length) and HDP (reads); flank variants carry HDP and HAF (read support per haplotype). Also bgzipped and tabix-indexed where `bgzip` and `tabix` are installed.
-  - `consensus/alleles.fasta` – one full-length sequence per allele, with sample, allele, reads and repeat notation in the header (with `consensus_parts = TRUE`, the left, tract and right parts in their own files too).
-  - `bam/{sample}.bam` – up to `allele_bam_reads` reads per allele aligned to the whole reference with minimap2, tagged `HP` (allele), `XR` (primary repeat length) and, with UMIs, `MI` (molecule). In IGV, group or colour the reads by tag HP.
-- `allele_structure.xlsx` has the sheets `alleles`, `variants`, `variant_support` (every variant in both alleles) and `variants_cohort`.
-
-**v3.1.0**
-- Reports from runs that share one Duke folder no longer interfere: each run renders in its own working folder (`temp/render_<module>`) instead of next to the Rmd in the repo. Before, two runs rendering the same module at the same time wrote their figures to the same place, and one could delete the other's (seen as a stray `07_repeat_lengths_files/` folder beside a report).
-- Module 2: *Where the flank alignments end* explains in plain terms what a flank alignment that stops short of the repeat means and when it matters. New *Strand* section: the share of reads on the reverse strand at each alignment step (each flank alone, both flanks, kept), so an imbalance can be traced to the reads themselves or to a step; saved in `alignment.xlsx`. *Mapping quality* is its own section.
-- Module 3: new *Strand and tract length* section: reverse-strand share by tract length, and each strand's length distribution, to show whether the strand a read came from affects the length measured. New *How far apart the counts are*: in reads where match or pure differs from full, by how many units (median and 90th percentile by tract length; table `method_gap_pooled`).
-- Module 4:
-  - *Flagged molecules by length and depth* is two grids (length across, reads per molecule up): molecules per cell, and the share flagged per cell.
-  - *Effect on the molecule length distribution* is drawn per settings-file group, so runs whose groups carry different alleles stay readable.
-  - *Reads per molecule* shows the cumulative share of molecules and of reads by depth, with the `umi_min_reads` cut marked, and a bar of what happened to molecules and reads.
-  - *Reads and molecules kept, per sample* plots reads against molecules with reference lines for a fixed number of reads per molecule, coloured by median depth.
-  - The per-sample read and molecule distributions draw reads and molecules in separate rows with their own axes, as bars with a smoothed line, so the molecules are no longer a jagged line on the reads' scale.
-  - *Error by repeat length* has a key for its bands.
-- Module 5:
-  - Clusters are plotted: *Clusters in every sample* (each cluster's modal length and spread, one row per sample, coloured by length order) and each sample's reads stacked by cluster (`plots/clusters/`).
-  - Waterfall y-axis labels are spread evenly up the plot, so large alleles carry several.
-  - With no variants, `variants/all_samples.vcf` is still written with its header.
-- Module 6:
-  - Columns renamed so they say what they are: `share_at_setpoint`, `share_above_setpoint`, `share_below_setpoint` (were `prop_at`, `prop_above`, `prop_below`); `share_5plus_above_setpoint` and similar (were `prop_above_5`); `n_at_setpoint` etc. (were `reads_at`); `mean_change_above_setpoint`, `mean_change_below_setpoint` (were `mean_expansion_size`, `mean_contraction_size`); `modal_minus_setpoint` etc. (were `modal_diff`); `setpoint_length` (was `setpoint_repeat_length`); `share_below_modal`, `share_above_modal`. `headline_metrics` written with the old names still work.
-  - `instability.xlsx` has a `definitions` sheet: every column, what it means and its units.
-  - New plots: *Control samples and group setpoints* (each control sample's value and the group setpoint, to see whether the controls agree) and *Instability index across ranges* (every sample's index in every range, by group, to see how much the result depends on the range).
-- Module 7:
-  - Density (ridge) and histogram figures for every group: `plots/all_lengths/by_group/` and one folder per range drawn (`plot_ranges`; every range with `plot_every_range = TRUE`). The density figure draws every read as a dot below its sample's ridge (up to `plot_dots_max` = 2,000 per sample), the molecule density as a teal line, and the modal length; the histogram has one row per sample with reads and molecules in separate panels on their own scales.
-  - Optional per-sample density and histogram figures for all lengths and each range (`plot_sample_ranges = TRUE`, off by default as they are many on a large run), in `by_sample/`.
-  - Sample cards draw reads and molecules in separate rows on their own scales, with bars and a smoothed line, and each row's own modal, median and mean, so it is clear which statistics are from reads and which from molecules.
-  - Much faster: each sample's data is split once instead of being searched for in the whole run for every figure, and the per-sample figures are drawn in parallel.
-  - The ridge plots of earlier versions are replaced by the density figures; `ggridges` is no longer needed.
-
-**Removed**
-- Per-sample × per-range histogram, scatter and density PNGs (replaced by the sample cards and heatmaps; per-sample density and histogram figures return in v3.1.0 with `plot_sample_ranges`). Parameters for them are ignored with a message.
 
 ---
 
