@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.7** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+**v3.3.8** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 **New to Duke?** Read [What Duke does](#what-duke-does), then follow [Installation](#installation) and [Quick start](#quick-start). The rest of this page is reference: look things up as you need them.
 
@@ -129,7 +129,7 @@ You need a folder of reads (one BAM, FASTQ or FASTA file per sample) and a refer
 **1. A first look, without a settings file.** Write each run to a new folder, named with the Duke version, so earlier results are kept.
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.7 --path_ref www/HTTset20_cagcaa.fasta --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.8 --path_ref www/HTTset20_cagcaa.fasta --threads 8
 ```
 
 Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus sequences and variants. Without a settings file every module runs except Module 6. Open `00_index.html` in the output folder: Modules 1 and 2 show whether the reads and alignment are good, and the Module 3 and Module 7 length plots show where each sample's alleles are, so where to put the ranges.
@@ -139,7 +139,7 @@ Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus se
 **3. Run again with the settings file**, into the same folder:
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.7 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.8 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
 ```
 
 [Resume](#resume) keeps Modules 1–5, as nothing that affects them changed, and runs Modules 6 and 7. Edit the settings and run again as often as needed.
@@ -599,7 +599,8 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 | `repeat_histogram_binwidth` | `1` | whole number | Histogram bin width in repeat units |
 | `plot_every_range` | `TRUE` | TRUE / FALSE | Save the by-group distribution figures for every analysis range of the primary measure (FALSE: only plot_ranges, the ones shown in the report) |
 | `plot_sample_ranges` | `FALSE` | TRUE / FALSE | Also draw a density and a histogram figure for every sample, for all lengths and for each range drawn (many figures on a large run) |
-| `plot_dots_max` | `2000` | whole number | Reads drawn as dots per sample in the density (ridge) figures |
+| `plot_dots_max` | `2000` | whole number | Reads (or molecules) drawn as dots per sample in the density (ridge) figures |
+| `plot_dots_unit` | `molecules` | text | In density figures that show reads and molecules together (plot_units = combined): whether the dots are the `molecules` (default) or the `reads`. Figures of reads alone or molecules alone always use their own unit |
 
 <!-- params:Repeat lengths:end -->
 
@@ -671,7 +672,7 @@ tail -f ~/Scratch/bin/duke/logs/duke_<job id>.out
 
 Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's warnings and messages go to the run log only. Loading R on a compute node can take a few minutes before the first Duke line appears, and new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file. `qstat -j <id> | grep usage` shows CPU time and memory so far, `qdel <id>` stops a job and `qacct -j <id>` gives the resources a finished job used. A waiting job's resources can be changed with `qalter`, e.g. `qalter -pe smp 1 -l mem=8G <id>`.
 
-**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.7 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
+**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.8 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
 
 **Other clusters.** `scripts/duke_kathleen.sh` (SGE, `-pe mpi`) and `scripts/duke_kathleen_slurm.sh` (Slurm, `sbatch`; monitor with `squeue -u $USER`, `scancel <id>`, `sacct -j <id>`) ask for one whole node, as Duke cannot spread one run across nodes. A run that fits on Myriad is simplest there.
 

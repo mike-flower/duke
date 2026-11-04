@@ -143,7 +143,8 @@ duke_param_spec <- function() {
        "Save the by-group distribution figures for every analysis range of the primary measure (FALSE: only plot_ranges, the ones shown in the report)"),
     .p("plot_sample_ranges", FALSE, "lgl", "Repeat lengths",
        "Also draw a density and a histogram figure for every sample, for all lengths and for each range drawn (many figures on a large run)"),
-    .p("plot_dots_max", 2000L, "int", "Repeat lengths", "Reads drawn as dots per sample in the density (ridge) figures"),
+    .p("plot_dots_max", 2000L, "int", "Repeat lengths", "Reads (or molecules) drawn as dots per sample in the density (ridge) figures"),
+    .p("plot_dots_unit", "molecules", "chr", "Repeat lengths", "In density figures that show reads and molecules together (plot_units = combined): whether the dots are the 'molecules' (default) or the 'reads'. Figures of reads alone or molecules alone always use their own unit"),
 
     # --- Output and runtime ---------------------------------------------------------------
     .p("reuse_from", NA_character_, "chr", "Runtime", "An earlier run's output folder to take module results from, so those modules are not re-run. A module is reused only when its results were made with the same settings as this run (its own and every upstream module's); it keeps that run's report and figures"),
@@ -255,6 +256,7 @@ resolve_params <- function(user = list()) {
   one_of("cluster_by", c("repeat", "haplotype"))
   one_of("control_sample_selection", c("flagged", "earliest", "all"))
   one_of("headline_setpoint_type", c("control_relative", "sample_relative"))
+  one_of("plot_dots_unit", c("molecules", "reads"))
   # Clustering on molecules works on molecule lengths, so the length clusters must come first
   if (isTRUE(p$cluster) && identical(p$cluster_by[1], "haplotype") && "repeat" %in% p$cluster_by &&
       (identical(p$cluster_unit, "molecules") || (identical(p$cluster_unit, "auto") && isTRUE(p$umi))))

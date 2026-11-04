@@ -548,9 +548,18 @@ wf_unit <- if (exists("cluster_unit") && cluster_unit == "molecules" && "molecul
 for (s in samples) {
   d <- d_all[file_stem == s]
   if (!nrow(d)) next   # no reads left for this sample (e.g. no kept UMI molecule)
-  # With molecules: one read each, placed at its molecule's length (what was clustered),
-  # not its own, possibly PCR-shortened, length
-  if (wf_unit == "molecules") { set.seed(123); d <- d[d[, .I[sample.int(.N, 1)], by = molecule_id]$V1]; if ("mol_length" %in% names(d)) d[, length := mol_length] }
+  # With molecules: one read per molecule, ordered by the molecule's length (what was
+  # clustered). The read drawn is the one whose own length is closest to its molecule's (at
+  # random among equals), so each row's sequence matches its place in the order; a random read
+  # could be a PCR-shortened copy, which left rows out of step with their neighbours
+  if (wf_unit == "molecules") {
+    set.seed(123)
+    if ("mol_length" %in% names(d)) {
+      d[, .r := stats::runif(.N)]
+      d <- d[d[order(abs(length - mol_length), .r), .I[1], by = molecule_id]$V1][, .r := NULL]
+      d[, length := mol_length]
+    } else d <- d[d[, .I[sample.int(.N, 1)], by = molecule_id]$V1]
+  }
   d <- as.data.frame(d)
   p <- create_waterfall_plot(d, paste("Waterfall:", s), params$waterfall_flank_bp, params$waterfall_downsample,
                              paste(primary, if (wf_unit == "molecules") "length (molecule)" else "length"), unit_word = if (wf_unit == "molecules") "molecules (one read each)" else "reads")

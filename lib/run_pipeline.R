@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.7"
+duke_version <- "3.3.8"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -36,7 +36,7 @@ duke_version <- "3.3.7"
   `6` = c("settings_signature", "range_peak_span", "range_min_n", "group_control", "control_sample_selection",
           "control_setpoint_metric", "control_aggregation_method", "expansion_thresholds", "cohort_plot_by", "time_label",
           "headline_metrics", "headline_setpoint_type", "plot_ranges", "measure_pairs", "pair_max_points"),
-  `7` = c("sample_cards", "repeat_histogram_binwidth", "settings_signature", "plot_every_range", "plot_sample_ranges", "plot_dots_max"))
+  `7` = c("sample_cards", "repeat_histogram_binwidth", "settings_signature", "plot_every_range", "plot_sample_ranges", "plot_dots_max", "plot_dots_unit"))
 .module_upstream <- list(`1` = character(0), `2` = "1", `3` = "2", `4` = "3", `5` = c("3", "4"),
                          `6` = c("3", "4"), `7` = c("3", "4", "6"))
 

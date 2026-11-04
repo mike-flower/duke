@@ -745,7 +745,8 @@ waterfall_breaks <- function(len, n_target = 30) {
   for (step in c(10, 5, 1)) {
     for (v in cand[cand %% step == 0]) {
       r <- row_of(v); if (is.na(r)) next
-      if (all(abs(chosen - r) >= gap)) chosen <- c(chosen, r)
+      # (and never two labels with the same length, e.g. when few long reads sit above the last step)
+      if (all(abs(chosen - r) >= gap) && !round(len[r]) %in% round(len[chosen])) chosen <- c(chosen, r)
     }
   }
   sort(unique(chosen))

@@ -2,6 +2,11 @@
 
 Newest first. The [README](README.md) describes the current version.
 
+## v3.3.8 – waterfalls in order again, density dots for molecules
+
+- Module 5 waterfalls with UMIs: v3.3.7 drew a random read of each molecule at its molecule's length, so a row whose read had been shortened in PCR was out of step with its neighbours and the staircase became ragged. The read drawn is now the one whose own length is closest to its molecule's, so the rows follow the molecule lengths smoothly again. No length is labelled twice on the y-axis.
+- Module 7 density figures that show reads and molecules together (`plot_units = combined`): the dots are now the molecules by default, coloured by how common each molecule length is; the new `plot_dots_unit = reads` gives the reads instead. The reads-only and molecules-only figures (`plot_units = reads` or `molecules`) always use their own unit.
+
 ## v3.3.7 – review fixes before deployment
 
 **Results**

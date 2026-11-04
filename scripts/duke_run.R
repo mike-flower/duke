@@ -266,8 +266,12 @@ params <- list(
   # Also draw a density and a histogram figure for every sample, for all lengths and for
   # each range drawn (many figures on a large run)
   plot_sample_ranges = FALSE,
-  # Reads drawn as dots per sample in the density (ridge) figures
+  # Reads (or molecules) drawn as dots per sample in the density (ridge) figures
   plot_dots_max = 2000L,
+  # In density figures that show reads and molecules together (plot_units = combined):
+  # whether the dots are the 'molecules' (default) or the 'reads'. Figures of reads alone
+  # or molecules alone always use their own unit
+  plot_dots_unit = "molecules",
 
   # --- Runtime -------------------------------------------------------------------
   # An earlier run's output folder to take module results from, so those modules are not
