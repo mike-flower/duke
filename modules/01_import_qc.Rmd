@@ -37,7 +37,12 @@ unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module 
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 temp_dir <- module_temp_dir(params$dir_out, "m1", params$module_hash)
 xlsx_path <- file.path(qc_dir, "qc.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
+# redraw: the report is drawn from this module's saved results, without importing again
+redraw <- isTRUE(params$redraw_module)
+if (redraw) { safe_load_module(file.path(params$dir_out, "module_data", "01_import_qc.RData"), 1); m1 <- module1_output; rm(module1_output) }
 ```
+
+`r if (redraw) sprintf("> **Redrawn** on %s by Duke %s from this module's saved results (module_data/01_import_qc.RData): the reads were not imported again, so the counts and tables are those of the run that made them, and the section timings below are the redraw's.", format(Sys.Date(), "%d %B %Y"), params$duke_version) else ""`
 
 # Overview
 
@@ -63,6 +68,7 @@ This module handles:
 # Sequencing files
 
 ```{r file_discovery}
+if (redraw) file_details <- m1$file_details else {
 file_paths <- list.files(params$dir_data, full.names = TRUE, recursive = params$import_recursive,
                          pattern = paste(params$import_patterns, collapse = "|"))
 if (!length(file_paths)) stop("No sequencing files found in ", params$dir_data)
@@ -75,6 +81,7 @@ file_details <- data.frame(file_name = file_names, file_stem = file_stems, file_
   dplyr::mutate(paired_direction = dplyr::case_when(grepl(params$r1_pattern, file_name) ~ "R1",
                                       grepl(params$r2_pattern, file_name) ~ "R2", TRUE ~ NA_character_),
          include = is.na(paired_direction) | params$select_one_of_pair == "all" | paired_direction == params$select_one_of_pair)
+}
 if (any(duplicated(file_details$file_stem[file_details$include])))
   stop("Two input files share a file stem: ", paste(unique(file_details$file_stem[duplicated(file_details$file_stem)]), collapse = ", "))
 file_stem_vector <- setNames(file_details$file_stem[file_details$include], file_details$file_stem[file_details$include])
@@ -87,12 +94,14 @@ dt_full(file_details, caption = "All files found (include = FALSE are the unused
 
 ```{r import}
 .t <- proc.time()["elapsed"]
+if (redraw) { seq <- m1$sequences; stage_counts <- m1$stage_counts } else {
 seq <- apply_fn(file_stem_vector, function(fs) {
   i <- match(fs, file_details$file_stem)
   import_sequencing(file_details$file_path[i], file_details$file_format[i])
 })
 stage_counts <- data.frame(file_stem = names(seq), imported = vapply(seq, length, integer(1)))
-timings["Import"] <- proc.time()["elapsed"] - .t
+}
+timings[if (redraw) "Loading the saved results" else "Import"] <- proc.time()["elapsed"] - .t
 ```
 
 ---
@@ -102,6 +111,7 @@ timings["Import"] <- proc.time()["elapsed"] - .t
 PacBio HiFi BAMs are detected per sample from the `np` tag (falling back to `@PG` lines naming ccs, skera or lima), so mixed cohorts are handled. **np** is the number of polymerase passes behind a HiFi read and **rq** its predicted accuracy (HiFi reads have rq ≥ 0.99). The section is skipped when no PacBio BAMs are present.
 
 ```{r pacbio_detect}
+if (redraw) { is_pacbio <- m1$is_pacbio; read_metadata <- m1$read_metadata; pacbio_summary <- m1$pacbio_summary; any_pacbio <- any(is_pacbio) } else {
 is_pacbio <- vapply(file_stem_vector, function(fs) {
   i <- match(fs, file_details$file_stem); detect_pacbio(file_details$file_path[i], file_details$file_format[i])
 }, logical(1))
@@ -133,6 +143,7 @@ if (any_pacbio) {
 # The tags are now in read_metadata; drop the copies held with the sequences
 for (fs in names(seq)) if (!is.null(S4Vectors::metadata(seq[[fs]])$bam_tags)) S4Vectors::metadata(seq[[fs]])$bam_tags <- NULL
 stage_counts$after_np_filter <- vapply(seq[stage_counts$file_stem], length, integer(1))
+}
 cat(sprintf("%d of %d samples are PacBio HiFi BAMs.%s", sum(is_pacbio), length(is_pacbio),
             if (!is.na(params$np_min)) sprintf(" Reads with np < %d removed.", params$np_min) else ""))
 ```
@@ -202,6 +213,12 @@ rm(np_len); invisible(gc())
 ```{r dedup}
 .t <- proc.time()["elapsed"]
 dup_summary <- NULL
+if (redraw) {
+  dup_summary <- m1$duplicate_summary
+  if (params$check_duplicate_readnames) cat(sprintf("Duplicate read names: %s reads removed across the cohort.\n", comma(sum(stage_counts$after_np_filter) - sum(stage_counts$after_dedup))))
+  else cat("Duplicate read-name check off (check_duplicate_readnames = FALSE).\n")
+  cat(if (!is.na(params$downsample)) sprintf("Downsampled to at most %s reads per sample.\n", comma(params$downsample)) else "Downsampling off.\n")
+} else {
 if (params$check_duplicate_readnames) {
   res <- apply_fn(seq, select_longest_duplicate_readname)
   dup_summary <- dplyr::bind_rows(lapply(names(res), function(fs) data.frame(file_stem = fs, duplicated_names = sum(res[[fs]]$read_name_count$count > 1))))
@@ -215,13 +232,17 @@ if (!is.na(params$downsample)) {
   cat(sprintf("Downsampled to at most %s reads per sample.\n", comma(params$downsample)))
 } else cat("Downsampling off.\n")
 stage_counts$after_downsample <- vapply(seq[stage_counts$file_stem], length, integer(1))
+}
 timings["Duplicate names and downsampling"] <- proc.time()["elapsed"] - .t
 ```
 
 ```{r trim}
 .t <- proc.time()["elapsed"]
 trim_summary <- NULL
-if (params$trim) {
+if (redraw) {
+  trim_summary <- m1$trim_summary
+  cat(if (params$trim) sprintf("Adapter trimming: %s reads trimmed in total.\n", comma(sum(trim_summary$reads_trimmed))) else "Adapter trimming off (trim = FALSE).\n")
+} else if (params$trim) {
   if (is.na(params$path_trim_patterns)) stop("trim = TRUE needs path_trim_patterns")
   ad <- read.csv(params$path_trim_patterns, fileEncoding = "UTF-8-BOM", stringsAsFactors = FALSE)
   pats <- setNames(ad$adapter_sequence, ad$adapter_name)
@@ -284,7 +305,7 @@ dt_full(stage_counts, caption = "Reads per sample after each step (a step that i
 
 ```{r read_qc}
 .t <- proc.time()["elapsed"]
-qc_summary <- dplyr::bind_rows(lapply(names(seq), function(fs) {
+qc_summary <- if (redraw) m1$qc_summary else dplyr::bind_rows(lapply(names(seq), function(fs) {
   x <- seq[[fs]]
   w <- width(x)
   q <- if (is(x, "QualityScaledXStringSet") && length(x)) alphabetScore(quality(x)) / pmax(w, 1) else rep(NA_real_, length(x))
@@ -292,7 +313,7 @@ qc_summary <- dplyr::bind_rows(lapply(names(seq), function(fs) {
              p05_length = if (length(w)) quantile(w, 0.05) else NA, p95_length = if (length(w)) quantile(w, 0.95) else NA,
              mean_phred = if (length(q)) mean(q, na.rm = TRUE) else NA)
 }))
-if (!is.null(pacbio_summary)) qc_summary <- dplyr::left_join(qc_summary, dplyr::select(pacbio_summary, -n_reads), by = "file_stem")
+if (!redraw && !is.null(pacbio_summary)) qc_summary <- dplyr::left_join(qc_summary, dplyr::select(pacbio_summary, -n_reads), by = "file_stem")
 set.seed(123)
 len_sample <- dplyr::bind_rows(lapply(names(seq), function(fs) { w <- width(seq[[fs]]); data.frame(file_stem = fs, length = if (length(w) > 2000) sample(w, 2000) else w) }))
 timings["Read QC"] <- proc.time()["elapsed"] - .t
@@ -333,12 +354,14 @@ dt_full(qc_summary, caption = "Read length and quality per sample", digits = 3)
 # Save output
 
 ```{r save}
+output_path <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
+if (redraw) { module1_output <- m1; rm(m1) } else {   # a redraw leaves the saved results as they are
 module1_output <- list(sequences = seq, file_details = file_details, stage_counts = stage_counts, qc_summary = qc_summary,
                        is_pacbio = is_pacbio, read_metadata = read_metadata, pacbio_summary = pacbio_summary,
                        trim_summary = trim_summary, duplicate_summary = dup_summary, hash = params$module_hash)
-output_path <- file.path(params$dir_out, "module_data", "01_import_qc.RData")
 dir.create(dirname(output_path), showWarnings = FALSE)
 save(module1_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
+}
 write_excel_function(list(file_details = file_details, stage_counts = stage_counts, qc_summary = qc_summary,
                           pacbio_summary = pacbio_summary, trim_summary = trim_summary), xlsx_path)
 ```

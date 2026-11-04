@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.10"
+duke_version <- "3.3.11"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -145,8 +145,10 @@ reuse_earlier_run <- function(p, hashes, results_dir) {
     # The current hash, so the module is skipped; the version line keeps the version that made it
     writeLines(c(hashes[[m]], paste("duke", if (is.na(v)) "unknown" else v), paste("reused from", src)),
                paste0(file.path(results_dir, .module_data[[m]]), ".hash"))
-    note <- c(if (is.na(v) || v != duke_version) sprintf("made by Duke %s, so its report and figures are that version's", if (is.na(v)) "before 3.3.2" else v),
-              if (!identical(stored_hash(plan[[m]]), hashes[[m]])) "its figures follow the earlier run's plots / plot_units")
+    vtxt <- if (is.na(v)) "before 3.3.2" else v
+    note <- if (m %in% as.character(p$redraw)) c(if (is.na(v) || v != duke_version) sprintf("made by Duke %s", vtxt), "its report and figures will be redrawn") else
+      c(if (is.na(v) || v != duke_version) sprintf("made by Duke %s, so its report and figures are that version's", vtxt),
+        if (!identical(stored_hash(plan[[m]]), hashes[[m]])) "its figures follow the earlier run's plots / plot_units")
     cat(sprintf("  Module %s (%s): reused%s\n", m, .module_names[[m]], if (length(note)) paste0("; ", paste(note, collapse = "; ")) else ""))
   }
   invisible(names(plan))
@@ -215,22 +217,43 @@ run_duke <- function(user_params, duke_root = getwd()) {
   results_dir <- file.path(p$dir_out, "module_data")
   dir.create(results_dir, showWarnings = FALSE)
   reused <- if (!is.na(p$reuse_from %||% NA)) reuse_earlier_run(p, hashes, results_dir) else character(0)
+  # redraw needs saved results made with the current settings: checked before any module
+  # runs, so a long job does not stop hours in
+  for (m in setdiff(as.character(p$redraw), "7")) {
+    if (m == "4" && !isTRUE(p$umi)) next
+    out_path <- file.path(results_dir, .module_data[[m]])
+    if (!identical(.data_hash(stored_hash(out_path)), .data_hash(hashes[[m]]))) {
+      msg <- paste0("redraw: Module ", m, " (", .module_names[[m]], ") has no saved results made with the current settings in ", results_dir,
+                    if (file.exists(out_path)) " (they were made with different settings)" else "",
+                    ". Leave it out of redraw to re-run it, or take its results from an earlier run with reuse_from and reuse_modules. Nothing has been run.")
+      cat("\nSTOPPED:", msg, "\n"); stop(msg, call. = FALSE)
+    }
+  }
   # Modules whose results in dir_out belong to this run (run now, resumed or reused); the
   # run summary and index use only these, not files an earlier run left behind
   current <- character(0)
   for (m in as.character(sort(unique(p$run_modules)))) {
     cat("\n-----------------------------------------------------------------\n")
     cat("Module ", m, ": ", .module_names[[m]], "\n", sep = "")
-    if (m %in% reused) { cat("Reused from", p$reuse_from, "\n"); current <- c(current, m); next }
+    redraw_now <- m %in% as.character(p$redraw)
+    if (m %in% reused && !redraw_now) { cat("Reused from", p$reuse_from, "\n"); current <- c(current, m); next }
     if (m == "4" && !isTRUE(p$umi)) { cat("Skipped (umi = FALSE)\n"); next }
     if (m == "5" && !isTRUE(p$cluster) && !isTRUE(p$waterfall)) { cat("Skipped (cluster = FALSE and waterfall = FALSE)\n"); next }
     if (m == "6" && (is.na(p$path_settings) || !file.exists(p$path_settings))) {
       cat("Skipped (no settings file - set path_settings to calculate instability metrics)\n"); next }
     out_path <- file.path(results_dir, .module_data[[m]])
-    if (isTRUE(p$resume) && identical(stored_hash(out_path), hashes[[m]])) {
+    # redraw: the report and figures are drawn again from the saved results, which are
+    # kept as they are (Module 7 only draws, so it simply re-runs)
+    in_place <- redraw_now && m != "7"
+    if (in_place) {
+      cat(if (m %in% reused) "Reused from " else "", if (m %in% reused) p$reuse_from else "", if (m %in% reused) "; " else "",
+          "redrawing the report and figures from the saved results\n", sep = "")
+    } else if (redraw_now) {
+      cat("Redrawn by re-running (this module only draws)\n")
+    } else if (isTRUE(p$resume) && identical(stored_hash(out_path), hashes[[m]])) {
       cat("Skipped - results found with identical parameters\n"); current <- c(current, m); next
     }
-    if (file.exists(out_path)) cat("Parameters or upstream results changed - re-running\n")
+    if (!redraw_now && file.exists(out_path)) cat("Parameters or upstream results changed - re-running\n")
     # Every upstream module must hold results made with the current parameters,
     # otherwise this module would be built on stale data and later resumed as current
     for (u in .module_upstream[[m]]) {
@@ -242,10 +265,13 @@ run_duke <- function(user_params, duke_root = getwd()) {
              "Add ", u, " to run_modules (resume will reuse whatever is still current).")
     }
     p$module_hash <- hashes[[m]]
+    p$redraw_module <- in_place
     t0 <- Sys.time()
     # Clear the previous result first: a module saves its data before its report is
     # finished, so if this run stopped part-way the old hash must not let a resume skip it
-    unlink(c(out_path, paste0(out_path, ".hash")))
+    # (a redraw keeps the saved results, and they are still current if it stops part-way)
+    data_version <- .hash_version(out_path)
+    if (!in_place) unlink(c(out_path, paste0(out_path, ".hash")))
     # Each run renders in its own working folder. By default rmarkdown writes its working
     # files (the .knit.md and the figure folder) next to the Rmd, i.e. in the shared repo,
     # so two runs rendering the same module at once could delete each other's figures.
@@ -256,7 +282,10 @@ run_duke <- function(user_params, duke_root = getwd()) {
                       envir = list2env(list(params = p), parent = globalenv()),
                       knit_root_dir = duke_root, quiet = TRUE)
     unlink(c(work_dir, file.path(p$dir_out, paste0(tools::file_path_sans_ext(.module_files[[m]]), "_files"))), recursive = TRUE)
-    if (file.exists(out_path)) writeLines(c(hashes[[m]], paste("duke", duke_version)), paste0(out_path, ".hash"))
+    # After a redraw the version line keeps the version that made the results; the hash
+    # takes the current plot choice, as the figures now follow it
+    if (in_place) writeLines(c(hashes[[m]], paste("duke", if (is.na(data_version)) "unknown" else data_version), paste("redrawn by duke", duke_version)), paste0(out_path, ".hash"))
+    else if (file.exists(out_path)) writeLines(c(hashes[[m]], paste("duke", duke_version)), paste0(out_path, ".hash"))
     current <- c(current, m)
     cat("Done in", format_elapsed(as.numeric(difftime(Sys.time(), t0, units = "secs"))), "\n")
   }

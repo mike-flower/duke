@@ -2,6 +2,10 @@
 
 Newest first. The [README](README.md) describes the current version.
 
+## v3.3.11 – redraw a module's report and figures from its saved results
+
+- New `redraw` setting (e.g. `--redraw 1,4`): Modules 1 and 4 draw their report, tables and figures again from their saved results (`module_data/`), without importing the files (Module 1) or extracting UMIs and forming molecules (Module 4) again. For a Duke update that changes only those modules' figures, or for other `plots` / `plot_units`, this replaces the import and the UMI collapsing; it works with `reuse_from`, so a new output folder can take the results from an earlier run and redraw them. Module 4's length-rule tests and error figures are still recalculated from the saved molecules. Module 7 only draws, so redrawing it re-runs it; Modules 2, 3, 5 and 6 compute inside their reports and cannot be redrawn. The saved results must have been made with the current settings, which Duke checks before any module runs; they are not changed, so the modules after a redrawn one stay current. The report says it was redrawn, and the `.hash` file records the version that made the results and the version that redrew them. On the test sets the redrawn tables match the originals and the figures match apart from randomly jittered points.
+
 ## v3.3.10 – a small expanded allele kept as an allele, tract maps, clearer Module 1 and 4 figures
 
 - Module 5 clustering: a cluster holding under `repeat_cluster_min_prop` (5%) of a sample's molecules or reads was always merged into its nearest neighbour, however far away. On the full jasmine run one sample (kxF07--kxR15, MLH1ko 9B, t = 98) had its expanded allele (CAG ~123, 75 of 1,787 molecules, 4%) merged into the 14-CAG allele, so it was reported with one allele. A cluster far from every other (by more than 10 units and a quarter of the length) that holds at least 1% and 20 molecules or reads is now kept as an allele. On the 66 jasmine samples this changes that one sample and no other; the PacBio and UMI test sets give the same alleles as before. The allele-shares subtitle says "1 sample", not "1 samples".

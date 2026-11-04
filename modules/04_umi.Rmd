@@ -35,7 +35,12 @@ umi_dir <- file.path(params$dir_out, "04_umi"); plots_dir <- file.path(umi_dir, 
 unlink(plots_dir, recursive = TRUE)  # plots from an earlier run of this module would otherwise linger
 dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
 xlsx_path <- file.path(umi_dir, "umi.xlsx"); if (file.exists(xlsx_path)) file.remove(xlsx_path)
+# redraw: the report is drawn from this module's saved results, without extracting UMIs or
+# forming molecules again
+redraw <- isTRUE(params$redraw_module)
 ```
+
+`r if (redraw) sprintf("> **Redrawn** on %s by Duke %s from this module's saved results (module_data/04_umi.RData): UMIs were not extracted and molecules not formed again, so the molecules are those of the run that made them; the figures, tables and length-rule tests are drawn from them, and the section timings below are the redraw's.", format(Sys.Date(), "%d %B %Y"), params$duke_version) else ""`
 
 # Overview
 
@@ -63,9 +68,13 @@ Modules 6 and 7 then report every result twice: per read and per molecule.
 
 ```{r extract, results="asis"}
 .t <- proc.time()["elapsed"]
-safe_load_module(file.path(params$dir_out, "module_data", "02_alignment.RData"), 2)
 safe_load_module(file.path(params$dir_out, "module_data", "03_repeat_detection.RData"), 3)
 primary <- module3_output$primary; measures <- module3_output$measures
+if (redraw) {
+  safe_load_module(file.path(params$dir_out, "module_data", "04_umi.RData"), 4)
+  umi_reads <- module4_output$umi_reads
+} else {
+safe_load_module(file.path(params$dir_out, "module_data", "02_alignment.RData"), 2)
 ref1 <- names(module2_output$refs)[1]
 aln <- module2_output$alignments[[ref1]][, .(file_stem, qname, query_sequence)]
 rm(module2_output); invisible(gc())
@@ -77,7 +86,8 @@ extracted <- apply_fn(names(per_sample), function(s) {
                                                 params$umi_len_min, params$umi_len_max))
 })
 umi_reads <- rbindlist(extracted); rm(extracted, per_sample, aln)
-timings["Extraction"] <- proc.time()["elapsed"] - .t
+}
+timings[if (redraw) "Loading the saved results" else "Extraction"] <- proc.time()["elapsed"] - .t
 outcome <- umi_reads[, .N, by = .(file_stem, umi_outcome)][, prop := N / sum(N), by = file_stem]
 cat(sprintf("UMI extracted from %s of %s reads (%.1f%%).", comma(sum(umi_reads$umi_outcome == "UMI extracted")),
             comma(nrow(umi_reads)), 100 * mean(umi_reads$umi_outcome == "UMI extracted")))
@@ -125,6 +135,10 @@ The UMIs of each sample are clustered (step 2 in the *Overview*) and each cluste
 ```{r molecules}
 .t <- proc.time()["elapsed"]
 lengths <- module3_output$lengths
+if (redraw) {
+  molecules <- module4_output$molecules; molecule_lengths <- module4_output$molecule_lengths
+  clustering <- module4_output$clustering; collapse_compare <- module4_output$collapse_compare
+} else {
 prim <- lengths[measure == primary, .(file_stem, qname, primary = length)]
 umi_reads <- prim[umi_reads, on = .(file_stem, qname)]
 by_s <- split(umi_reads[!is.na(umi) & !is.na(primary)], by = "file_stem")
@@ -137,7 +151,8 @@ clustering <- rbindlist(lapply(mols, `[[`, "clustering"))
 collapse_compare <- rbindlist(lapply(mols, `[[`, "collapse_compare"))
 rm(mols, by_s, len_s)
 umi_reads <- read_map[, .(file_stem, qname, umi_group, molecule_id)][umi_reads, on = .(file_stem, qname)]
-timings["Clustering and collapse"] <- proc.time()["elapsed"] - .t
+}
+if (!redraw) timings["Clustering and collapse"] <- proc.time()["elapsed"] - .t
 rules_md <- collapse_rules(params)
 used_rule_text <- switch(params$umi_collapse_stat,
   top_cluster = sprintf("top_cluster, %d reads%s", params$umi_top_cluster_k,
@@ -653,14 +668,17 @@ if (want_plot("reads_vs_molecules", params)) for (s in names(rl_by))
 # Save output
 
 ```{r save}
+output_path <- file.path(params$dir_out, "module_data", "04_umi.RData")
+# A redraw leaves the saved results, and the per-sample molecule tables made from them, as they are
+if (!redraw) {
 mol_dir <- file.path(umi_dir, "molecules"); dir.create(mol_dir, showWarnings = FALSE)
 wide <- dcast(molecule_lengths, file_stem + molecule_id ~ measure, value.var = "length")
 wide <- molecules[kept == TRUE, .(file_stem, molecule_id, umi, n_reads)][wide, on = .(file_stem, molecule_id)]
 for (s in unique(wide$file_stem)) fwrite(wide[file_stem == s], file.path(mol_dir, paste0(s, ".tsv.gz")), sep = "\t")
 module4_output <- list(umi_reads = umi_reads, molecules = molecules, molecule_lengths = molecule_lengths,
                        clustering = clustering, summary = summary_tab, collapse_compare = collapse_compare, hash = params$module_hash)
-output_path <- file.path(params$dir_out, "module_data", "04_umi.RData")
 save(module4_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
+}
 write_excel_function(list(summary = summary_tab, extraction = dcast(outcome, file_stem ~ umi_outcome, value.var = "N", fill = 0),
                           within_molecule_error = we_sum, within_error_by_length = we_len, reads_far_from_molecule = far,
                           shortened_flag_by_length = long_tab, shortened_flag_per_sample = lf_s, length_rule_scorecard = scorecard, length_rule_comparison = rule_tab), xlsx_path)

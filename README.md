@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.10** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+**v3.3.11** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 **New to Duke?** Read [What Duke does](#what-duke-does), then follow [Installation](#installation) and [Quick start](#quick-start). The rest of this page is reference: look things up as you need them.
 
@@ -129,7 +129,7 @@ You need a folder of reads (one BAM, FASTQ or FASTA file per sample) and a refer
 **1. A first look, without a settings file.** Write each run to a new folder, named with the Duke version, so earlier results are kept.
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.10 --path_ref www/HTTset20_cagcaa.fasta --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.11 --path_ref www/HTTset20_cagcaa.fasta --threads 8
 ```
 
 Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus sequences and variants. Without a settings file every module runs except Module 6. Open `00_index.html` in the output folder: Modules 1 and 2 show whether the reads and alignment are good, and the Module 3 and Module 7 length plots show where each sample's alleles are, so where to put the ranges.
@@ -139,7 +139,7 @@ Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus se
 **3. Run again with the settings file**, into the same folder:
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.10 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.11 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
 ```
 
 [Resume](#resume) keeps Modules 1–5, as nothing that affects them changed, and runs Modules 6 and 7. Edit the settings and run again as often as needed.
@@ -614,6 +614,7 @@ Parameters from v2 that no longer exist are ignored with a message; the v2 count
 |---|---|---|---|
 | `reuse_from` | – | text | An earlier run's output folder to take module results from, so those modules are not re-run. A module is reused only when its results were made with the same settings as this run (its own and every upstream module's); it keeps that run's report and figures |
 | `reuse_modules` | – | whole-number list | With reuse_from: the modules to reuse, e.g. 1:4 (default: every module made by this Duke version whose results still match; a module made by an earlier version is reused only when named here). A module named here that cannot be reused stops the run before it starts |
+| `redraw` | – | whole-number list | Modules whose report, tables and figures are drawn again from their saved results (module_data/), without importing or recomputing, e.g. 1,4 after a Duke update that changed only their figures, or with new plots / plot_units. Modules 1, 4 and 7 can be redrawn (Module 7 only draws, so it simply re-runs). The saved results must have been made with the current settings; they can come from reuse_from |
 | `plots` | `all` | text list | Plot types to save: `all` (default; every type except sample_density, sample_histogram and waterfall_cluster), a list of types, or `all` with `-type` to leave types out, e.g. `all,-waterfall,sample_density`. The README lists every type |
 | `plot_units` | `combined` | text list | For plots that can show reads and molecules: `combined` (both in one figure, default), `reads`, `molecules`, or a list, e.g. `combined,reads,molecules` for all three |
 | `plot_dpi` | `150` | whole number | Resolution of saved plots |
@@ -649,6 +650,20 @@ Before any module runs, Duke copies each module to reuse from the earlier folder
 
 Typical use: a new Duke version changes only the later modules (e.g. clustering in Module 5), and Modules 1–4 (import, alignment, repeat detection, UMI collapsing, the slow part) can be taken from the previous run.
 
+### Redrawing a module's report and figures (`redraw`)
+
+A reused or resumed module keeps the report and figures it was made with. When a newer Duke version changes only a module's figures or report, or you want other `plots` / `plot_units`, `redraw` draws them again from the module's saved results, without importing or recomputing:
+
+```
+--dir_out .../result_new --reuse_from .../result_old --reuse_modules 1:4 --redraw 1,4
+```
+
+- **Module 1** loads its saved reads and tables instead of importing the files again (and skips the np, duplicate-name, downsampling and trimming steps, whose results are saved). **Module 4** loads its saved molecules instead of extracting UMIs and forming molecules again; its length-rule tests, error and distribution figures are recalculated from them, which takes a few minutes on a large run. **Module 7** only draws, so redrawing it simply re-runs it. Modules 2, 3, 5 and 6 compute their results inside the report and cannot be redrawn; leave them out of `redraw` to re-run them.
+- The saved results must have been made with the current settings (the same check as resume). They can be this folder's own or come from `reuse_from` in the same run. If they do not match, Duke stops before drawing and says so.
+- The saved results (`module_data/`) are not changed, so the modules after a redrawn one stay current; Module 4's per-sample `molecules/` tables are kept as they are. The report opens with a note that it was redrawn, and the module's `.hash` file records the version that made the results and the version that redrew them.
+- The tables are the same as the run that made the results. Figures with randomly jittered points can place the points slightly differently.
+- A redrawn module's code is the current version's, so a redraw is for changes to figures and text: if a Duke update changes how a module calculates its results, re-run it instead (the CHANGELOG says which).
+
 ---
 
 ## Running on Myriad
@@ -674,7 +689,7 @@ tail -f ~/Scratch/bin/duke/logs/duke_<job id>.out
 
 Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's warnings and messages go to the run log only. Loading R on a compute node can take a few minutes before the first Duke line appears, and new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file. `qstat -j <id> | grep usage` shows CPU time and memory so far, `qdel <id>` stops a job and `qacct -j <id>` gives the resources a finished job used. A waiting job's resources can be changed with `qalter`, e.g. `qalter -pe smp 1 -l mem=8G <id>`.
 
-**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.10 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
+**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.11 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
 
 **Other clusters.** `scripts/duke_kathleen.sh` (SGE, `-pe mpi`) and `scripts/duke_kathleen_slurm.sh` (Slurm, `sbatch`; monitor with `squeue -u $USER`, `scancel <id>`, `sacct -j <id>`) ask for one whole node, as Duke cannot spread one run across nodes. A run that fits on Myriad is simplest there.
 
@@ -687,6 +702,8 @@ Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run 
 **First look at new data** – run without a settings file; every module except 6 runs (4 only with `umi = TRUE`, 5 with `cluster = TRUE` or `waterfall = TRUE`), and the Module 3 and 7 plots show where to put the ranges (see [Quick start](#quick-start)).
 
 **Add or change the settings** – the same command with `--path_settings new.xlsx`; Modules 1–5 are reused and 6 and 7 re-run. `--run_modules 6,7` does the same without checking the earlier modules.
+
+**New figures after a Duke update** – a new output folder with `--reuse_from` the old one and `--reuse_modules` the modules whose results are unchanged; add `--redraw 1,4` to draw Modules 1 and 4 again from those results with the new version's figures, rather than importing and collapsing again ([Redrawing](#redrawing-a-modules-report-and-figures-redraw)).
 
 **CAG and CCG in one run** – `--path_ref www/HTTset20_cag_ccg.fasta --path_tracts www/tracts_example.csv --composites "CAG_CCG_sum=CAG+CCG:sum,CAG_CCG_span=CAG+CCG:span"`; add `analysis_ranges_CCG` to the settings for CCG ranges on the CCG scale.
 

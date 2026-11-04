@@ -149,6 +149,7 @@ duke_param_spec <- function() {
     # --- Output and runtime ---------------------------------------------------------------
     .p("reuse_from", NA_character_, "chr", "Runtime", "An earlier run's output folder to take module results from, so those modules are not re-run. A module is reused only when its results were made with the same settings as this run (its own and every upstream module's); it keeps that run's report and figures"),
     .p("reuse_modules", integer(0), "intvec", "Runtime", "With reuse_from: the modules to reuse, e.g. 1:4 (default: every module made by this Duke version whose results still match; a module made by an earlier version is reused only when named here). A module named here that cannot be reused stops the run before it starts"),
+    .p("redraw", integer(0), "intvec", "Runtime", "Modules whose report, tables and figures are drawn again from their saved results (module_data/), without importing or recomputing, e.g. 1,4 after a Duke update that changed only their figures, or with new plots / plot_units. Modules 1, 4 and 7 can be redrawn (Module 7 only draws, so it simply re-runs). The saved results must have been made with the current settings; they can come from reuse_from"),
     .p("plots", "all", "chrvec", "Runtime", "Plot types to save: 'all' (default; every type except sample_density, sample_histogram and waterfall_cluster), a list of types, or 'all' with '-type' to leave types out, e.g. 'all,-waterfall,sample_density'. The README lists every type"),
     .p("plot_units", "combined", "chrvec", "Runtime", "For plots that can show reads and molecules: 'combined' (both in one figure, default), 'reads', 'molecules', or a list, e.g. 'combined,reads,molecules' for all three"),
     .p("plot_dpi", 150L, "int", "Runtime", "Resolution of saved plots"),
@@ -243,6 +244,11 @@ resolve_params <- function(user = list()) {
   if (!is.finite(p$umi_top_cluster_min_share) || p$umi_top_cluster_min_share < 0 || p$umi_top_cluster_min_share > 1)
     stop("umi_top_cluster_min_share must be between 0 and 1")
   if (length(p$reuse_modules) && is.na(p$reuse_from)) stop("reuse_modules needs reuse_from (the earlier run's output folder)")
+  bad_rd <- setdiff(p$redraw, c(1L, 4L, 7L))
+  mods <- function(v) paste0(if (length(v) > 1) "Modules " else "Module ", paste(v, collapse = ", "))
+  if (length(bad_rd)) stop("redraw: ", mods(bad_rd), " cannot be redrawn (only Modules 1, 4 and 7 can); leave ", if (length(bad_rd) > 1) "them" else "it", " out of redraw to re-run", call. = FALSE)
+  nr <- setdiff(p$redraw, p$run_modules)
+  if (length(nr)) stop("redraw: ", mods(nr), if (length(nr) > 1) " are" else " is", " not in run_modules", call. = FALSE)
   # Settings with a fixed set of choices: a typo would otherwise silently act as the default
   one_of <- function(name, choices) {
     v <- p[[name]]

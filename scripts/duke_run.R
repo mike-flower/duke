@@ -286,6 +286,12 @@ params <- list(
   # only when named here). A module named here that cannot be reused stops the run before
   # it starts
   reuse_modules = integer(0),
+  # Modules whose report, tables and figures are drawn again from their saved results
+  # (module_data/), without importing or recomputing, e.g. 1,4 after a Duke update that
+  # changed only their figures, or with new plots / plot_units. Modules 1, 4 and 7 can be
+  # redrawn (Module 7 only draws, so it simply re-runs). The saved results must have been
+  # made with the current settings; they can come from reuse_from
+  redraw = integer(0),
   # Plot types to save: 'all' (default; every type except sample_density,
   # sample_histogram and waterfall_cluster), a list of types, or 'all' with '-type' to
   # leave types out, e.g. 'all,-waterfall,sample_density'. The README lists every type
