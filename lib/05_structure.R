@@ -835,9 +835,11 @@ create_waterfall_plot <- function(d, title, flank_bp = 60L, max_reads = 1000L, l
     ggplot2::scale_x_continuous(expand = c(0, 0)) +
     ggplot2::coord_cartesian(xlim = c(-flank_bp - 1, x_hi)) +
     ggplot2::labs(title = title,
-                  subtitle = sprintf(paste0("%s of %s ", unit_word, ", ordered by repeat length; %d bp of flank shown either side; dashed line = tract start%s"),
-                                     format(nrow(d), big.mark = ","), format(n_total, big.mark = ","), flank_bp,
-                                     if (cut_n == 1) "\nthe longest row runs past the right edge" else if (cut_n > 1) sprintf("\nthe %d longest rows run past the right edge", cut_n) else ""),
+                  subtitle = sprintf(paste0("%s of %s ", unit_word, ", ordered by %s; %d bp of flank either side; dashed line = tract start%s%s"),
+                                     format(nrow(d), big.mark = ","), format(n_total, big.mark = ","),
+                                     if (grepl("^molecules", unit_word)) "molecule length" else "repeat length", flank_bp,
+                                     if (grepl("^molecules", unit_word)) "\nEach row = one molecule, drawn with its read closest to the molecule's length (that read's bases, not a consensus)" else "",
+                                     if (cut_n) paste0("\n", if (cut_n == 1) "the longest row runs past the right edge" else sprintf("the %d longest rows run past the right edge", cut_n)) else ""),
                   x = "Position relative to tract start (bp)", y = length_label) +
     ggplot2::theme_bw()
 }

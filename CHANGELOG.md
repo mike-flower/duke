@@ -2,6 +2,11 @@
 
 Newest first. The [README](README.md) describes the current version.
 
+## v3.3.9 – modal labels in the density figures, waterfalls explained
+
+- Waterfalls with UMIs say what each row is: the subtitle reads *Each row = one molecule, drawn with its read closest to the molecule's length (that read's bases, not a consensus)*, the rows are said to be ordered by molecule length, and the Module 5 report and the README's plot table explain the choice.
+- Module 7 density figures with reads and molecules: the modal-length labels no longer cross. The molecules' label was always put to the left of its line and the reads' to the right, so where the molecules' mode was the longer (e.g. molecules 130, reads 129) each label sat over the other's line. Now the shorter mode is labelled on the left and the longer on the right.
+
 ## v3.3.8 – waterfalls in order again, density dots for molecules
 
 - Module 5 waterfalls with UMIs: v3.3.7 drew a random read of each molecule at its molecule's length, so a row whose read had been shortened in PCR was out of step with its neighbours and the staircase became ragged. The read drawn is now the one whose own length is closest to its molecule's, so the rows follow the molecule lengths smoothly again. No length is labelled twice on the y-axis.

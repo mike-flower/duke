@@ -146,14 +146,20 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
     c(Reads = "Reads (grey fill, dots)", Molecules = "Molecules (UMI-collapsed)")
   p <- p + ggplot2::scale_colour_manual(values = c(Reads = "grey25", Molecules = "#00838f"), breaks = names(lab), labels = lab, name = NULL,
                                        guide = ggplot2::guide_legend(order = 1))
-  # Modal lengths: the main unit's in red, labelled to the right; the molecules' (when drawn
-  # over reads) in teal, labelled to the left, so the two can be read side by side
-  if (!is.null(mmodal) && nrow(mmodal))
+  # Modal lengths: the main unit's in red, the molecules' (when drawn over reads) in teal. In
+  # each row the shorter of the two is labelled to the left of its line and the longer to the
+  # right, so the labels never cross (molecules on the left when they are equal)
+  modal[, hj := -0.15]
+  if (!is.null(mmodal) && nrow(mmodal)) {
+    mmodal <- modal[, .(label, rmodal = modal)][mmodal, on = "label"]
+    mmodal[, hj := ifelse(is.na(rmodal) | modal <= rmodal, 1.15, -0.15)]
+    modal[mmodal, on = "label", hj := ifelse(i.modal > modal, 1.15, -0.15)]
     p <- p + ggplot2::geom_segment(data = mmodal, ggplot2::aes(x = modal, xend = modal, y = base, yend = base + 0.9), colour = "#00838f", linetype = "dashed", linewidth = 0.4) +
-      ggplot2::geom_text(data = mmodal, ggplot2::aes(x = modal, y = base + 0.9, label = round(modal)), colour = "#00838f", size = 2.6, hjust = 1.15, vjust = 1)
+      ggplot2::geom_text(data = mmodal, ggplot2::aes(x = modal, y = base + 0.9, label = round(modal), hjust = hj), colour = "#00838f", size = 2.6, vjust = 1)
+  }
   n_most <- dsrc[, .N, by = label][, max(N)]
   p + ggplot2::geom_segment(data = modal, ggplot2::aes(x = modal, xend = modal, y = base, yend = base + 0.9), colour = "red", linetype = "dashed", linewidth = 0.4) +
-    ggplot2::geom_text(data = modal, ggplot2::aes(x = modal, y = base + 0.9, label = round(modal)), colour = "red", size = 2.6, hjust = -0.15, vjust = 1) +
+    ggplot2::geom_text(data = modal, ggplot2::aes(x = modal, y = base + 0.9, label = round(modal), hjust = hj), colour = "red", size = 2.6, vjust = 1) +
     ggplot2::scale_y_continuous(breaks = unname(idx), labels = names(idx), expand = ggplot2::expansion(add = c(0.45, 0.25))) +
     ggplot2::coord_cartesian(xlim = xlim) +
     ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(10)) +

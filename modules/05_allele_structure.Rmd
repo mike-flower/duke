@@ -536,7 +536,7 @@ The repeat itself is N in the reference, so the reads show it as a long insertio
 
 # Waterfall plots
 
-Each figure shows up to `r format(params$waterfall_downsample, big.mark = ",")` reads from one sample, ordered from shortest to longest `r primary` tract, with each base coloured and `r params$waterfall_flank_bp` bp of flank either side. A pure tract gives a regular stripe; interruptions show as vertical lines at a fixed offset from the tract start or end, and sequence variants in the flanks as columns of a different colour. The reads are a random sample (with UMIs and clustering on molecules, one read per kept molecule, so each allele takes up its share of molecules rather than of reads), so each allele appears in proportion to its share and takes up that share of the height. Each y-axis label marks the first read whose tract reaches that length; labels are spread evenly up the plot, so a large allele carries several. One example is shown; all are in `plots/waterfall/waterfall_{sample}.png` (and, with `waterfall_cluster` in `plots`, one per cluster in `plots/waterfall_cluster/`).
+Each figure shows up to `r format(params$waterfall_downsample, big.mark = ",")` reads from one sample, ordered from shortest to longest `r primary` tract, with each base coloured and `r params$waterfall_flank_bp` bp of flank either side. A pure tract gives a regular stripe; interruptions show as vertical lines at a fixed offset from the tract start or end, and sequence variants in the flanks as columns of a different colour. The reads are a random sample, so each allele appears in proportion to its share and takes up that share of the height.`r if (exists("cluster_unit") && cluster_unit == "molecules") " **With UMIs (clustering on molecules), each row is one molecule:** a random sample of the kept molecules, each placed and ordered by its molecule length (from Module 4), and drawn with one of its own reads, the one whose length is closest to the molecule's. The bases are that single read's, not a consensus of the molecule's reads, so a scattered odd base is usually a sequencing error in that read, while a column that changes across many rows is a real variant or interruption. Each allele then takes up its share of molecules rather than of reads." else ""` Each y-axis label marks the first read whose tract reaches that length; labels are spread evenly up the plot, so a large allele carries several. One example is shown; all are in `plots/waterfall/waterfall_{sample}.png` (and, with `waterfall_cluster` in `plots`, one per cluster in `plots/waterfall_cluster/`).
 
 ```{r waterfall, eval=want_plot("waterfall", params) || want_plot("waterfall_cluster", params), fig.height=8}
 .t <- proc.time()["elapsed"]
@@ -562,13 +562,13 @@ for (s in samples) {
   }
   d <- as.data.frame(d)
   p <- create_waterfall_plot(d, paste("Waterfall:", s), params$waterfall_flank_bp, params$waterfall_downsample,
-                             paste(primary, if (wf_unit == "molecules") "length (molecule)" else "length"), unit_word = if (wf_unit == "molecules") "molecules (one read each)" else "reads")
+                             paste(primary, if (wf_unit == "molecules") "length (molecule)" else "length"), unit_word = if (wf_unit == "molecules") "molecules" else "reads")
   if (is.null(p)) next
   if (is.null(first)) first <- p
   save_plot(p, plot_path(plots_dir, "waterfall", s), 12, 9)
   if (params$cluster && want_plot("waterfall_cluster", params)) for (k in sort(unique(d$cluster_number))) {
     pk <- create_waterfall_plot(d[d$cluster_number == k, ], sprintf("Waterfall: %s, cluster %d", s, k), params$waterfall_flank_bp,
-                                params$waterfall_downsample, paste(primary, "length"), unit_word = if (wf_unit == "molecules") "molecules (one read each)" else "reads")
+                                params$waterfall_downsample, paste(primary, "length"), unit_word = if (wf_unit == "molecules") "molecules" else "reads")
     if (!is.null(pk)) save_plot(pk, plot_path(plots_dir, "waterfall_cluster", s, sprintf("cluster%02d", k)), 12, 9)
   }
 }
