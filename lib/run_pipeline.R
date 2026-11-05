@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.12"
+duke_version <- "3.3.13"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -100,6 +100,23 @@ module_hashes <- function(p) {
   v <- if (length(v)) sub("^duke ", "", v[1]) else NA_character_
   if (identical(v, "unknown")) NA_character_ else v
 }
+# The version that last drew a module's report and figures, when that was a redraw
+.hash_drawn <- function(path) {
+  side <- paste0(path, ".hash")
+  if (!file.exists(side)) return(NA_character_)
+  v <- grep("^redrawn by duke ", readLines(side, warn = FALSE), value = TRUE)
+  if (length(v)) sub("^redrawn by duke ", "", v[1]) else NA_character_
+}
+# A module's saved data are linked rather than copied when both folders are on the same file
+# system: the file is not duplicated, and the copy takes seconds instead of minutes. Duke never
+# writes into a saved data file (a module that runs again deletes its file first and writes a
+# new one), so the earlier run's file cannot be changed through the link.
+.link_or_copy <- function(from, to) {
+  unlink(to)
+  ok <- suppressWarnings(file.link(from, to))
+  if (!isTRUE(ok)) ok <- file.copy(from, to, overwrite = TRUE, copy.date = TRUE)
+  isTRUE(ok)
+}
 reuse_earlier_run <- function(p, hashes, results_dir) {
   src <- normalizePath(p$reuse_from, mustWork = FALSE)
   if (!dir.exists(src)) stop("reuse_from: folder not found: ", src)
@@ -140,14 +157,17 @@ reuse_earlier_run <- function(p, hashes, results_dir) {
     if (file.exists(file.path(src, paste0(stem, ".html")))) file.copy(file.path(src, paste0(stem, ".html")), p$dir_out, overwrite = TRUE, copy.date = TRUE)
     tmp <- list.files(file.path(src, "temp"), pattern = paste0("^m", m, "_", .data_hash(hashes[[m]])), full.names = TRUE)
     if (length(tmp)) { dir.create(file.path(p$dir_out, "temp"), showWarnings = FALSE); file.copy(tmp, file.path(p$dir_out, "temp"), recursive = TRUE, copy.date = TRUE) }
-    file.copy(plan[[m]], results_dir, overwrite = TRUE, copy.date = TRUE)
-    v <- .hash_version(plan[[m]])
-    # The current hash, so the module is skipped; the version line keeps the version that made it
-    writeLines(c(hashes[[m]], paste("duke", if (is.na(v)) "unknown" else v), paste("reused from", src)),
+    if (!.link_or_copy(plan[[m]], file.path(results_dir, .module_data[[m]]))) stop("reuse_from: could not copy ", plan[[m]])
+    v <- .hash_version(plan[[m]]); dv <- .hash_drawn(plan[[m]])
+    # The current hash, so the module is skipped; the version lines keep the version that made
+    # the results and, after a redraw, the version that drew the report and figures
+    writeLines(c(hashes[[m]], paste("duke", if (is.na(v)) "unknown" else v), if (!is.na(dv)) paste("redrawn by duke", dv), paste("reused from", src)),
                paste0(file.path(results_dir, .module_data[[m]]), ".hash"))
     vtxt <- if (is.na(v)) "before 3.3.2" else v
+    drawn <- if (is.na(dv)) v else dv
     note <- if (m %in% as.character(p$redraw)) c(if (is.na(v) || v != duke_version) sprintf("made by Duke %s", vtxt), "its report and figures will be redrawn") else
-      c(if (is.na(v) || v != duke_version) sprintf("made by Duke %s, so its report and figures are that version's", vtxt),
+      c(if (!is.na(dv)) sprintf("results made by Duke %s, report and figures drawn by Duke %s", vtxt, dv)
+        else if (is.na(v) || v != duke_version) sprintf("made by Duke %s, so its report and figures are that version's", vtxt),
         if (!identical(stored_hash(plan[[m]]), hashes[[m]])) "its figures follow the earlier run's plots / plot_units")
     cat(sprintf("  Module %s (%s): reused%s\n", m, .module_names[[m]], if (length(note)) paste0("; ", paste(note, collapse = "; ")) else ""))
   }

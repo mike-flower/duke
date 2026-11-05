@@ -393,6 +393,7 @@ read_length_distribution,1,run,FALSE,TRUE,Read length distribution pooled and pe
 quality_vs_length,1,run,FALSE,TRUE,Mean base quality against read length per sample
 pacbio_np_rq,1,run,FALSE,TRUE,PacBio pass count and read quality per sample
 pacbio_np_distribution,1,run,FALSE,TRUE,PacBio pass count of every read: share at each pass count with the cap marked; short and long reads compared
+kinnex_segments,1,run,FALSE,TRUE,Kinnex reads: segments per concatenated read and pass count and read quality by the segment's start position
 pacbio_np_vs_length,1,run,FALSE,TRUE,PacBio pass count against read length: median and middle 50% and 80% of reads per length band; share at the cap
 adapter_trimming,1,run,FALSE,TRUE,Adapter trimming outcome
 read_accounting,2,run,FALSE,TRUE,Reads kept at each alignment step
@@ -445,6 +446,7 @@ heatmap,7,measure,TRUE,TRUE,Every sample's length distribution (one per measure)
 group_density,7,group,TRUE,TRUE,A group's samples as ridges (all lengths and each range)
 group_histogram,7,group,TRUE,TRUE,A group's samples as histograms (all lengths and each range)
 sample_ranges,7,sample,TRUE,TRUE,One sample's length in every range
+kinnex_position,7,run,FALSE,TRUE,Kinnex reads: allele and repeat length by the segment's position in its concatenated read
 sample_card,7,sample,TRUE,TRUE,One sample's every measure (all lengths and the ranges drawn in the report)
 sample_density,7,sample,TRUE,FALSE,One sample's ridge for all lengths and each range (one file each)
 sample_histogram,7,sample,TRUE,FALSE,One sample's histogram for all lengths and each range (one file each)
@@ -528,3 +530,24 @@ plot_type_of <- function(path) {
   t <- .plot_types_cache$t
   vapply(sub("\\.png$", "", basename(path)), function(b) { m <- t[b == t | startsWith(b, paste0(t, "_"))]; if (length(m)) m[1] else NA_character_ }, "", USE.NAMES = FALSE)
 }
+
+# ------------------------------------------------------------------------------
+# Kinnex (skera) segments
+# ------------------------------------------------------------------------------
+# skera names each segment <movie>/<zmw>/ccs[/fwd|rev]/<start>_<end>: where in bp the segment
+# sits in the concatenated HiFi read it was cut from. Returns, for every name, the concatenated
+# read it belongs to (read_id = movie/zmw) and the segment's start and end, or NULL when most
+# names are not Kinnex segments. Names are split once on fixed characters (fast on millions).
+kinnex_positions <- function(qname) {
+  if (!length(qname)) return(NULL)
+  ok <- grepl("/ccs(/[a-z]+)?/[0-9]+_[0-9]+$", qname)
+  if (mean(ok) < 0.5) return(NULL)
+  parts <- data.table::tstrsplit(qname, "/", fixed = TRUE)
+  lastf <- if (length(parts) > 4) sub(".*/", "", qname) else parts[[length(parts)]]
+  se <- data.table::tstrsplit(lastf, "_", fixed = TRUE)
+  d <- data.table::data.table(read_id = paste(parts[[1]], parts[[2]], sep = "/"),
+                              seg_start = suppressWarnings(as.numeric(se[[1]])), seg_end = suppressWarnings(as.numeric(se[[2]])))
+  d[!ok, `:=`(read_id = NA_character_, seg_start = NA_real_, seg_end = NA_real_)]
+  d[]
+}
+

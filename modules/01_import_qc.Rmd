@@ -182,7 +182,7 @@ seg_share <- mean(grepl("/ccs(/[a-z]+)?/[0-9]+_[0-9]+$", unlist(lapply(seq, name
 segmented <- seg_share > 0.5 || all(grepl("skera", file_details$file_name[file_details$include], ignore.case = TRUE))
 ```
 
-`r if (any_pacbio && segmented) sprintf("**These reads are Kinnex (skera) segments.** They were cut from longer concatenated HiFi reads (%s of the read names give the segment's position in its long read), and each segment carries the pass count of the whole concatenated read. np therefore depends on how long the array was, not on the length of the amplicon, and short and long reads are expected to have the same pass counts.", percent(seg_share, 1)) else ""`
+`r if (any_pacbio && segmented) sprintf("**These reads are Kinnex (skera) segments.** They were cut from longer concatenated HiFi reads (%s of the read names give the segment's position in its long read), and each segment carries the pass count of the whole concatenated read. Read quality (rq) is shared in the same way. np therefore depends mostly on how long the concatenated read was, not on the length of the amplicon, so short and long reads get much the same pass counts; long segments get slightly fewer, as the concatenated reads that carry them are longer. *Kinnex segments in their concatenated reads*, below, and Module 7 look at a segment's position in its concatenated read.", percent(seg_share, 1)) else ""`
 
 ### Pass count distribution
 
@@ -218,7 +218,7 @@ print(p_np_h); save_plot(p_np_h, file.path(plots_dir, "pacbio_np_distribution.pn
 
 **How to read this.** The x-axis is the read length, in bands of a few bases. **Top:** how many reads fall in each band (log scale). **Middle:** the spread of pass counts within each band: the line is the median read, the dark band the middle 50% of reads and the light band the middle 80%; a band reaching the dashed line at `r if (any_pacbio) np_max else "the cap"` holds reads at the cap. **Bottom:** the share of each band's reads at the cap. Bands with fewer than 100 reads are left out. The shortest and longest 0.5% of reads are not drawn, so a few stray lengths do not stretch the axis.
 
-**What it shows.** Whether longer reads got fewer passes. For a single amplicon per HiFi read, fewer passes fit in the run time for a longer insert, so the median and the share at the cap fall with length, and the expanded allele is read less accurately than the normal one. `r if (any_pacbio && segmented) "For Kinnex segments (as here) the lines should be flat, because every segment carries the pass count of the whole concatenated read." else ""`
+**What it shows.** Whether longer reads got fewer passes. For a single amplicon per HiFi read, fewer passes fit in the run time for a longer insert, so the median and the share at the cap fall with length, and the expanded allele is read less accurately than the normal one. `r if (any_pacbio && segmented) "For Kinnex segments (as here) the lines are nearly flat, because every segment carries the pass count of the whole concatenated read; they fall a little with length, as the concatenated reads that carry long segments are longer." else ""`
 
 ```{r pacbio_np_length, eval=any_pacbio, fig.height=7}
 xr <- stats::quantile(np_len$read_length, c(0.005, 0.995))
@@ -256,6 +256,53 @@ save_plot(p_np_len, file.path(plots_dir, "pacbio_np_vs_length.png"), 10, 7)
 np_tab <- np_in[, .(reads = .N), by = .(len_bin, np)][, share := reads / sum(reads), by = len_bin]
 fwrite(np_tab[order(len_bin, np)], file.path(dirname(plots_dir), "pacbio_np_by_length.tsv"), sep = "\t")
 rm(np_len, np_in); invisible(gc())
+```
+
+`r if (any_pacbio && segmented) "### Kinnex segments in their concatenated reads" else ""`
+
+`r if (any_pacbio && segmented) "**How to read this.** Each Kinnex read is one segment of a longer concatenated HiFi read, and its name gives where in that read it sat (its start, in bp). **Left:** how many segments of each concatenated read are in this run, across all samples (the other segments of a concatenated read belong to other samples on the same SMRT Cell, or failed demultiplexing). **Middle and right:** the pass count and read quality (QV) of the segments by where they start in their concatenated read, in 1 kb bands: the line is the median and the band the middle 50% of segments; the bars beneath give the segments in each band." else ""`
+
+`r if (any_pacbio && segmented) "**What it shows.** Whether the pass count and quality of a segment are its own. They are not: every segment of a concatenated read carries that read's pass count and quality (the share below gives how often all of a read's segments here share them), so they fall with start position only because segments that start late belong to long concatenated reads, which fit fewer passes in the run. Pass count and QV in this report therefore describe the concatenated reads, not how accurately each amplicon was read. Module 7 tests whether a segment's position affects its allele or repeat length." else ""`
+
+```{r kinnex_segments, eval=any_pacbio && segmented, fig.height=5}
+.t <- proc.time()["elapsed"]
+kx <- rbindlist(lapply(names(read_metadata), function(fs) {
+  md <- read_metadata[[fs]]
+  data.table(qname = md$read_name, np = md$np, rq = md$rq)
+}))
+kx <- cbind(kx, kinnex_positions(kx$qname))[!is.na(read_id)]
+kx[, qv := pmin(60, -10 * log10(pmax(1 - rq, 1e-6)))]
+kx_reads <- kx[, .(seen = .N, np_lo = min(np), np_hi = max(np), rq_lo = min(rq), rq_hi = max(rq)), by = read_id]
+kx_multi <- kx_reads[seen >= 2]
+kx_same_np <- mean(kx_multi$np_lo == kx_multi$np_hi); kx_same_rq <- mean(kx_multi$rq_lo == kx_multi$rq_hi)
+kx[, band := pmin(floor(seg_start / 1000), 10)]
+kx_band <- kx[, .(segments = .N, np_med = as.numeric(median(np, na.rm = TRUE)), np_q25 = as.numeric(quantile(np, 0.25, na.rm = TRUE)), np_q75 = as.numeric(quantile(np, 0.75, na.rm = TRUE)),
+                  qv_med = as.numeric(median(qv, na.rm = TRUE)), qv_q25 = as.numeric(quantile(qv, 0.25, na.rm = TRUE)), qv_q75 = as.numeric(quantile(qv, 0.75, na.rm = TRUE))), by = band][order(band)]
+kx_band <- kx_band[segments >= 100]
+kx_band[, label := ifelse(band == 10, "10+", sprintf("%d-%d", band, band + 1))]
+kx_band[, label := factor(label, levels = label)]
+seen_tab <- kx_reads[, .N, by = .(seen = pmin(seen, 12L))][order(seen)]
+p_kx1 <- ggplot(seen_tab, aes(seen, N)) + geom_col(fill = "grey50") +
+  scale_x_continuous(breaks = 1:12, labels = c(1:11, "12+")) + scale_y_continuous(labels = comma) +
+  labs(x = "Segments in this run", y = "Concatenated reads", title = "Segments per concatenated read") + theme_bw() + theme(panel.grid.minor = element_blank())
+kx_line <- function(med, lo, hi, ylab, title) {
+  ggplot(kx_band, aes(label, group = 1)) + geom_ribbon(aes(ymin = .data[[lo]], ymax = .data[[hi]]), fill = "#80c1c7") +
+    geom_line(aes(y = .data[[med]]), colour = "#00838f", linewidth = 0.8) + geom_point(aes(y = .data[[med]]), colour = "#00838f", size = 1.5) +
+    expand_limits(y = 0) + labs(x = "Segment's start in its concatenated read (kb)", y = ylab, title = title) +
+    theme_bw() + theme(panel.grid.minor = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+}
+p_kx2 <- kx_line("np_med", "np_q25", "np_q75", "Pass count (np)", "Pass count by start position")
+p_kx3 <- kx_line("qv_med", "qv_q25", "qv_q75", "Read quality (QV)", "Read quality by start position")
+p_kx <- patchwork::wrap_plots(p_kx1, p_kx2, p_kx3, nrow = 1) + patchwork::plot_annotation(
+  title = "Kinnex segments in their concatenated reads",
+  subtitle = sprintf("%s segments from %s concatenated reads (median %s segments per read in this run)\nIn the %s concatenated reads with 2+ segments here, all segments share one pass count in %s and one read quality in %s\nLines = median, bands = middle 50%% of segments; start bands with under 100 segments left out",
+                     comma(nrow(kx)), comma(nrow(kx_reads)), stats::median(kx_reads$seen), comma(nrow(kx_multi)), percent(kx_same_np, 0.1), percent(kx_same_rq, 0.1)))
+print(p_kx); save_plot(p_kx, file.path(plots_dir, "kinnex_segments.png"), 14, 5)
+kinnex_summary <- data.frame(segments = nrow(kx), concatenated_reads = nrow(kx_reads), median_segments_per_read = stats::median(kx_reads$seen),
+                             reads_with_2plus_segments = nrow(kx_multi), share_same_np = kx_same_np, share_same_rq = kx_same_rq)
+kinnex_by_start <- as.data.frame(kx_band[, .(start_kb = label, segments, np_median = np_med, qv_median = qv_med)])
+rm(kx, kx_reads, kx_multi); invisible(gc())
+timings["Kinnex segments"] <- proc.time()["elapsed"] - .t
 ```
 
 ---
@@ -414,8 +461,9 @@ module1_output <- list(sequences = seq, file_details = file_details, stage_count
 dir.create(dirname(output_path), showWarnings = FALSE)
 save(module1_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
 }
-write_excel_function(list(file_details = file_details, stage_counts = stage_counts, qc_summary = qc_summary,
-                          pacbio_summary = pacbio_summary, trim_summary = trim_summary), xlsx_path)
+write_excel_function(c(list(file_details = file_details, stage_counts = stage_counts, qc_summary = qc_summary,
+                          pacbio_summary = pacbio_summary, trim_summary = trim_summary),
+                     if (exists("kinnex_summary")) list(kinnex_segments = kinnex_summary, kinnex_by_start = kinnex_by_start)), xlsx_path)
 ```
 
 **`r length(seq)`** samples and **`r comma(sum(stage_counts$final))`** reads passed to Module 2.
