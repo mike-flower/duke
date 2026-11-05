@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.11"
+duke_version <- "3.3.12"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -169,7 +169,29 @@ stored_hash <- function(path) {
   obj$hash %||% NA_character_
 }
 
+# Warnings raised while a module renders (outside what its report shows) are written to
+# the log as they happen, each different message once with the module it came from, and
+# counted at the end of the run. Without this R prints only "There were N warnings" when
+# the run ends, with no message and no module.
+.warn_log <- new.env()
+with_warning_log <- function(where, expr) {
+  withCallingHandlers(expr, warning = function(w) {
+    msg <- gsub("\\s+", " ", trimws(conditionMessage(w)))
+    cl <- conditionCall(w); cl <- if (is.null(cl)) "" else paste(deparse(cl, nlines = 1L), collapse = "")
+    if (startsWith(cl, "withCallingHandlers(")) cl <- ""
+    key <- paste(where, msg, sep = "\r")
+    n <- .warn_log$counts[[key]] %||% 0L
+    if (n == 0L) {
+      cat(sprintf("  Warning (%s): %s%s\n", where, msg, if (nzchar(cl)) sprintf("  [in %s]", substr(cl, 1, 120)) else ""))
+      .warn_log$first <- rbind(.warn_log$first, data.frame(where = where, message = msg, call = cl, stringsAsFactors = FALSE))
+    }
+    .warn_log$counts[[key]] <- n + 1L
+    invokeRestart("muffleWarning")
+  })
+}
+
 run_duke <- function(user_params, duke_root = getwd()) {
+  .warn_log$counts <- list(); .warn_log$first <- NULL
   duke_root <- normalizePath(duke_root)
   setwd(duke_root)
   # Reports use en dashes and other non-ASCII text; under a non-UTF-8 locale (e.g. "C" on
@@ -216,7 +238,7 @@ run_duke <- function(user_params, duke_root = getwd()) {
 
   results_dir <- file.path(p$dir_out, "module_data")
   dir.create(results_dir, showWarnings = FALSE)
-  reused <- if (!is.na(p$reuse_from %||% NA)) reuse_earlier_run(p, hashes, results_dir) else character(0)
+  reused <- if (!is.na(p$reuse_from %||% NA)) with_warning_log("reuse", reuse_earlier_run(p, hashes, results_dir)) else character(0)
   # redraw needs saved results made with the current settings: checked before any module
   # runs, so a long job does not stop hours in
   for (m in setdiff(as.character(p$redraw), "7")) {
@@ -277,10 +299,10 @@ run_duke <- function(user_params, duke_root = getwd()) {
     # so two runs rendering the same module at once could delete each other's figures.
     work_dir <- file.path(p$dir_out, "temp", paste0("render_", m))
     dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
-    rmarkdown::render(file.path(duke_root, "modules", .module_files[[m]]), output_dir = p$dir_out,
+    with_warning_log(paste("Module", m), rmarkdown::render(file.path(duke_root, "modules", .module_files[[m]]), output_dir = p$dir_out,
                       intermediates_dir = work_dir,
                       envir = list2env(list(params = p), parent = globalenv()),
-                      knit_root_dir = duke_root, quiet = TRUE)
+                      knit_root_dir = duke_root, quiet = TRUE))
     unlink(c(work_dir, file.path(p$dir_out, paste0(tools::file_path_sans_ext(.module_files[[m]]), "_files"))), recursive = TRUE)
     # After a redraw the version line keeps the version that made the results; the hash
     # takes the current plot choice, as the figures now follow it
@@ -294,15 +316,22 @@ run_duke <- function(user_params, duke_root = getwd()) {
   for (m in setdiff(names(.module_data), current))
     if (identical(.data_hash(stored_hash(file.path(results_dir, .module_data[[m]]))), .data_hash(hashes[[m]]))) current <- c(current, m)
   p$current_modules <- current
-  rs <- tryCatch(write_run_summary(p), error = function(e) { cat("\nRun summary not written:", conditionMessage(e), "\n"); NULL })
+  rs <- tryCatch(with_warning_log("run summary", write_run_summary(p)), error = function(e) { cat("\nRun summary not written:", conditionMessage(e), "\n"); NULL })
   if (!is.null(rs)) cat("\nRun summary: run_summary.xlsx (one row per sample, from every module)\n")
-  ix <- tryCatch(write_run_index(p, rs), error = function(e) { cat("\n00_index.html not written:", conditionMessage(e), "\n"); NULL })
+  ix <- tryCatch(with_warning_log("index", write_run_index(p, rs)), error = function(e) { cat("\n00_index.html not written:", conditionMessage(e), "\n"); NULL })
   if (!is.null(ix)) cat("Index:       00_index.html (links every report, table and figure)\n")
 
   if (isTRUE(p$remove_temp)) {
     td <- file.path(p$dir_out, "temp")
     if (dir.exists(td)) { unlink(td, recursive = TRUE); cat("\nRemoved temp/\n") }
   }
+  if (length(.warn_log$counts)) {
+    w <- .warn_log$first
+    w$times <- unlist(.warn_log$counts[paste(w$where, w$message, sep = "\r")])
+    utils::write.table(w, file.path(log_dir, paste0("warnings-", stamp, ".tsv")), sep = "\t", row.names = FALSE, quote = FALSE)
+    cat(sprintf("\nWarnings: %d (%d different), each shown above where it happened; listed in %s\n", sum(w$times), nrow(w), file.path(log_dir, paste0("warnings-", stamp, ".tsv"))))
+    for (i in seq_len(nrow(w))) cat(sprintf("  %s, %d x: %s\n", w$where[i], w$times[i], substr(w$message[i], 1, 200)))
+  } else cat("\nWarnings: none\n")
   cat("\n=================================================================\n")
   cat("Finished:", format(Sys.time()), " Total:", format_elapsed(as.numeric(difftime(Sys.time(), start, units = "secs"))), "\n")
   cat("Reports:  ", paste(list.files(p$dir_out, pattern = "\\.html$"), collapse = ", "), "\n")

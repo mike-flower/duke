@@ -557,7 +557,7 @@ for (pr in pairs) {
       n_g <- uniqueN(tg$group_label); nc <- min(4, n_g)
       p <- ggplot(tg, aes(a, b, fill = share)) + geom_tile() + scale_share +
         facet_wrap(~ group_label, ncol = nc, labeller = as_labeller(function(x) wrap_label(display_group(x), 40))) +
-        coord_cartesian(xlim = xl, ylim = yl) +
+        coord_cartesian(xlim = xl, ylim = yl) + scale_x_continuous(breaks = function(l) pretty(l, n = 10)) + scale_y_continuous(breaks = function(l) pretty(l, n = 10)) +
         labs(x = paste(A, "length (repeat units)"), y = paste(B, "length (repeat units)"),
              title = sprintf("%s against %s, every %s: by group", B, A, if (u == "reads") "read" else "molecule"),
              subtitle = sprintf("Each panel pools a group's %s; colour = share of them at each pair of lengths (log scale)\nAll lengths; the top 0.1%% of each axis is not drawn", what)) +
@@ -579,7 +579,7 @@ for (pr in pairs) {
                             levels = unique(paste0(lab_m[ord], ifelse(is.na(ts$time[match(ord, ts$file_stem)]), "", paste0(" (t=", ts$time[match(ord, ts$file_stem)], ")")))))]
       ns <- uniqueN(ts$sample); nc <- min(4, ns)
       p <- ggplot(ts, aes(a, b, fill = share)) + geom_tile() + scale_share + facet_wrap(~ sample, ncol = nc) +
-        coord_cartesian(xlim = xl, ylim = yl) +
+        coord_cartesian(xlim = xl, ylim = yl) + scale_x_continuous(breaks = function(l) pretty(l, n = 10)) + scale_y_continuous(breaks = function(l) pretty(l, n = 10)) +
         labs(x = paste(A, "length (repeat units)"), y = paste(B, "length (repeat units)"),
              title = sprintf("%s: %s against %s, every %s", display_group(g), B, A, if (u == "reads") "read" else "molecule"),
              subtitle = sprintf("One panel per sample, in time order; colour = share of the sample's %s at each pair of lengths (log scale)", what)) +

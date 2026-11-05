@@ -392,7 +392,8 @@ reads_per_sample,1,run,FALSE,TRUE,Reads per sample at each import step
 read_length_distribution,1,run,FALSE,TRUE,Read length distribution pooled and per sample
 quality_vs_length,1,run,FALSE,TRUE,Mean base quality against read length per sample
 pacbio_np_rq,1,run,FALSE,TRUE,PacBio pass count and read quality per sample
-pacbio_np_vs_length,1,run,FALSE,TRUE,PacBio pass count against read length (tile plot of every read)
+pacbio_np_distribution,1,run,FALSE,TRUE,PacBio pass count of every read: share at each pass count with the cap marked; short and long reads compared
+pacbio_np_vs_length,1,run,FALSE,TRUE,PacBio pass count against read length: median and middle 50% and 80% of reads per length band; share at the cap
 adapter_trimming,1,run,FALSE,TRUE,Adapter trimming outcome
 read_accounting,2,run,FALSE,TRUE,Reads kept at each alignment step
 flank_boundary_shortfall,2,run,FALSE,TRUE,Flank alignments that stop short of the repeat

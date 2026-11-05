@@ -164,46 +164,98 @@ print(p_pacbio)
 save_plot(p_pacbio, file.path(plots_dir, "pacbio_np_rq.png"), 10, 5)
 ```
 
-## Pass count against read length
+## Pass count
 
-Every read is counted (no subsampling). Each column is a band of read lengths, and its tiles are coloured by the share of **that band's** reads at each pass count, so every column shows its own pass-count distribution however many reads it holds (colouring by read numbers instead makes each column one flat colour, set by how common that length is). The white points are each band's median pass count, with bars from the 25th to the 75th percentile, for bands holding at least 0.5% of the reads; the bar on top gives how many reads each band holds, and bands with fewer than 0.1% of the reads are left uncoloured, as a handful of reads gives no distribution. Longer inserts take longer to read, so fewer passes fit in the movie: a downward trend is expected, and the step between the short and the long reads shows how many fewer passes an expanded allele gets than a short one. A bright row at the top is PacBio's cap on the reported pass count. The shortest and longest 0.5% of reads are left out of the plot so it is not stretched by a few stray lengths.
+**np** is the number of times the polymerase went round the circular molecule; the HiFi read is the consensus of those passes, so more passes give a more accurate read. PacBio reports np only up to a cap (on Revio, 60): a read with 60 or more passes is reported as 60, so the reads at the cap form a single bar, not a real peak.
 
-```{r pacbio_np_length, eval=any_pacbio, fig.height=6.5}
+```{r pacbio_np_setup, eval=any_pacbio}
 np_len <- rbindlist(lapply(names(read_metadata), function(fs) {
-  data.table(np = read_metadata[[fs]]$np[match(names(seq[[fs]]), read_metadata[[fs]]$read_name)], read_length = width(seq[[fs]]))
+  md <- read_metadata[[fs]]
+  data.table(np = md$np[match(names(seq[[fs]]), md$read_name)], read_length = width(seq[[fs]]), file_stem = fs)
 }))[!is.na(np)]
-xr <- stats::quantile(np_len$read_length, c(0.005, 0.995))
-bw <- max(1, signif(diff(xr) / 80, 1))
-n_np_all <- nrow(np_len)
-np_len <- np_len[read_length >= xr[1] & read_length <= xr[2]][, len_bin := floor(read_length / bw) * bw + bw / 2]
-np_tab <- np_len[, .(reads = .N), by = .(len_bin, np)][, share := reads / sum(reads), by = len_bin]
-# A band holding only a handful of reads gives shares of 50-100% from single reads, which would
-# dominate the colour scale, so only bands holding at least 0.1% of the reads (and 20) are coloured
-band_n <- np_tab[, .(n = sum(reads)), by = len_bin][n >= max(20, 0.001 * nrow(np_len))]
-np_tab_c <- np_tab[len_bin %in% band_n$len_bin]
-share_top <- max(stats::quantile(np_tab_c$share, 0.99), 0.01)
-np_med <- np_len[, .(np = as.numeric(stats::median(np)), q25 = as.numeric(stats::quantile(np, 0.25)), q75 = as.numeric(stats::quantile(np, 0.75)), n = .N),
-                 by = len_bin][n >= max(20, 0.005 * nrow(np_len))][order(len_bin)]
 np_max <- max(np_len$np); at_max <- mean(np_len$np == np_max)
-p_np_main <- ggplot(np_tab_c, aes(len_bin, np)) + geom_tile(aes(fill = share), width = bw, height = 1) +
-  geom_errorbar(data = np_med, aes(ymin = q25, ymax = q75), width = bw * 0.6, colour = "white", linewidth = 0.4) +
-  geom_point(data = np_med, shape = 21, fill = "white", colour = "black", size = 2) +
-  scale_fill_viridis_c(limits = c(0, share_top), oob = scales::squish, labels = pct_axis(), name = "Share of the\nlength band's\nreads") +
-  scale_x_continuous(labels = comma, limits = range(np_tab$len_bin) + c(-bw, bw) / 2, expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) +
-  labs(x = "Read length (bp)", y = "Pass count (np)") + theme_bw()
-len_tot <- np_tab[, .(reads = sum(reads)), by = len_bin]
-p_np_top <- ggplot(len_tot, aes(len_bin, reads)) + geom_col(width = bw, fill = "grey50") +
-  scale_x_continuous(limits = range(np_tab$len_bin) + c(-bw, bw) / 2, expand = c(0, 0)) + scale_y_log10(labels = comma) +
-  labs(x = NULL, y = "Reads\n(log)") + theme_bw() + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
-p_np_len <- patchwork::wrap_plots(p_np_top, p_np_main, ncol = 1, heights = c(1, 3.2)) +
+# Kinnex (skera) reads are segments of one long concatenated HiFi read, and every segment
+# carries the pass count of that whole read, so np says nothing about the segment's own length
+# (skera names each segment <movie>/<zmw>/ccs/<start>_<end>, the position within the long read)
+seg_share <- mean(grepl("/ccs(/[a-z]+)?/[0-9]+_[0-9]+$", unlist(lapply(seq, names), use.names = FALSE)))
+# (or, failing that, the files are named as skera output)
+segmented <- seg_share > 0.5 || all(grepl("skera", file_details$file_name[file_details$include], ignore.case = TRUE))
+```
+
+`r if (any_pacbio && segmented) sprintf("**These reads are Kinnex (skera) segments.** They were cut from longer concatenated HiFi reads (%s of the read names give the segment's position in its long read), and each segment carries the pass count of the whole concatenated read. np therefore depends on how long the array was, not on the length of the amplicon, and short and long reads are expected to have the same pass counts.", percent(seg_share, 1)) else ""`
+
+### Pass count distribution
+
+**How to read this.** Every read, all samples pooled: the grey bars are the share of reads with each pass count, and the orange bar at `r if (any_pacbio) np_max else "the cap"` holds every read with that many passes or more. The two lines split the reads at the median read length into shorter and longer reads, each scaled to its own total, so a difference in pass count between short and long reads (for example between the normal and the expanded allele) shows as a gap between the lines.
+
+```{r pacbio_np_hist, eval=any_pacbio, fig.height=5}
+# Reads shorter and longer than the median read length (a split at the median keeps every read
+# in one half, even when most reads share one length)
+cut_len <- stats::median(np_len$read_length)
+np_len[, third := data.table::fifelse(read_length <= cut_len, "short", "long")]
+if (uniqueN(np_len$third) < 2) np_len[, third := data.table::fifelse(read_length < cut_len, "short", "long")]
+lab_short <- sprintf("Shorter reads (up to %s bp)", comma(max(np_len[third == "short", read_length])))
+lab_long <- sprintf("Longer reads (%s bp and over)", comma(min(np_len[third == "long", read_length])))
+h_all <- np_len[, .N, by = np][, share := N / sum(N)][order(np)][, cap := np == np_max]
+h_thr <- np_len[, .N, by = .(third, np)][, share := N / sum(N), by = third][order(third, np)]
+h_thr[, third := factor(ifelse(third == "short", lab_short, lab_long), levels = c(lab_short, lab_long))]
+med <- np_len[, .(m = as.numeric(stats::median(np))), by = third]
+p_np_h <- ggplot(h_all, aes(np, share)) + geom_col(aes(fill = cap), width = 0.9) +
+  geom_step(data = h_thr, aes(colour = third), direction = "mid", linewidth = 0.6) +
+  geom_text(data = h_all[cap == TRUE], aes(label = sprintf("%s of reads at %d\n(%d or more passes)", percent(share, 0.1), np_max, np_max)), hjust = 1.08, vjust = 1, size = 3.2, colour = "#d95f02", lineheight = 0.9) +
+  scale_fill_manual(values = c(`FALSE` = "grey70", `TRUE` = "#d95f02"), guide = "none") +
+  scale_colour_manual(values = setNames(c("#1f78b4", "#6a3d9a"), c(lab_short, lab_long)), name = NULL) +
+  scale_x_continuous(breaks = seq(0, np_max, 5), expand = expansion(add = 0.6)) +
+  scale_y_continuous(labels = pct_axis(), expand = expansion(mult = c(0, 0.15))) +
+  labs(x = "Pass count (np)", y = "Share of reads", title = "PacBio pass count, every read",
+       subtitle = sprintf("%s reads, all samples; median %s passes (shorter reads %s, longer reads %s); %s at the cap of %d\nLines: the reads shorter and longer than the median read length, each as a share of its own reads",
+                          comma(nrow(np_len)), stats::median(np_len$np), med[third == "short", m], med[third == "long", m], percent(at_max, 0.1), np_max)) +
+  theme_bw() + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+print(p_np_h); save_plot(p_np_h, file.path(plots_dir, "pacbio_np_distribution.png"), 10, 5)
+```
+
+### Pass count against read length
+
+**How to read this.** The x-axis is the read length, in bands of a few bases. **Top:** how many reads fall in each band (log scale). **Middle:** the spread of pass counts within each band: the line is the median read, the dark band the middle 50% of reads and the light band the middle 80%; a band reaching the dashed line at `r if (any_pacbio) np_max else "the cap"` holds reads at the cap. **Bottom:** the share of each band's reads at the cap. Bands with fewer than 100 reads are left out. The shortest and longest 0.5% of reads are not drawn, so a few stray lengths do not stretch the axis.
+
+**What it shows.** Whether longer reads got fewer passes. For a single amplicon per HiFi read, fewer passes fit in the run time for a longer insert, so the median and the share at the cap fall with length, and the expanded allele is read less accurately than the normal one. `r if (any_pacbio && segmented) "For Kinnex segments (as here) the lines should be flat, because every segment carries the pass count of the whole concatenated read." else ""`
+
+```{r pacbio_np_length, eval=any_pacbio, fig.height=7}
+xr <- stats::quantile(np_len$read_length, c(0.005, 0.995))
+bw <- max(1, signif(diff(xr) / 100, 1))
+n_np_all <- nrow(np_len)
+np_in <- np_len[read_length >= xr[1] & read_length <= xr[2]][, len_bin := floor(read_length / bw) * bw + bw / 2]
+np_q <- np_in[, .(n = .N, q10 = as.numeric(stats::quantile(np, 0.1)), q25 = as.numeric(stats::quantile(np, 0.25)), med = as.numeric(stats::median(np)),
+                  q75 = as.numeric(stats::quantile(np, 0.75)), q90 = as.numeric(stats::quantile(np, 0.9)), cap = mean(np == np_max)), by = len_bin][order(len_bin)]
+# Bands with too few reads are drawn as gaps, so lines do not join distant lengths
+np_q <- np_q[data.table(len_bin = seq(min(np_q$len_bin), max(np_q$len_bin), by = bw)), on = "len_bin"]
+np_q[is.na(n) | n < 100, c("q10", "q25", "med", "q75", "q90", "cap") := NA_real_]
+# The axis covers the bands with enough reads to draw
+x_lim <- range(np_q[!is.na(med), len_bin]) + c(-bw, bw) / 2
+np_q <- np_q[len_bin >= x_lim[1] & len_bin <= x_lim[2]]
+x_brk <- scales::breaks_pretty(n = 15)(x_lim)
+x_scale <- function(lab = TRUE) scale_x_continuous(limits = x_lim, breaks = x_brk, labels = if (lab) comma else NULL, expand = c(0, 0))
+p_np_top <- ggplot(np_q[!is.na(n) & n > 0], aes(len_bin, n)) + geom_col(width = bw, fill = "grey50") + x_scale(FALSE) + scale_y_log10(labels = comma) +
+  labs(x = NULL, y = "Reads\n(log)") + theme_bw() + theme(panel.grid.minor = element_blank())
+p_np_mid <- ggplot(np_q, aes(len_bin)) +
+  geom_ribbon(aes(ymin = q10, ymax = q90), fill = "#cce6e8") + geom_ribbon(aes(ymin = q25, ymax = q75), fill = "#80c1c7") +
+  geom_line(aes(y = med), colour = "#00838f", linewidth = 0.8) + geom_point(aes(y = med), colour = "#00838f", size = 0.7) +
+  geom_hline(yintercept = np_max, linetype = "dashed", colour = "#d95f02") +
+  annotate("text", x = x_lim[2], y = np_max, label = sprintf("cap: %d or more passes", np_max), hjust = 1.02, vjust = -0.4, size = 3, colour = "#d95f02") +
+  x_scale(FALSE) + scale_y_continuous(limits = c(0, np_max * 1.08), breaks = seq(0, np_max, 10)) +
+  labs(x = NULL, y = "Pass count (np)\nline = median; bands = middle\n50% and 80% of reads") + theme_bw() + theme(panel.grid.minor = element_blank())
+p_np_cap <- ggplot(np_q, aes(len_bin, cap)) + geom_line(colour = "#d95f02", linewidth = 0.7) +
+  x_scale(TRUE) + scale_y_continuous(labels = pct_axis(), limits = c(0, 1), breaks = c(0, 0.5, 1)) +
+  labs(x = "Read length (bp)", y = sprintf("Reads at\nthe cap (%d)", np_max)) + theme_bw() + theme(panel.grid.minor = element_blank())
+p_np_len <- patchwork::wrap_plots(p_np_top, p_np_mid, p_np_cap, ncol = 1, heights = c(1, 3, 1.1)) +
   patchwork::plot_annotation(title = "PacBio pass count against read length",
-    subtitle = sprintf("%s of %s reads (the shortest and longest 0.5%% left out); length bands %s bp wide\nPoints = median pass count, bars = 25th to 75th percentile%s",
-                       comma(nrow(np_len)), comma(n_np_all), comma(bw),
-                       if (at_max > 0.02) sprintf("; %s of reads have the highest pass count, %d (likely the instrument's cap)", percent(at_max, 0.1), np_max) else ""))
+    subtitle = sprintf("%s of %s reads; length bands %s bp wide\nThe shortest and longest 0.5%% of reads, and bands with under 100 reads, are not drawn%s",
+                       comma(nrow(np_in)), comma(n_np_all), comma(bw), if (segmented) "\nKinnex (skera) segments: each carries the pass count of its whole concatenated read" else ""))
 print(p_np_len)
-save_plot(p_np_len, file.path(plots_dir, "pacbio_np_vs_length.png"), 10, 6.5)
+save_plot(p_np_len, file.path(plots_dir, "pacbio_np_vs_length.png"), 10, 7)
+np_tab <- np_in[, .(reads = .N), by = .(len_bin, np)][, share := reads / sum(reads), by = len_bin]
 fwrite(np_tab[order(len_bin, np)], file.path(dirname(plots_dir), "pacbio_np_by_length.tsv"), sep = "\t")
-rm(np_len); invisible(gc())
+rm(np_len, np_in); invisible(gc())
 ```
 
 ---
