@@ -174,7 +174,7 @@ process_sample_alignment <- function(sample, reads, ref, out_dir, minimap2_args,
     manually_excluded = n_excl, final = nrow(tab)),
     strand = data.frame(file_stem = sample, ref_id = ref$ref_id, reverse_left = rev_left, reverse_right = rev_right,
                         reverse_both = rev_both, reverse_final = if (nrow(tab)) mean(rev) else NA_real_))
-  save(result, file = cache)
+  unlink(cache); save(result, file = cache)   # a new file: a cache may be linked to an earlier run's
   result
 }
 

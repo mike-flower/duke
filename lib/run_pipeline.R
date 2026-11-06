@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.15"
+duke_version <- "3.3.16"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -117,16 +117,19 @@ module_hashes <- function(p) {
   if (!isTRUE(ok)) ok <- file.copy(from, to, overwrite = TRUE, copy.date = TRUE)
   isTRUE(ok)
 }
-# Copies a file or folder into a folder, keeping its dates. The system's cp is used: R's
-# file.copy() handles a folder one file at a time and was many times slower on Myriad's
-# Scratch (about 20 minutes for the full jasmine run's report folders and caches, where cp
-# took well under a minute). Falls back to file.copy() where cp is not available.
-.copy_into <- function(from, to_dir) {
-  if (!length(from)) return(TRUE)
-  ok <- tryCatch(suppressWarnings(system2("cp", c("-a", shQuote(from), shQuote(to_dir)), stdout = FALSE, stderr = FALSE)) == 0,
-                 error = function(e) FALSE)
-  if (!isTRUE(ok)) ok <- all(file.copy(from, to_dir, recursive = TRUE, overwrite = TRUE, copy.date = TRUE))
-  isTRUE(ok)
+# A module's caches (temp/m<module>_<hash>/) are linked in the same way: a cache file is only
+# ever written as a new file (Duke deletes any old one first), so the earlier run's cache
+# cannot be changed through the link. Anything else in the folder (working files left by a run
+# that stopped part-way) is copied. Linking moves no data, so it does not depend on how busy
+# the file system is: on the full jasmine run, copying the caches (about 560 MB) took up to
+# 12 minutes when Myriad's Scratch was busy.
+.link_cache_dir <- function(from, to_parent) {
+  to <- file.path(to_parent, basename(from))
+  for (d in c(to, file.path(to, list.dirs(from, full.names = FALSE, recursive = TRUE)))) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  f <- list.files(from, recursive = TRUE, all.files = TRUE, no.. = TRUE)
+  ok <- vapply(f, function(x) if (grepl("\\.RData$", x)) .link_or_copy(file.path(from, x), file.path(to, x))
+               else isTRUE(file.copy(file.path(from, x), file.path(to, x), overwrite = TRUE, copy.date = TRUE)), TRUE)
+  all(ok)
 }
 reuse_earlier_run <- function(p, hashes, results_dir) {
   src <- normalizePath(p$reuse_from, mustWork = FALSE)
@@ -164,10 +167,12 @@ reuse_earlier_run <- function(p, hashes, results_dir) {
   for (m in names(plan)) {
     stem <- tools::file_path_sans_ext(.module_files[[m]])
     unlink(c(file.path(p$dir_out, stem), file.path(p$dir_out, paste0(stem, ".html"))), recursive = TRUE)
-    if (dir.exists(file.path(src, stem)) && !.copy_into(file.path(src, stem), p$dir_out)) stop("reuse_from: could not copy ", file.path(src, stem))
-    if (file.exists(file.path(src, paste0(stem, ".html")))) .copy_into(file.path(src, paste0(stem, ".html")), p$dir_out)
+    if (dir.exists(file.path(src, stem))) file.copy(file.path(src, stem), p$dir_out, recursive = TRUE, copy.date = TRUE)
+    if (file.exists(file.path(src, paste0(stem, ".html")))) file.copy(file.path(src, paste0(stem, ".html")), p$dir_out, overwrite = TRUE, copy.date = TRUE)
     tmp <- list.files(file.path(src, "temp"), pattern = paste0("^m", m, "_", .data_hash(hashes[[m]])), full.names = TRUE)
-    if (length(tmp)) { dir.create(file.path(p$dir_out, "temp"), showWarnings = FALSE); .copy_into(tmp, file.path(p$dir_out, "temp")) }
+    tmp <- tmp[dir.exists(tmp)]
+    if (length(tmp)) { dir.create(file.path(p$dir_out, "temp"), showWarnings = FALSE)
+      for (t in tmp) if (!.link_cache_dir(t, file.path(p$dir_out, "temp"))) stop("reuse_from: could not copy ", t) }
     if (!.link_or_copy(plan[[m]], file.path(results_dir, .module_data[[m]]))) stop("reuse_from: could not copy ", plan[[m]])
     v <- .hash_version(plan[[m]]); dv <- .hash_drawn(plan[[m]])
     # The current hash, so the module is skipped; the version lines keep the version that made

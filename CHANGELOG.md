@@ -2,6 +2,12 @@
 
 Newest first. The [README](README.md) describes the current version.
 
+## v3.3.16 – reuse links the caches; copying back in R
+
+- `reuse_from`: each reused module's caches (`temp/m<module>_<hash>/`, about 560 MB on the full jasmine run, mostly Module 2's alignment caches) are now hard-linked like its saved data, instead of copied. A cache file is only ever written as a new file (Duke now deletes any old one before saving), so the earlier run's caches cannot be changed through the link; other working files in the folder are copied. Linking moves no data, so it does not depend on how busy the file system is: with Myriad's Scratch busy, copying Module 2's 435 MB cache took 12.5 minutes.
+- README reviewed throughout: the reuse section now sets out what is linked and what is copied, and how long it takes; *Common workflows* says how to run after a Duke update (which modules to reuse and redraw, and typical times); Module 1's description mentions the Kinnex QC. The parameter tables and `scripts/duke_run.R` / `duke_run_local.R` were checked against `lib/params.R` (112 parameters) and are unchanged.
+- The output folders and reports are copied with R again. v3.3.15 used the system's `cp`, expecting it to be faster, but on the busy Scratch it was no faster (the one test that suggested otherwise ran on the login node and was not a like-for-like comparison), and R keeps Duke the same on every system.
+
 ## v3.3.15 – faster reuse copying; index count and bar
 
 - `reuse_from`: each reused module's output folder, report and caches are now copied with the system's `cp -a` instead of R's `file.copy()`, which handles a folder one file at a time. On the full jasmine run on a weekday morning, copying them (about 1.3 GB) took about 20 minutes, where `cp -a` copied the largest module's folder (275 MB) in 23 seconds at the same time of day. The copy is the same full copy as before (the saved data are still hard-linked), so the earlier folder is untouched as before. Where `cp` fails or is not available, R's copy is used. The v3.3.13 and v3.3.14 notes on how long reuse takes were from quiet evening runs and are corrected here: with R's copy it took from seconds to about 20 minutes, depending on how busy Scratch was.

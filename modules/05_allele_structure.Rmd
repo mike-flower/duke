@@ -116,7 +116,7 @@ clusters <- rbindlist(apply_fn(names(per_sample), function(s) {
     rc[!is.finite(d$length)] <- NA_integer_   # no tract in this read: R0, as without UMIs
   }
   res <- cbind(d[, .(file_stem, qname)], cluster_sample(as.data.frame(d), params, rc = rc))
-  save(res, file = cache); res
+  unlink(cache); save(res, file = cache); res   # a new file: a cache may be linked to an earlier run's
 }))
 d_all <- clusters[d_all, on = .(file_stem, qname)]
 # Reads where no tract was found have no length to cluster on; they are counted
@@ -257,7 +257,7 @@ cons <- rbindlist(apply_fn(seq_len(nrow(keys)), function(i) {
   res <- data.table(file_stem = s, cluster_number = k, reads_for_consensus = cm$n,
                     consensus_left = cl$consensus, consensus_mid = cm$consensus, consensus_right = cr$consensus,
                     minor_left = list(cl$minor), minor_right = list(cr$minor))
-  save(res, file = cache); res
+  unlink(cache); save(res, file = cache); res   # a new file: a cache may be linked to an earlier run's
 }))
 cons <- cluster_summary[, .(file_stem, cluster_number, allele, reads, proportion, molecules, molecule_proportion, modal_length)][cons, on = .(file_stem, cluster_number)]
 setorder(cons, file_stem, allele)
