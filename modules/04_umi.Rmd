@@ -705,6 +705,12 @@ dt_compact(manifest, caption = sprintf("module4_output – %s on disk", format_s
 
 # Session info
 
+The versions of R and of every package that made this report, to trace any difference between runs (e.g. on another computer or after a package update).
+
+<details><summary>Show R and package versions</summary>
+
 ```{r session_info}
 sessionInfo()
 ```
+
+</details>

@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.13** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+**v3.3.14** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 **New to Duke?** Read [What Duke does](#what-duke-does), then follow [Installation](#installation) and [Quick start](#quick-start). The rest of this page is reference: look things up as you need them.
 
@@ -129,7 +129,7 @@ You need a folder of reads (one BAM, FASTQ or FASTA file per sample) and a refer
 **1. A first look, without a settings file.** Write each run to a new folder, named with the Duke version, so earlier results are kept.
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.13 --path_ref www/HTTset20_cagcaa.fasta --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.14 --path_ref www/HTTset20_cagcaa.fasta --threads 8
 ```
 
 Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus sequences and variants. Without a settings file every module runs except Module 6. Open `00_index.html` in the output folder: Modules 1 and 2 show whether the reads and alignment are good, and the Module 3 and Module 7 length plots show where each sample's alleles are, so where to put the ranges.
@@ -139,7 +139,7 @@ Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus se
 **3. Run again with the settings file**, into the same folder:
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.13 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.14 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
 ```
 
 [Resume](#resume) keeps Modules 1–5, as nothing that affects them changed, and runs Modules 6 and 7. Edit the settings and run again as often as needed.
@@ -203,7 +203,7 @@ Rows whose file is not in `dir_data` are ignored, so one platemap-wide settings 
 
 ## Output files
 
-Open **`00_index.html`** first: it links every report, table and figure, by sample, range and group. **`run_summary.xlsx`** has one row per sample with the results of every module.
+Open **`00_index.html`** first: it links every report, table and figure, by sample, range and group. Figures are laid out as grids: what varies (the sample, group, measure or range) down the side, and the plot type, measure and unit across the top, with each figure a *view* button coloured by unit (indigo reads + molecules, grey reads, teal molecules). *Samples* is one grid, one row per sample. *Ranges* has one card per range, folded until clicked, with its timecourses and tract comparisons by measure and its group figures by group; *Groups* has one card per group, with all lengths and each range down the side. Where a range is set differently for different samples, the card lists each setting with its number of samples, and a group's card gives that group's own. The search box at the top keeps only the figures whose file names contain every word typed (e.g. `range03 molecules`, or part of a group name), and opens the cards that hold them. **`run_summary.xlsx`** has one row per sample with the results of every module. Each module's report ends with its session info (the versions of R and of every package used), folded until clicked.
 
 ```
 result_duke/
@@ -290,7 +290,6 @@ Every saved figure is named **`{plot type}_{sample, group or measure}_{measure}_
 | `group_density` | 7 | one per group | yes | yes | A group's samples as ridges (all lengths and each range) |
 | `group_histogram` | 7 | one per group | yes | yes | A group's samples as histograms (all lengths and each range) |
 | `sample_ranges` | 7 | one per sample | yes | yes | One sample's length in every range |
-| `kinnex_position` | 7 | one for the run | – | yes | Kinnex reads only: the share of long segments (20+ units above the sample's median) by the segment's order within its concatenated read, and the repeat length by start position, with a test of whether the long segment comes first |
 | `sample_card` | 7 | one per sample | yes | yes | One sample's every measure (all lengths and the ranges drawn in the report) |
 | `sample_density` | 7 | one per sample | yes | no | One sample's ridge for all lengths and each range (one file each) |
 | `sample_histogram` | 7 | one per sample | yes | no | One sample's histogram for all lengths and each range (one file each) |
@@ -692,7 +691,7 @@ tail -f ~/Scratch/bin/duke/logs/duke_<job id>.out
 
 Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's messages go to the run log only; warnings go to both, labelled with their module, and are counted at the end of the run. Loading R on a compute node can take a few minutes before the first Duke line appears, and new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file. `qstat -j <id> | grep usage` shows CPU time and memory so far, `qdel <id>` stops a job and `qacct -j <id>` gives the resources a finished job used. A waiting job's resources can be changed with `qalter`, e.g. `qalter -pe smp 1 -l mem=8G <id>`.
 
-**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.13 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
+**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.14 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
 
 **Other clusters.** `scripts/duke_kathleen.sh` (SGE, `-pe mpi`) and `scripts/duke_kathleen_slurm.sh` (Slurm, `sbatch`; monitor with `squeue -u $USER`, `scancel <id>`, `sacct -j <id>`) ask for one whole node, as Duke cannot spread one run across nodes. A run that fits on Myriad is simplest there.
 

@@ -182,7 +182,7 @@ seg_share <- mean(grepl("/ccs(/[a-z]+)?/[0-9]+_[0-9]+$", unlist(lapply(seq, name
 segmented <- seg_share > 0.5 || all(grepl("skera", file_details$file_name[file_details$include], ignore.case = TRUE))
 ```
 
-`r if (any_pacbio && segmented) sprintf("**These reads are Kinnex (skera) segments.** They were cut from longer concatenated HiFi reads (%s of the read names give the segment's position in its long read), and each segment carries the pass count of the whole concatenated read. Read quality (rq) is shared in the same way. np therefore depends mostly on how long the concatenated read was, not on the length of the amplicon, so short and long reads get much the same pass counts; long segments get slightly fewer, as the concatenated reads that carry them are longer. *Kinnex segments in their concatenated reads*, below, and Module 7 look at a segment's position in its concatenated read.", percent(seg_share, 1)) else ""`
+`r if (any_pacbio && segmented) sprintf("**These reads are Kinnex (skera) segments.** They were cut from longer concatenated HiFi reads (%s of the read names give the segment's position in its long read), and each segment carries the pass count of the whole concatenated read. Read quality (rq) is shared in the same way. np therefore depends mostly on how long the concatenated read was, not on the length of the amplicon, so short and long reads get much the same pass counts; long segments get slightly fewer, as the concatenated reads that carry them are longer. *Kinnex segments in their concatenated reads*, below, shows the pass count and read quality by where segments sit in their concatenated reads.", percent(seg_share, 1)) else ""`
 
 ### Pass count distribution
 
@@ -487,6 +487,12 @@ dt_compact(manifest, caption = sprintf("module1_output – %s on disk", format_s
 
 # Session info
 
+The versions of R and of every package that made this report, to trace any difference between runs (e.g. on another computer or after a package update).
+
+<details><summary>Show R and package versions</summary>
+
 ```{r session_info}
 sessionInfo()
 ```
+
+</details>

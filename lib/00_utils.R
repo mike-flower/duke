@@ -446,7 +446,6 @@ heatmap,7,measure,TRUE,TRUE,Every sample's length distribution (one per measure)
 group_density,7,group,TRUE,TRUE,A group's samples as ridges (all lengths and each range)
 group_histogram,7,group,TRUE,TRUE,A group's samples as histograms (all lengths and each range)
 sample_ranges,7,sample,TRUE,TRUE,One sample's length in every range
-kinnex_position,7,run,FALSE,TRUE,Kinnex reads: allele and repeat length by the segment's position in its concatenated read
 sample_card,7,sample,TRUE,TRUE,One sample's every measure (all lengths and the ranges drawn in the report)
 sample_density,7,sample,TRUE,FALSE,One sample's ridge for all lengths and each range (one file each)
 sample_histogram,7,sample,TRUE,FALSE,One sample's histogram for all lengths and each range (one file each)

@@ -350,59 +350,6 @@ for (s in show_s) {
 timings["Sample cards"] <- proc.time()["elapsed"] - .t
 ```
 
-```{r kinnex_setup, include=FALSE}
-# Kinnex (skera) reads: each is one segment of a longer concatenated HiFi read, and its name
-# gives where in that read it sat. Checked on a sample of names first, so other data cost nothing.
-is_kinnex <- want_plot("kinnex_position", params) && !is.null(kinnex_positions(head(lengths[measure == primary, qname], 5000)))
-```
-
-`r if (is_kinnex) "---\n\n# Position in the concatenated Kinnex read" else ""`
-
-`r if (is_kinnex) "These reads are Kinnex (skera) segments, cut from longer concatenated HiFi reads, and each read's name gives where it sat in its concatenated read. If the concatenation or the sequencing favoured one allele at some positions (for example the expanded allele near one end), the allele shares and repeat lengths in this report would depend on how the segments happened to be arranged. This section tests that on this run's own reads. A segment is counted as **long** when its primary repeat length is at least 20 units above its sample's median, which in a heterozygous sample with an expanded allele picks out the expanded allele (a sample without one has almost no long segments)." else ""`
-
-`r if (is_kinnex) "**How to read this.** **Left:** concatenated reads are grouped by how many of their segments are in this run (2 to 6, one line each), and within each group the share of long segments is shown by the segment's order in its concatenated read. Comparing segments of the same concatenated reads is the fair test: a flat line means a segment's order does not change which allele it carries. **Right:** the median repeat length of long segments and of the other segments by where the segment starts in its concatenated read (1 kb bands); a flat line means position does not change the measured length. The subtitle gives a direct test: in concatenated reads with exactly two segments here, one long and one not, how often the long one comes first (50% means order has no effect)." else ""`
-
-```{r kinnex_position, eval=is_kinnex, fig.height=5.5}
-.t <- proc.time()["elapsed"]
-kd <- lengths[measure == primary & !is.na(length), .(file_stem, qname, len = length)]
-kd <- cbind(kd, kinnex_positions(kd$qname))[!is.na(read_id)]
-kd[, long := len >= stats::median(len) + 20, by = file_stem]
-setorder(kd, read_id, seg_start)
-kd[, slot := rowid(read_id)]
-kd[, seen := .N, by = read_id]
-k_slot <- kd[seen >= 2 & seen <= 6, .(segments = .N, long_share = mean(long)), by = .(seen, slot)][order(seen, slot)]
-k_pair <- kd[seen == 2, .(n_long = sum(long), first_long = first(long)), by = read_id][n_long == 1]
-k_bt <- if (nrow(k_pair)) binom.test(sum(k_pair$first_long), nrow(k_pair), 0.5) else NULL
-kd[, band := pmin(floor(seg_start / 1000), 10)]
-k_band <- kd[, .(segments = .N, long_share = mean(long), long_median = as.numeric(stats::median(len[long])), other_median = as.numeric(stats::median(len[!long]))), by = band][order(band)][segments >= 100]
-k_band[, label := factor(ifelse(band == 10, "10+", sprintf("%d-%d", band, band + 1)), levels = ifelse(band == 10, "10+", sprintf("%d-%d", band, band + 1)))]
-p_k1 <- ggplot(k_slot, aes(slot, long_share, colour = factor(seen), group = factor(seen))) + geom_line() + geom_point(size = 1.8) +
-  scale_x_continuous(breaks = 1:6) + scale_y_continuous(labels = pct_axis(), limits = c(0, NA)) +
-  scale_colour_viridis_d(end = 0.85, name = "Segments of the\nconcatenated read\nin this run") +
-  labs(x = "Segment's order in its concatenated read", y = "Long segments (20+ units above\nthe sample's median)", title = "Allele by order, within concatenated reads") +
-  theme_bw() + theme(panel.grid.minor = element_blank())
-kb_l <- melt(k_band, id.vars = "label", measure.vars = c("long_median", "other_median"), variable.name = "what", value.name = "median")
-kb_l[, what := factor(what, levels = c("long_median", "other_median"), labels = c("Long segments", "Other segments"))]
-p_k2 <- ggplot(kb_l, aes(label, median, colour = what, group = what)) + geom_line() + geom_point(size = 1.8) +
-  scale_colour_manual(values = c(`Long segments` = "#d95f02", `Other segments` = "#00838f"), name = NULL) + expand_limits(y = 0) +
-  labs(x = "Segment's start in its concatenated read (kb)", y = paste("Median", primary, "repeat length (units)"), title = "Repeat length by start position") +
-  theme_bw() + theme(panel.grid.minor = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
-p_k <- patchwork::wrap_plots(p_k1, p_k2, nrow = 1, widths = c(1.1, 1)) + patchwork::plot_annotation(
-  title = "Allele and repeat length by position in the concatenated Kinnex read",
-  subtitle = sprintf("%s segments with a %s length from %s concatenated reads%s", comma(nrow(kd)), primary, comma(uniqueN(kd$read_id)),
-                     if (!is.null(k_bt)) sprintf("\nConcatenated reads with two segments here, one long and one not (%s): the long one comes first in %s (95%% CI %s-%s; 50%% = no effect of order)",
-                                                 comma(nrow(k_pair)), percent(mean(k_pair$first_long), 0.1), percent(k_bt$conf.int[1], 0.1), percent(k_bt$conf.int[2], 0.1)) else ""))
-print(p_k); save_plot(p_k, file.path(plots_dir, "kinnex_position.png"), 13, 5.5)
-k_tab <- dcast(k_slot, seen ~ slot, value.var = "long_share")
-setnames(k_tab, c("segments_in_run", paste0("long_share_segment_", setdiff(names(k_tab), "seen"))))
-dt_compact(k_tab, caption = "Share of long segments by the segment's order, within concatenated reads with 2 to 6 segments in this run", digits = 3)
-write_excel_function(list(kinnex_by_order = k_slot, kinnex_by_start = k_band[, .(start_kb = label, segments, long_share, long_median, other_median)],
-                          kinnex_pair_test = data.table(reads = nrow(k_pair), long_first = if (nrow(k_pair)) mean(k_pair$first_long) else NA_real_,
-                                                         ci_low = if (!is.null(k_bt)) k_bt$conf.int[1] else NA_real_, ci_high = if (!is.null(k_bt)) k_bt$conf.int[2] else NA_real_)), xlsx_path)
-rm(kd); invisible(gc())
-timings["Kinnex position"] <- proc.time()["elapsed"] - .t
-```
-
 ---
 
 # Save output
@@ -426,6 +373,12 @@ dt_compact(timing_df, caption = "Section timing")
 
 # Session info
 
+The versions of R and of every package that made this report, to trace any difference between runs (e.g. on another computer or after a package update).
+
+<details><summary>Show R and package versions</summary>
+
 ```{r session_info}
 sessionInfo()
 ```
+
+</details>

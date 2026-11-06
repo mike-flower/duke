@@ -217,63 +217,158 @@ write_run_index <- function(p, summary = NULL) {
                 `03_repeat_detection` = "tract detection, counting methods, flanks", `04_umi` = "UMI extraction and collapsing reads into molecules",
                 `05_allele_structure` = "allele clusters, consensus sequences, variants, waterfalls", `06_instability` = "instability metrics by sample, range and group; timecourses; tract comparison",
                 `07_repeat_lengths` = "length distributions: heatmaps, groups, samples, every range")
+  # ---- The page ----------------------------------------------------------------
+  # Figures are laid out as grids: what varies (sample, group, measure or range) down the
+  # side, and the plot type and unit across the top, so a figure is found by its row and
+  # column rather than by reading link text. Each range, group and module folds away, and
+  # a search box keeps only the figures whose names contain every word typed.
+  desc_of <- function(t) { d <- cat_$description[match(t, cat_$type)]; ifelse(is.na(d), "", d) }
+  type_ord <- function(t) { o <- match(t, cat_$type); ifelse(is.na(o), 999L, o) }
+  # Without UMIs there are no molecules, and the combined figures show reads only
+  umi_run <- isTRUE(p$umi) || any(fig$unit %in% "molecules", na.rm = TRUE)
+  unit_lab <- c(combined = if (umi_run) "reads + molecules" else "reads", reads = "reads", molecules = "molecules")
+  unit_cls <- function(u) ifelse(is.na(u), "u-n", paste0("u-", substr(u, 1, 1)))
+  # Group names as given in the settings file, by the form they take in file names
+  grp_name <- stats::setNames(display_group(groups), safe_path(groups))
+  gname <- function(g) ifelse(is.na(g), NA_character_, ifelse(g %in% names(grp_name), grp_name[g], g))
+  # What the search box matches: the file path with its separators as spaces, the unit in
+  # words, the module, and the sample's short label and group as given
+  stem_short <- if (!is.null(s) && "short_label" %in% names(s)) stats::setNames(as.character(s$short_label), s$file_stem) else character(0)
+  stem_group <- if (!is.null(s) && "group" %in% names(s)) stats::setNames(display_group(s$group), s$file_stem) else character(0)
+  fig[, key := tolower(paste(path, gsub("[_/.-]+", " ", sub("\\.png$", "", path)), paste0("m", module),
+                             ifelse(is.na(unit), "", unit_lab[unit]),
+                             ifelse(is.na(sample), "", paste(stem_short[sample], stem_group[sample])),
+                             ifelse(is.na(group), "", gname(group))))]
+  fig[is.na(key), key := tolower(path)]
+  link <- function(path, unit, key) sprintf('<a class="v %s" href="%s" title="%s" data-k="%s">view</a>',
+                                            unit_cls(unit), href(path), esc(basename(path)), esc(key))
+  # One grid: x holds the figures, already in row order; rk and rl give each figure's row
+  # (key and label); sb splits a plot type's columns (e.g. by measure) above the unit
+  grid <- function(x, rk, rl, sb = rep("", nrow(x)), corner = "", sticky = FALSE) {
+    x <- copy(x)[, `:=`(rk = rk, rl = rl, sb = sb)]
+    x[, ck := paste(type, sb, ifelse(is.na(unit), "", unit), sep = "\r")]
+    cols <- unique(x[order(type_ord(type), module, sb, ord_unit(unit)), .(type, module, sb, unit, ck)])
+    has_sb <- any(nzchar(cols$sb)); has_u <- any(!is.na(cols$unit))
+    nh <- 1L + has_sb + has_u
+    runs <- function(v) { r <- rle(v); list(v = r$values, n = r$lengths, first = cumsum(c(1L, head(r$lengths, -1)))) }
+    rt <- runs(cols$type)
+    hdr <- c('<tr>', sprintf('<th class="rl" rowspan="%d">%s</th>', nh, corner),
+             sprintf('<th class="t" colspan="%d" title="%s">%s <small>M%s</small></th>', rt$n, esc(desc_of(rt$v)), esc(rt$v), cols$module[rt$first]), '</tr>')
+    if (has_sb) { rs <- runs(paste(cols$type, cols$sb, sep = "\r"))
+      hdr <- c(hdr, '<tr>', sprintf('<th class="s" colspan="%d">%s</th>', rs$n, esc(cols$sb[rs$first])), '</tr>') }
+    if (has_u) hdr <- c(hdr, '<tr>', sprintf('<th class="u %s">%s</th>', unit_cls(cols$unit), ifelse(is.na(cols$unit), "", unit_lab[cols$unit])), '</tr>')
+    rows <- unique(x$rk); by_row <- split(x, factor(x$rk, levels = rows))
+    body <- vapply(rows, function(r) {
+      y <- by_row[[r]]
+      cells <- vapply(cols$ck, function(k) { i <- which(y$ck == k); if (length(i)) link(y$path[i[1]], y$unit[i[1]], y$key[i[1]]) else "" }, "")
+      paste0('<tr class="fr"><td class="rl">', y$rl[1], '</td>', paste0('<td>', cells, '</td>', collapse = ""), '</tr>')
+    }, "")
+    paste0('<div class="gw', if (sticky) ' tall', '"><table class="grid">', paste(hdr, collapse = ""), paste(body, collapse = ""), '</table></div>')
+  }
+  # Plot types that share the same rows go in one grid; others get their own
+  grids_by_rows <- function(x, rk, rl, corner) {
+    sets <- vapply(split(rk, x$type), function(v) paste(sort(unique(v)), collapse = "\r"), "")
+    fams <- split(names(sets), unname(sets))
+    fams <- fams[order(vapply(fams, function(t) min(type_ord(t)), 0))]
+    vapply(fams, function(t) { i <- which(x$type %in% t); grid(x[i], rk[i], rl[i], corner = corner) }, "")
+  }
+  card <- function(id, title, extra, n, body, open = FALSE)
+    paste0('<details class="card" id="', id, '"', if (open) ' open data-open', '><summary><span class="ct">', title, '</span>',
+           if (nzchar(extra)) paste0('<span class="cx">', extra, '</span>'), '<span class="cn">', n, ' figure', if (n != 1) 's', '</span></summary>',
+           '<div class="cb">', paste(body, collapse = ""), '</div></details>')
+  fold_buttons <- function(sec) sprintf('<span class="fold"><button data-x="open" data-s="%s">Open all</button><button data-x="close" data-s="%s">Close all</button></span>', sec, sec)
+
   h <- c('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
          '<title>Duke run index</title><style>',
-         'body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;margin:24px auto;max-width:1400px;padding:0 16px;color:#222;background:#fff}',
-         'h1{margin-bottom:4px}h2{margin-top:36px;border-bottom:1px solid #ccc;padding-bottom:4px}h3{margin-top:24px}',
-         '.meta{color:#666}table{border-collapse:collapse;font-size:13px;margin:8px 0}th,td{border:1px solid #ddd;padding:4px 8px;text-align:left;vertical-align:top}',
-         'th{background:#f3f3f3;position:sticky;top:0}.wrap{overflow-x:auto;max-height:80vh}.thumbs{display:flex;flex-wrap:wrap;gap:12px}',
-         '.thumbs figure{margin:0;width:240px}.thumbs img{width:240px;height:160px;object-fit:contain;border:1px solid #ddd;background:#fff}',
-         '.thumbs figcaption{font-size:12px;word-break:break-all}.note{font-size:13px;color:#555;max-width:900px}a{color:#0b5cad}',
-         '.r{color:#555}.m{color:#00838f}code{font-size:12px;word-break:break-all}',
-         # Contents bar: stays at the top of the window while scrolling
-         'nav.toc{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #ccc;padding:6px 0;margin:8px 0 0;font-size:14px}nav.toc a{margin-right:16px;text-decoration:none}',
-         'h2{scroll-margin-top:44px}',
-         # Samples: the sample, group and time columns stay in view when the table is scrolled sideways
-         '.fix1{position:sticky;left:0;background:#fff;z-index:1;width:300px;min-width:300px;max-width:300px;word-break:break-all;box-shadow:2px 0 0 #bbb}.fix1 small{color:#666;word-break:normal}',
-         'th.fix1{background:#f3f3f3;z-index:3}th{z-index:2}',
-         '</style></head><body>',
-         '<h1 id="top">Duke run index</h1>',
-         sprintf('<p class="meta">Duke %s &middot; %s &middot; %d samples<br>Output folder: <a href="./" title="Open the output folder"><code>%s</code></a></p>', esc(p$duke_version %||% ""), format(Sys.time(), "%Y-%m-%d %H:%M"),
-                 length(stems), esc(dir_out)),
-         '<nav class="toc"><a href="#reports">Reports</a><a href="#summary">Run summary</a><a href="#samples">Samples</a><a href="#ranges">Ranges</a><a href="#groups">Groups</a><a href="#run">Summary figures</a><a href="#top">Top</a></nav>',
-         '<p class="note">Everything this run produced, linked from one page. Start with the reports and the run summary. Figures are grouped below by what they show: one sample (<i>Samples</i>), one range (<i>Ranges</i>), one group (<i>Groups</i>), or every sample at once (<i>Summary figures</i>). Wherever both are drawn, <span class="r">reads</span> are grey and <span class="m">molecules (UMI-collapsed: one consensus length per UMI)</span> teal, and file and folder names say which.</p>')
+         ':root{--ink:#1f2328;--mute:#5f6b7a;--line:#d8dee4;--soft:#f6f8fa;--link:#0b5cad;--r:#5f6b7a;--rbg:#eef0f3;--m:#00838f;--mbg:#e0f3f4;--c:#3949ab;--cbg:#e8eaf6}',
+         '*{box-sizing:border-box}body{font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;margin:0;color:var(--ink);background:#fff;font-size:14px;line-height:1.45}',
+         '.page{max-width:1500px;margin:0 auto;padding:0 20px 60px}',
+         'header.top{padding:22px 0 6px}h1{margin:0;font-size:26px}.meta{color:var(--mute);margin:4px 0 0}code{font-size:12px;word-break:break-all}',
+         'nav.bar{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.97);border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px;padding:8px 0;margin-bottom:6px}',
+         'nav.bar a{color:var(--link);text-decoration:none;font-weight:500}nav.bar a:hover{text-decoration:underline}',
+         '.find{margin-left:auto;display:flex;align-items:center;gap:8px}.find input{width:340px;max-width:60vw;padding:6px 10px;border:1px solid #b8c2cc;border-radius:6px;font-size:14px}',
+         '.find input:focus{outline:2px solid #9cc3f5;border-color:#6aa3e8}#qn{color:var(--mute);font-size:12px;white-space:nowrap}',
+         'h2{font-size:20px;margin:34px 0 4px;padding-bottom:4px;border-bottom:2px solid var(--line);scroll-margin-top:56px;display:flex;align-items:baseline;gap:12px}',
+         '.note{color:var(--mute);max-width:980px;margin:6px 0 12px}a{color:var(--link)}',
+         '.key{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0;align-items:center;color:var(--mute);font-size:12px}',
+         '.fold{margin-left:auto;display:flex;gap:6px}.fold button{font-size:12px;padding:3px 10px;border:1px solid var(--line);background:var(--soft);border-radius:5px;cursor:pointer;color:var(--ink)}.fold button:hover{background:#eaeef2}',
+         # Reports as cards
+         '.reports{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px}',
+         '.rep{border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:#fff}.rep h3{margin:0 0 4px;font-size:15px}.rep p{margin:0 0 8px;color:var(--mute);font-size:13px}',
+         '.rep .tabs{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px}',
+         '.pills{display:flex;gap:8px;flex-wrap:wrap}.pills a{border:1px solid var(--line);border-radius:6px;padding:5px 12px;text-decoration:none;background:var(--soft)}',
+         # Fold-away cards
+         'details.card{border:1px solid var(--line);border-radius:8px;margin:8px 0;background:#fff}',
+         'details.card>summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;padding:9px 14px;background:var(--soft);border-radius:8px}',
+         'details.card[open]>summary{border-bottom:1px solid var(--line);border-radius:8px 8px 0 0}',
+         'details.card>summary::-webkit-details-marker{display:none}details.card>summary:before{content:"\\25B8";color:var(--mute);width:12px}details.card[open]>summary:before{content:"\\25BE"}',
+         '.ct{font-weight:600}.cx{color:var(--mute);font-size:13px}.cn{margin-left:auto;color:var(--mute);font-size:12px}.cb{padding:10px 14px 14px}',
+         # Grids
+         '.gw{overflow:auto;margin:6px 0 14px;border:1px solid var(--line);border-radius:6px;max-width:100%}.gw.tall{max-height:78vh}',
+         'table.grid{border-collapse:separate;border-spacing:0;font-size:13px}',
+         '.grid th,.grid td{border-bottom:1px solid #eaeef2;border-right:1px solid #eaeef2;padding:4px 8px;text-align:center;vertical-align:middle;white-space:nowrap}',
+         '.grid th{background:var(--soft);position:sticky;top:0;z-index:2;font-weight:600}.grid th.t small{color:var(--mute);font-weight:400;margin-left:4px}',
+         '.grid th.s{font-weight:500;color:var(--ink)}.grid th.u{font-weight:500;font-size:12px}',
+         '.grid tr:nth-child(2) th{top:29px}.grid tr:nth-child(3) th{top:57px}',
+         '.grid td.rl,.grid th.rl{position:sticky;left:0;text-align:left;background:#fff;z-index:1;white-space:normal;min-width:220px;max-width:420px;box-shadow:1px 0 0 var(--line)}',
+         '.grid th.rl{background:var(--soft);z-index:3;color:var(--mute);font-weight:500}',
+         '.grid tr.fr:hover td{background:#f9fbfd}.grid tr.fr:hover td.rl{background:#f3f7fb}',
+         '.rl .sub{color:var(--mute);font-size:12px;margin-left:6px}.rl small{color:var(--mute)}.rl .len{color:var(--mute);font-size:12px;margin-left:6px}',
+         # Unit colours: column headings and links
+         '.u-c{color:var(--c)}.u-r{color:var(--r)}.u-m{color:var(--m)}',
+         'a.v{display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px;text-decoration:none;border:1px solid transparent}',
+         'a.v.u-c{background:var(--cbg)}a.v.u-r{background:var(--rbg)}a.v.u-m{background:var(--mbg)}a.v.u-n{background:#eef3fb;color:var(--link)}a.v:hover{border-color:currentColor}',
+         '.chip{display:inline-block;padding:1px 9px;border-radius:10px;font-size:12px}.chip.u-c{background:var(--cbg)}.chip.u-r{background:var(--rbg)}.chip.u-m{background:var(--mbg)}',
+         # Summary-figure thumbnails
+         '.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}',
+         '.thumbs figure{margin:0}.thumbs img{width:100%;height:160px;object-fit:contain;border:1px solid var(--line);border-radius:6px;background:#fff}',
+         '.thumbs figcaption{font-size:12px;word-break:break-all;margin-top:4px}.thumbs figcaption span{display:block;color:var(--mute);word-break:normal}',
+         # Search: what does not match is hidden (kept in place in grids, so columns stay aligned)
+         'a.v.off{visibility:hidden}figure.off{display:none}section.fs.empty{display:none}.none{color:var(--mute);font-style:italic}',
+         '</style></head><body><div class="page">',
+         '<header class="top" id="top"><h1>Duke run index</h1>',
+         sprintf('<p class="meta">Duke %s &middot; %s &middot; %d samples &middot; output folder <a href="./" title="Open the output folder"><code>%s</code></a></p></header>',
+                 esc(p$duke_version %||% ""), format(Sys.time(), "%Y-%m-%d %H:%M"), length(stems), esc(dir_out)),
+         '<nav class="bar"><a href="#reports">Reports</a><a href="#summary">Run summary</a><a href="#samples">Samples</a><a href="#ranges">Ranges</a><a href="#groups">Groups</a><a href="#run">Summary figures</a><a href="#top">Top</a>',
+         '<span class="find"><input id="q" type="search" placeholder="Find figures, e.g. range03 molecules" autocomplete="off"><span id="qn"></span></span></nav>',
+         '<p class="note">Everything this run produced, linked from one page. Start with the reports and the run summary. Figures are arranged below by what they show: one sample (<i>Samples</i>), one range (<i>Ranges</i>), one group (<i>Groups</i>), or every sample at once (<i>Summary figures</i>). In each grid, find the row (the sample, group, measure or range) and the column (the plot type, then the unit). Type in the search box to keep only the figures whose file names contain every word you type (a sample, group, range, measure, plot type or unit).</p>',
+         if (umi_run) '<div class="key">Units: <span class="chip u-c">reads + molecules</span><span class="chip u-r">reads</span><span class="chip u-m">molecules (UMI-collapsed: one consensus length per UMI)</span></div>')
 
-  h <- c(h, '<h2 id="reports">Reports</h2><table><tr><th>Report</th><th>What it covers</th><th>Tables</th></tr>')
+  # Reports, one card per module
+  h <- c(h, '<h2 id="reports">Reports</h2><div class="reports">')
   for (m in names(mod_names)) {
     rep <- paste0(m, ".html"); if (!file.exists(file.path(dir_out, rep)) || !substr(m, 2, 2) %in% (p$current_modules %||% as.character(1:7))) next
     # the module's tables, plus the allele FASTA and VCF one folder down in Module 5
     xl <- c(list.files(file.path(dir_out, m), pattern = "\\.(xlsx|tsv)$"),
             grep("^(consensus|variants)/[^/]+\\.(fasta|vcf)$", list.files(file.path(dir_out, m), recursive = TRUE), value = TRUE))
-    h <- c(h, sprintf("<tr><td>%s</td><td>%s</td><td>%s</td></tr>", a(rep, mod_names[[m]]), esc(mod_desc[[m]]),
-                      paste(vapply(xl, function(x) a(file.path(m, x), x), ""), collapse = "<br>")))
+    h <- c(h, sprintf('<div class="rep"><h3>%s</h3><p>%s</p><div class="tabs">%s</div></div>', a(rep, mod_names[[m]]), esc(mod_desc[[m]]),
+                      paste(vapply(xl, function(x) a(file.path(m, x), x), ""), collapse = "")))
   }
-  h <- c(h, "</table>")
+  h <- c(h, "</div>")
   rs <- c("run_summary.xlsx", "run_summary_samples.tsv", "run_summary_headline_metrics.tsv")
   rs <- rs[file.exists(file.path(dir_out, rs))]
-  if (length(rs)) h <- c(h, '<h2 id="summary">Run summary</h2><p class="note">One row per sample with what every module found (reads at each step, molecules, alleles), the headline metrics for every range, and a guide to the columns. The .tsv files are the same tables as plain text.</p><p>',
-                         paste(vapply(rs, function(x) a(x, x), ""), collapse = " &middot; "), "</p>")
+  if (length(rs)) h <- c(h, '<h2 id="summary">Run summary</h2><p class="note">One row per sample with what every module found (reads at each step, molecules, alleles), the headline metrics for every range, and a guide to the columns. The .tsv files are the same tables as plain text.</p><div class="pills">',
+                         paste(vapply(rs, function(x) a(x, x), ""), collapse = ""), "</div>")
 
-  # Samples: one column per kind of per-sample figure
+  # Samples: one row per sample; columns by plot type, then measure, then unit
   sp <- fig[!is.na(sample)]
   if (nrow(sp)) {
-    sp[, kind := gsub("\\s+", " ", trimws(paste(type, strip_part(rest, safe_path(sample)), uw(unit))))]
-    kinds <- unique(sp[order(module, type, ord_unit(unit), kind), .(module, kind)])
-    h <- c(h, '<h2 id="samples">Samples</h2><p class="note">One row per sample, one column per kind of per-sample figure: the plot type, then the measure, then which units it shows (<i>reads + molecules</i>, <i>reads</i>, or <i>molecules</i>). File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p><div class="wrap"><table><tr><th class="fix1">Sample (file name)<br><small>group, time</small></th>',
-           paste0("<th>M", kinds$module, " ", esc(kinds$kind), "</th>", collapse = ""), "</tr>")
-    for (i in seq_along(stems)) {
-      st <- stems[i]
-      cells <- vapply(kinds$kind, function(k) { f <- sp[sample == st & kind == k, path]; if (length(f)) a(f[1], "view") else "" }, "")
-      # The sample column (with its group and time) stays in view when the table is scrolled sideways
-      h <- c(h, sprintf("<tr><td class=\"fix1\" title=\"%s\"><b>%s</b><br><small>%s%s</small></td>%s</tr>", esc(s$short_label[i]), esc(st),
-                        esc(display_group(s$group[i] %||% "")), if (!is.na(s$time[i] %||% NA)) paste0(", t = ", esc(as.character(s$time[i]))) else "", paste0("<td>", cells, "</td>", collapse = "")))
-    }
-    h <- c(h, "</table></div>")
+    sp[, sb := strip_part(rest, safe_path(sample))]
+    sp[, so := match(sample, stems)]
+    sp <- sp[order(so, type_ord(type), sb, ord_unit(unit))]
+    rl <- vapply(seq_len(nrow(sp)), function(i) {
+      j <- sp$so[i]
+      sprintf('<b title="%s">%s</b><br><small>%s%s</small>', esc(s$short_label[j] %||% ""), esc(sp$sample[i]), esc(display_group(s$group[j] %||% "")),
+              if (!is.na(s$time[j] %||% NA)) paste0(", t = ", esc(as.character(s$time[j]))) else "")
+    }, "")
+    h <- c(h, '<section class="fs" id="sec-samples"><h2 id="samples">Samples</h2><p class="note">One row per sample (with its group and time); one column per per-sample figure, headed by the plot type (hover for what it shows), then the measure, then the unit. File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p>',
+           grid(sp, sp$sample, rl, sp$sb, corner = "Sample <small>(group, time)</small>", sticky = TRUE), '</section>')
   }
 
-  # Ranges: every figure of a range that is not one sample's
+  # Ranges: one card per range; inside, the range's figures by group or measure
   rp <- fig[!is.na(range) & is.na(sample)]
-  if (nrow(rp)) {
+  rtxt <- NULL; rt <- NULL
+  if (nrow(rp) || any(!is.na(fig$range))) {
     rt <- tryCatch(as.data.table(readxl::read_excel(file.path(dir_out, "06_instability", "instability.xlsx"), "range_table")), error = function(e) NULL)
     # A range can be set differently for different samples in the settings file: list each
     # version, with the number of samples that have it
@@ -281,40 +376,85 @@ write_run_index <- function(p, summary = NULL) {
       rt[measure == p$tracts_table$tract[1], .(n = uniqueN(file_stem)), by = .(range_name, range_text)][
         , .(range_text = if (.N == 1) range_text else paste0("varies by sample: ", paste(sprintf("%s (%d)", range_text, n), collapse = "; "))), by = range_name]
     } else NULL
-    rp[, lab0 := strip_part(rest, range)][, label := trimws(paste(lab0, uw(unit)))]
-    h <- c(h, '<h2 id="ranges">Ranges</h2><p class="note">One row per analysis range: every figure drawn for that range (Module 6 timecourses and tract comparison, Module 7 group figures), by plot type. Each sample in every range is under <i>Samples</i> (sample_ranges).</p><div class="wrap"><table><tr><th>Range</th><th>Lengths</th><th>Figures</th></tr>')
-    for (r in sort(unique(rp$range))) {
-      x <- rp[range == r][order(module, type, lab0, ord_unit(unit))]
-      cell <- paste(vapply(unique(x$type), function(t) paste0("<b>", esc(t), "</b>: ", paste(vapply(which(x$type == t), function(k) a(x$path[k], x$label[k]), ""), collapse = " &middot; ")), ""), collapse = "<br>")
-      txt <- if (!is.null(rtxt)) rtxt$range_text[match(r, rtxt$range_name)] else ""
-      h <- c(h, sprintf("<tr><td>%s</td><td>%s</td><td>%s</td></tr>", r, esc(ifelse(is.na(txt), "", txt)), cell))
+  }
+  range_len <- function(r) { t <- if (!is.null(rtxt)) rtxt$range_text[match(r, rtxt$range_name)] else NA; ifelse(is.na(t), "", t) }
+  # The same for the samples of one group, as a group usually shares one setting
+  range_len_in <- function(r, st) {
+    if (is.null(rt) || !"range_text" %in% names(rt) || !length(st)) return(range_len(r))
+    x <- rt[measure == p$tracts_table$tract[1] & file_stem %in% st, .(n = uniqueN(file_stem)), by = .(range_name, range_text)]
+    vapply(r, function(r1) { y <- x[range_name == r1]
+      if (!nrow(y)) range_len(r1) else if (nrow(y) == 1) y$range_text else paste0("varies by sample: ", paste(sprintf("%s (%d)", y$range_text, y$n), collapse = "; ")) }, "")
+  }
+  if (nrow(rp)) {
+    rp[, rem := strip_part(strip_part(rest, range), group)]
+    rp[, gn := gname(group)]
+    rp <- rp[order(range, type_ord(type), is.na(gn), gn, rem, ord_unit(unit))]
+    h <- c(h, '<section class="fs" id="sec-ranges"><h2 id="ranges">Ranges', fold_buttons("sec-ranges"), '</h2><p class="note">One card per analysis range (click to open): the range&rsquo;s timecourses and tract comparisons (Module 6) by measure, and its group figures (Module 7) by group. Each sample in every range is under <i>Samples</i> (sample_ranges).</p>')
+    for (r in unique(rp$range)) {
+      x <- rp[range == r]
+      rk <- paste(ifelse(is.na(x$gn), "", x$gn), x$rem, sep = "\r")
+      rl <- ifelse(is.na(x$gn), sprintf("<b>%s</b>", esc(x$rem)),
+                   paste0("<b>", esc(x$gn), "</b>", ifelse(nzchar(x$rem), sprintf('<span class="sub">%s</span>', esc(x$rem)), "")))
+      body <- c(grids_by_rows(x[is.na(gn)], rk[is.na(x$gn)], rl[is.na(x$gn)], "Measure"),
+                grids_by_rows(x[!is.na(gn)], rk[!is.na(x$gn)], rl[!is.na(x$gn)], "Group"))
+      h <- c(h, card(paste0("range-", r), esc(r), esc(range_len(r)), nrow(x), body))
     }
-    h <- c(h, "</table></div>")
+    h <- c(h, '</section>')
   }
 
-  # Groups
+  # Groups: one card per group; inside, all lengths and each range
   gp <- fig[!is.na(group)]
   if (nrow(gp)) {
-    gp[, lab0 := strip_part(rest, group)][, label := trimws(paste(lab0, uw(unit)))]
-    h <- c(h, '<h2 id="groups">Groups</h2><p class="note">Module 7: each group&rsquo;s samples stacked in time order, for all lengths and for each range. <i>group_density</i> = ridges with every read (or molecule) as a dot; <i>group_histogram</i> = one row per sample.</p><div class="wrap"><table><tr><th>Group</th><th>Figures</th></tr>')
-    for (g in sort(unique(gp$group))) {
-      x <- gp[group == g][order(type, lab0, ord_unit(unit))]
-      cell <- paste(vapply(unique(x$type), function(t) paste0("<b>", esc(t), "</b>: ", paste(vapply(which(x$type == t), function(k) a(x$path[k], x$label[k]), ""), collapse = " &middot; ")), ""), collapse = "<br>")
-      h <- c(h, sprintf("<tr><td>%s</td><td>%s</td></tr>", esc(g), cell))
+    gp[, rem := strip_part(rest, group)]
+    gp[, span := ifelse(!is.na(range), range, ifelse(grepl("(^|_)all-lengths(_|$)", rem), "all lengths", ""))]
+    gp[, meas := strip_part(strip_part(rem, range), "all-lengths")]
+    gp <- gp[order(group, type_ord(type), meas, span != "all lengths", span, ord_unit(unit))]
+    h <- c(h, '<section class="fs" id="sec-groups"><h2 id="groups">Groups', fold_buttons("sec-groups"), '</h2><p class="note">One card per group (click to open): Module 7&rsquo;s figures of the group&rsquo;s samples stacked in time order, for all lengths and for each range. <i>group_density</i> = ridges with every read (or molecule) as a dot; <i>group_histogram</i> = one row per sample.</p>')
+    for (g in unique(gp$group)) {
+      x <- gp[group == g]
+      g_stems <- if (!is.null(s) && "group" %in% names(s)) s$file_stem[safe_path(s$group) == g] else character(0)
+      rk <- paste(x$meas, x$span, sep = "\r")
+      rl <- paste0(ifelse(nzchar(x$span), sprintf("<b>%s</b>", esc(x$span)), ""),
+                   ifelse(!is.na(x$range), sprintf('<span class="len">%s</span>', esc(range_len_in(x$range, g_stems))), ""),
+                   ifelse(nzchar(x$meas), sprintf(ifelse(nzchar(x$span), '<span class="sub">%s</span>', '<b>%s</b>'), esc(x$meas)), ""))
+      gs_ <- if (!is.null(s) && "group" %in% names(s)) s[display_group(group) == gname(g)] else NULL
+      extra <- if (!is.null(gs_) && nrow(gs_)) paste0(nrow(gs_), " sample", if (nrow(gs_) != 1) "s",
+                                                      if ("time" %in% names(gs_) && any(!is.na(gs_$time))) paste0(", t = ", paste(sort(unique(stats::na.omit(gs_$time))), collapse = ", ")) else "") else ""
+      sp_ <- nzchar(x$span)   # figures of all lengths or a range, then those of neither (e.g. a tract pair)
+      h <- c(h, card(paste0("group-", g), esc(gname(g)), esc(extra), nrow(x),
+                     c(grids_by_rows(x[sp_], rk[sp_], rl[sp_], "Lengths"), grids_by_rows(x[!sp_], rk[!sp_], rl[!sp_], "Measure"))))
     }
-    h <- c(h, "</table></div>")
+    h <- c(h, '</section>')
   }
 
-  cp <- fig[is.na(sample) & is.na(range) & is.na(group)][order(module, type, ord_unit(unit), base)]
+  cp <- fig[is.na(sample) & is.na(range) & is.na(group)][order(module, type_ord(type), ord_unit(unit), base)]
   if (nrow(cp)) {
-    h <- c(h, paste0('<h2 id="run">Summary figures</h2><p class="note">Figures that show every sample in the run together, rather than one sample, range or group: for example read counts and quality per sample (Module 1)', if (dir.exists(file.path(dir_out, "04_umi"))) ", the length distributions of reads against molecules (Module 4)", if (dir.exists(file.path(dir_out, "05_allele_structure"))) ", the clusters in every sample (Module 5)", if (dir.exists(file.path(dir_out, "06_instability"))) ", the instability index in every range (Module 6)", '. By module; click a thumbnail for the full figure.</p>'))
+    h <- c(h, paste0('<section class="fs" id="sec-run"><h2 id="run">Summary figures', fold_buttons("sec-run"), '</h2><p class="note">Figures that show every sample in the run together, rather than one sample, range or group: for example read counts and quality per sample (Module 1)', if (dir.exists(file.path(dir_out, "04_umi"))) ", the length distributions of reads against molecules (Module 4)", if (dir.exists(file.path(dir_out, "05_allele_structure"))) ", the clusters in every sample (Module 5)", if (dir.exists(file.path(dir_out, "06_instability"))) ", the instability index in every range (Module 6)", '. By module; click a thumbnail for the full figure.</p>'))
     for (m in names(mod_names)) {
-      f <- cp[startsWith(path, paste0(m, "/")), path]; if (!length(f)) next
-      h <- c(h, sprintf("<h3>%s</h3><div class=\"thumbs\">", esc(mod_names[[m]])))
-      h <- c(h, sprintf('<figure><a href="%s"><img loading="lazy" src="%s" alt=""></a><figcaption>%s</figcaption></figure>', href(f), href(f), esc(basename(f))))
-      h <- c(h, "</div>")
+      x <- cp[startsWith(path, paste0(m, "/"))]; if (!nrow(x)) next
+      th <- sprintf('<figure data-k="%s"><a href="%s"><img loading="lazy" src="%s" alt=""></a><figcaption>%s<span>%s</span></figcaption></figure>',
+                    esc(x$key), href(x$path), href(x$path), esc(basename(x$path)), esc(desc_of(x$type)))
+      h <- c(h, card(paste0("run-", m), esc(mod_names[[m]]), "", nrow(x), c('<div class="thumbs">', th, '</div>'), open = TRUE))
     }
+    h <- c(h, '</section>')
   }
+  h <- c(h, '<p class="none" id="nomatch" hidden>No figure&rsquo;s file name contains all of those words.</p></div>',
+         '<script>(function(){',
+         'var q=document.getElementById("q"),qn=document.getElementById("qn"),none=document.getElementById("nomatch");',
+         'var figs=[].slice.call(document.querySelectorAll("[data-k]"));',
+         'function each(sel,f){[].forEach.call(document.querySelectorAll(sel),f);}',
+         'function live(e){return e.querySelector("[data-k]:not(.off)");}',
+         'function run(){var t=q.value.toLowerCase().trim().split(/\\s+/).filter(Boolean),c=0;',
+         ' figs.forEach(function(e){var k=e.getAttribute("data-k"),ok=t.every(function(w){return k.indexOf(w)>=0;});e.classList.toggle("off",!ok);if(ok)c++;});',
+         ' var on=t.length>0;',
+         ' each("tr.fr",function(r){r.hidden=on&&!live(r);});',
+         ' each(".gw",function(g){g.hidden=on&&!live(g);});',
+         ' each("details.card",function(d){var any=live(d);d.hidden=on&&!any;d.open=on?!!any:d.hasAttribute("data-open");});',
+         ' each("section.fs",function(s){s.classList.toggle("empty",on&&!live(s));});',
+         ' qn.textContent=on?(c+" of "+figs.length+" figures"):(figs.length+" figures");none.hidden=!(on&&c===0);}',
+         'q.addEventListener("input",run);',
+         'each("button[data-x]",function(b){b.addEventListener("click",function(){var o=b.getAttribute("data-x")==="open";each("#"+b.getAttribute("data-s")+" details.card",function(d){if(!d.hidden)d.open=o;});});});',
+         'run();})();</script>')
   h <- c(h, "</body></html>")
   # 00_ so that it sorts above the module reports; an index.html from before v3.3.3 is replaced
   if (file.exists(file.path(dir_out, "index.html"))) file.remove(file.path(dir_out, "index.html"))
