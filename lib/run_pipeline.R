@@ -2,7 +2,7 @@
 # Duke - pipeline runner (used by scripts/duke_run.R and scripts/duke_cli.R)
 # ==============================================================================
 
-duke_version <- "3.3.14"
+duke_version <- "3.3.15"
 
 .module_files <- c(
   `1` = "01_import_qc.Rmd", `2` = "02_alignment.Rmd", `3` = "03_repeat_detection.Rmd",
@@ -117,6 +117,17 @@ module_hashes <- function(p) {
   if (!isTRUE(ok)) ok <- file.copy(from, to, overwrite = TRUE, copy.date = TRUE)
   isTRUE(ok)
 }
+# Copies a file or folder into a folder, keeping its dates. The system's cp is used: R's
+# file.copy() handles a folder one file at a time and was many times slower on Myriad's
+# Scratch (about 20 minutes for the full jasmine run's report folders and caches, where cp
+# took well under a minute). Falls back to file.copy() where cp is not available.
+.copy_into <- function(from, to_dir) {
+  if (!length(from)) return(TRUE)
+  ok <- tryCatch(suppressWarnings(system2("cp", c("-a", shQuote(from), shQuote(to_dir)), stdout = FALSE, stderr = FALSE)) == 0,
+                 error = function(e) FALSE)
+  if (!isTRUE(ok)) ok <- all(file.copy(from, to_dir, recursive = TRUE, overwrite = TRUE, copy.date = TRUE))
+  isTRUE(ok)
+}
 reuse_earlier_run <- function(p, hashes, results_dir) {
   src <- normalizePath(p$reuse_from, mustWork = FALSE)
   if (!dir.exists(src)) stop("reuse_from: folder not found: ", src)
@@ -153,10 +164,10 @@ reuse_earlier_run <- function(p, hashes, results_dir) {
   for (m in names(plan)) {
     stem <- tools::file_path_sans_ext(.module_files[[m]])
     unlink(c(file.path(p$dir_out, stem), file.path(p$dir_out, paste0(stem, ".html"))), recursive = TRUE)
-    if (dir.exists(file.path(src, stem))) file.copy(file.path(src, stem), p$dir_out, recursive = TRUE, copy.date = TRUE)
-    if (file.exists(file.path(src, paste0(stem, ".html")))) file.copy(file.path(src, paste0(stem, ".html")), p$dir_out, overwrite = TRUE, copy.date = TRUE)
+    if (dir.exists(file.path(src, stem)) && !.copy_into(file.path(src, stem), p$dir_out)) stop("reuse_from: could not copy ", file.path(src, stem))
+    if (file.exists(file.path(src, paste0(stem, ".html")))) .copy_into(file.path(src, paste0(stem, ".html")), p$dir_out)
     tmp <- list.files(file.path(src, "temp"), pattern = paste0("^m", m, "_", .data_hash(hashes[[m]])), full.names = TRUE)
-    if (length(tmp)) { dir.create(file.path(p$dir_out, "temp"), showWarnings = FALSE); file.copy(tmp, file.path(p$dir_out, "temp"), recursive = TRUE, copy.date = TRUE) }
+    if (length(tmp)) { dir.create(file.path(p$dir_out, "temp"), showWarnings = FALSE); .copy_into(tmp, file.path(p$dir_out, "temp")) }
     if (!.link_or_copy(plan[[m]], file.path(results_dir, .module_data[[m]]))) stop("reuse_from: could not copy ", plan[[m]])
     v <- .hash_version(plan[[m]]); dv <- .hash_drawn(plan[[m]])
     # The current hash, so the module is skipped; the version lines keep the version that made

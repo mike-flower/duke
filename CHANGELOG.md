@@ -2,6 +2,11 @@
 
 Newest first. The [README](README.md) describes the current version.
 
+## v3.3.15 – faster reuse copying; index count and bar
+
+- `reuse_from`: each reused module's output folder, report and caches are now copied with the system's `cp -a` instead of R's `file.copy()`, which handles a folder one file at a time. On the full jasmine run on a weekday morning, copying them (about 1.3 GB) took about 20 minutes, where `cp -a` copied the largest module's folder (275 MB) in 23 seconds at the same time of day. The copy is the same full copy as before (the saved data are still hard-linked), so the earlier folder is untouched as before. Where `cp` fails or is not available, R's copy is used. The v3.3.13 and v3.3.14 notes on how long reuse takes were from quiet evening runs and are corrected here: with R's copy it took from seconds to about 20 minutes, depending on how busy Scratch was.
+- `00_index.html`: the search count now counts each figure once (a group figure is in both its range's card and its group's card, so the jasmine run showed 2,802 rather than 2,034), and the bar at the top is no longer slightly see-through.
+
 ## v3.3.14 – the index as grids with a search box; Module 7 Kinnex section removed
 
 - `00_index.html` redesigned so a figure can be found at a glance. Figures are laid out as grids: what varies (sample, group, measure or range) down the side, and the plot type (hover for what it shows), measure and unit across the top, with each figure a *view* button coloured by unit. Before, *Ranges* and *Groups* listed every figure as a link spelling out its group, measure and unit, up to 51 links in a line. *Ranges* now has one folded card per range (its timecourses and tract comparisons by measure, its group figures by group), and *Groups* one folded card per group (all lengths and each range down the side, with the group's number of samples and time points). Group names are shown as given in the settings file. A range set differently for different samples is listed with each setting and its number of samples; in a group's card, the group's own setting is shown. A search box keeps only the figures whose file names contain every word typed and opens the cards that hold them. Reports are shown as cards, and summary-figure thumbnails carry a line saying what each shows. The links and file names are unchanged.

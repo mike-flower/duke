@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.14** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+**v3.3.15** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 **New to Duke?** Read [What Duke does](#what-duke-does), then follow [Installation](#installation) and [Quick start](#quick-start). The rest of this page is reference: look things up as you need them.
 
@@ -129,7 +129,7 @@ You need a folder of reads (one BAM, FASTQ or FASTA file per sample) and a refer
 **1. A first look, without a settings file.** Write each run to a new folder, named with the Duke version, so earlier results are kept.
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.14 --path_ref www/HTTset20_cagcaa.fasta --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.15 --path_ref www/HTTset20_cagcaa.fasta --threads 8
 ```
 
 Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus sequences and variants. Without a settings file every module runs except Module 6. Open `00_index.html` in the output folder: Modules 1 and 2 show whether the reads and alignment are good, and the Module 3 and Module 7 length plots show where each sample's alleles are, so where to put the ranges.
@@ -139,7 +139,7 @@ Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus se
 **3. Run again with the settings file**, into the same folder:
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.14 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.15 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
 ```
 
 [Resume](#resume) keeps Modules 1–5, as nothing that affects them changed, and runs Modules 6 and 7. Edit the settings and run again as often as needed.
@@ -643,7 +643,7 @@ To write a new run to a new folder while taking some modules from an earlier run
 --dir_out .../result_duke_v3.3.2_new --reuse_from .../result_duke_v3.3.1_old --reuse_modules 1:4
 ```
 
-Before any module runs, Duke copies each module to reuse from the earlier folder into the new one: its saved data (`module_data/`), its output folder, its report and its working caches (`temp/`). The saved data, the largest part, are hard-linked rather than copied when both folders are on the same file system (as on Myriad's Scratch): the new folder gets its own entry for the same file, which takes seconds instead of many minutes and no extra space, and the file stays in the new folder if the earlier folder is deleted (deleting the earlier folder therefore frees that space only once every folder linking to it is deleted). The output folders, reports and caches are copied, as a module that runs again writes some of its tables over the existing files; on the full jasmine run (seven modules, about 1.3 GB) reusing everything took 11 seconds. It then skips those modules as it would on resume, and runs the rest on top of them. The earlier folder is only read, never changed: a module that runs again deletes its linked file first and writes a new one.
+Before any module runs, Duke copies each module to reuse from the earlier folder into the new one: its saved data (`module_data/`), its output folder, its report and its working caches (`temp/`). The saved data, the largest part, are hard-linked rather than copied when both folders are on the same file system (as on Myriad's Scratch): the new folder gets its own entry for the same file, which takes seconds instead of many minutes and no extra space, and the file stays in the new folder if the earlier folder is deleted (deleting the earlier folder therefore frees that space only once every folder linking to it is deleted). The output folders, reports and caches are copied, with the system's `cp` (falling back to R where `cp` is not available), as a module that runs again writes some of its tables over the existing files. On Myriad's Scratch the time this takes depends on how busy Scratch is: on the full jasmine run (seven modules, about 1.3 GB) it took seconds in the evening and about 20 minutes on a weekday morning when Duke still copied with R; `cp` copied the largest module's folder in 23 seconds at a busy time. It then skips those modules as it would on resume, and runs the rest on top of them. The earlier folder is only read, never changed: a module that runs again deletes its linked file first and writes a new one.
 
 - A module is reused only when its results were made with the same settings as this run: its own and every upstream module's, the same input files, reference and settings file. So a reused module holds the same data a re-run would give. The plot choice (`plots`, `plot_units`) is not part of that check: a reused module keeps the earlier run's figures.
 - **`reuse_modules` not given:** every module whose results still match **and** that was made by this Duke version is reused. A module made by an earlier version is not, because the newer version may have changed its report or figures; the log says so for each module.
@@ -691,7 +691,7 @@ tail -f ~/Scratch/bin/duke/logs/duke_<job id>.out
 
 Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's messages go to the run log only; warnings go to both, labelled with their module, and are counted at the end of the run. Loading R on a compute node can take a few minutes before the first Duke line appears, and new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file. `qstat -j <id> | grep usage` shows CPU time and memory so far, `qdel <id>` stops a job and `qacct -j <id>` gives the resources a finished job used. A waiting job's resources can be changed with `qalter`, e.g. `qalter -pe smp 1 -l mem=8G <id>`.
 
-**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.14 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
+**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.15 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
 
 **Other clusters.** `scripts/duke_kathleen.sh` (SGE, `-pe mpi`) and `scripts/duke_kathleen_slurm.sh` (Slurm, `sbatch`; monitor with `squeue -u $USER`, `scancel <id>`, `sacct -j <id>`) ask for one whole node, as Duke cannot spread one run across nodes. A run that fits on Myriad is simplest there.
 
