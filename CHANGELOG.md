@@ -2,6 +2,10 @@
 
 Newest first. The [README](README.md) describes the current version.
 
+## v3.3.17 – README: how long reuse takes
+
+- README: reuse time depends on how busy the file system is, not on how much is copied. Reusing all seven modules of the full jasmine run on Myriad's Scratch took 11 seconds on a quiet evening, about 20 minutes on a weekday morning and 73 minutes on an afternoon when other heavy jobs were using Scratch; in that run a 211 MB folder copied in a second while a 12 MB one took 15 minutes, and every saved-data file was confirmed hard-linked. The earlier notes on reuse time (v3.3.13 to v3.3.16) each came from one or two runs and are superseded by this. No code changes.
+
 ## v3.3.16 – reuse links the caches; copying back in R
 
 - `reuse_from`: each reused module's caches (`temp/m<module>_<hash>/`, about 560 MB on the full jasmine run, mostly Module 2's alignment caches) are now hard-linked like its saved data, instead of copied. A cache file is only ever written as a new file (Duke now deletes any old one before saving), so the earlier run's caches cannot be changed through the link; other working files in the folder are copied. Linking moves no data, so it does not depend on how busy the file system is: with Myriad's Scratch busy, copying Module 2's 435 MB cache took 12.5 minutes.

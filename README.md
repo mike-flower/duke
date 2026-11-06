@@ -2,7 +2,7 @@
 
 A modular pipeline for amplicon sequencing of tandem repeats: per-read repeat counts, optional UMI collapse, allele structure and somatic instability metrics, with an HTML report for every step.
 
-**v3.3.16** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+**v3.3.17** – what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 **New to Duke?** Read [What Duke does](#what-duke-does), then follow [Installation](#installation) and [Quick start](#quick-start). The rest of this page is reference: look things up as you need them.
 
@@ -129,7 +129,7 @@ You need a folder of reads (one BAM, FASTQ or FASTA file per sample) and a refer
 **1. A first look, without a settings file.** Write each run to a new folder, named with the Duke version, so earlier results are kept.
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.16 --path_ref www/HTTset20_cagcaa.fasta --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.17 --path_ref www/HTTset20_cagcaa.fasta --threads 8
 ```
 
 Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus sequences and variants. Without a settings file every module runs except Module 6. Open `00_index.html` in the output folder: Modules 1 and 2 show whether the reads and alignment are good, and the Module 3 and Module 7 length plots show where each sample's alleles are, so where to put the ranges.
@@ -139,7 +139,7 @@ Add `--umi TRUE` for a UMI design and `--cluster TRUE` for alleles, consensus se
 **3. Run again with the settings file**, into the same folder:
 
 ```bash
-./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.16 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
+./duke --dir_data /path/to/run1/data --dir_out /path/to/run1/result_duke_v3.3.17 --path_ref www/HTTset20_cagcaa.fasta --path_settings /path/to/run1/settings_duke.xlsx --threads 8
 ```
 
 [Resume](#resume) keeps Modules 1–5, as nothing that affects them changed, and runs Modules 6 and 7. Edit the settings and run again as often as needed.
@@ -653,7 +653,7 @@ Before any module runs, Duke puts each reused module into the new folder, in one
 
 A hard link gives the new folder its own name for the same file on disk: nothing is copied, it takes seconds and no extra space, and it needs both folders on the same file system (as on Myriad's Scratch; otherwise Duke copies). The saved data and caches can be linked because Duke only ever writes them as new files: a module that runs again deletes its file first and writes a new one, so the earlier run's file cannot change. The output folders are copied because a module that runs again writes some of its tables over the existing files. So the earlier folder is only read, never changed, and a linked file stays in the new folder if the earlier folder is deleted (deleting a folder frees that space only once every folder linking to it is deleted).
 
-**How long it takes.** The copying is the slow part, and it depends on how busy the file system is: on the full jasmine run it took seconds on a quiet evening and up to about 20 minutes on a busy weekday (before v3.3.16 the caches were copied too, which made up about half of that). After copying, Duke skips the reused modules as it would on resume and runs the rest on top of them.
+**How long it takes.** Reuse itself does little work, but on a shared file system it waits on every file it reads and writes, so its time depends on how busy the file system is rather than on how much is copied. On Myriad's Scratch, reusing all seven modules of the full jasmine run took 11 seconds on a quiet evening, about 20 minutes on a weekday morning and over an hour on an afternoon when other heavy jobs were reading and writing on Scratch; in that run a 211 MB folder copied in a second while a 12 MB one took 15 minutes. Reuse runs are quickest when the file system is quiet. After copying, Duke skips the reused modules as it would on resume and runs the rest on top of them.
 
 - A module is reused only when its results were made with the same settings as this run: its own and every upstream module's, the same input files, reference and settings file. So a reused module holds the same data a re-run would give. The plot choice (`plots`, `plot_units`) is not part of that check: a reused module keeps the earlier run's figures.
 - **`reuse_modules` not given:** every module whose results still match **and** that was made by this Duke version is reused. A module made by an earlier version is not, because the newer version may have changed its report or figures; the log says so for each module.
@@ -701,7 +701,7 @@ tail -f ~/Scratch/bin/duke/logs/duke_<job id>.out
 
 Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run log, `logs/<date_time>/duke_run-<date_time>.log`; R's messages go to the run log only; warnings go to both, labelled with their module, and are counted at the end of the run. Loading R on a compute node can take a few minutes before the first Duke line appears, and new lines can take a minute to show on the login node. Module 1 writes nothing to `dir_out` until it has read every file. `qstat -j <id> | grep usage` shows CPU time and memory so far, `qdel <id>` stops a job and `qacct -j <id>` gives the resources a finished job used. A waiting job's resources can be changed with `qalter`, e.g. `qalter -pe smp 1 -l mem=8G <id>`.
 
-**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.16 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
+**3. Copy the results back**, e.g. from your own computer: `rsync -av <user>@myriad.rc.ucl.ac.uk:/path/to/result_duke_v3.3.17 ~/results/`. Add `--exclude temp/ --exclude module_data/` to leave out the caches, and `--exclude '*.bam*'` to leave out the BAMs. `00_index.html` works on the copy.
 
 **Other clusters.** `scripts/duke_kathleen.sh` (SGE, `-pe mpi`) and `scripts/duke_kathleen_slurm.sh` (Slurm, `sbatch`; monitor with `squeue -u $USER`, `scancel <id>`, `sacct -j <id>`) ask for one whole node, as Duke cannot spread one run across nodes. A run that fits on Myriad is simplest there.
 
@@ -715,7 +715,7 @@ Duke's progress goes to the scheduler's `logs/duke_<job id>.out` and to the run 
 
 **Add or change the settings** – the same command with `--path_settings new.xlsx`; Modules 1–5 are reused and 6 and 7 re-run. `--run_modules 6,7` does the same without checking the earlier modules.
 
-**After a Duke update** – a new output folder named with the new version, `--reuse_from` the previous run's folder and `--reuse_modules` every module whose results the update does not change (all seven when it changes only reports, figures or the index). Add `--redraw` for the modules whose report or figures changed (1, 4 or 7); the CHANGELOG says which. Modules 2, 3, 5 and 6 cannot be redrawn: if their report changed, leave them out of `reuse_modules` so they re-run. The index and run summary are rebuilt in every run, so an update that changes only those needs no redraw. On the full jasmine run, a reuse of every module with nothing redrawn took from seconds to about 20 minutes (see [Reusing modules](#reusing-modules-from-an-earlier-run-reuse_from-reuse_modules)); redrawing Module 1 took about 6 minutes, Module 4 about 16 and Module 7 about 20 ([Redrawing](#redrawing-a-modules-report-and-figures-redraw)).
+**After a Duke update** – a new output folder named with the new version, `--reuse_from` the previous run's folder and `--reuse_modules` every module whose results the update does not change (all seven when it changes only reports, figures or the index). Add `--redraw` for the modules whose report or figures changed (1, 4 or 7); the CHANGELOG says which. Modules 2, 3, 5 and 6 cannot be redrawn: if their report changed, leave them out of `reuse_modules` so they re-run. The index and run summary are rebuilt in every run, so an update that changes only those needs no redraw. On the full jasmine run, a reuse of every module with nothing redrawn took from seconds to over an hour, depending on how busy Scratch was (see [Reusing modules](#reusing-modules-from-an-earlier-run-reuse_from-reuse_modules)); redrawing Module 1 took about 6 minutes, Module 4 about 16 and Module 7 about 20 ([Redrawing](#redrawing-a-modules-report-and-figures-redraw)).
 
 **CAG and CCG in one run** – `--path_ref www/HTTset20_cag_ccg.fasta --path_tracts www/tracts_example.csv --composites "CAG_CCG_sum=CAG+CCG:sum,CAG_CCG_span=CAG+CCG:span"`; add `analysis_ranges_CCG` to the settings for CCG ranges on the CCG scale.
 
