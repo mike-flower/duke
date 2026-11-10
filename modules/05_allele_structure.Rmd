@@ -203,7 +203,7 @@ p_cc <- ggplot(sh, aes(x = share, y = sample, fill = allele_lab)) + geom_col(wid
                          paste(sprintf("%d sample%s with %d cluster%s", as.integer(table(nclu$N)), ifelse(as.integer(table(nclu$N)) == 1, "", "s"), as.integer(names(table(nclu$N))), ifelse(names(table(nclu$N)) == "1", "", "s")), collapse = "; "))) +
   theme_bw() + theme(legend.position = "bottom", panel.spacing = unit(1.5, "lines"), axis.text.y = element_text(size = fit_s$size, lineheight = 0.9),
                      plot.title.position = "plot")
-print(p_cc); save_plot(p_cc, plot_path(plots_dir, "allele_shares"), 4 + 3 * length(sh_units), max(4, fit_s$height))
+print(p_cc); save_plot(p_cc, plot_path(plots_dir, "allele_shares"), 5 + 3 * length(sh_units), max(4, fit_s$height))
 ```
 
 `r if (params$cluster) paste0("## One sample's clusters\n\nThe lengths that were clustered in one sample (", if (cluster_unit == "molecules") "one per UMI molecule, so PCR-shortened reads do not smear the clusters" else "one per read", "), one row per cluster on a shared length axis, so each cluster's length distribution can be seen even where clusters overlap. In grey behind each row are all the sample's lengths, so each row shows which part of the distribution its cluster took and where the split between clusters fell. Each row gives the cluster's allele number (1 and 2 are the two largest clusters, 1 the shorter; 3 upwards are the rest), modal length and share of ", cluster_unit, ". Where the sample's reads were also split by flank haplotype, the row says which: haplotypes are numbered separately within each length cluster, so H2 in one row is not the same sequence as H2 in another. Two clusters with the same modal length and different haplotypes are reads of the same length whose flanks differ; the allele table (*Alleles in every sample*) says whose flanks each extra cluster carries. Every sample is in \u0060plots/clusters/clusters_{sample}.png\u0060.") else ""`
@@ -468,7 +468,7 @@ if (nrow(vm)) {
          subtitle = "Colour = share of the allele's reads with the variant; dot = in its consensus; grey = not countable") +
     theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
                        axis.text.y = element_text(size = fit_v$size, lineheight = 0.9), panel.grid = element_blank())
-  print(p_vm); save_plot(p_vm, file.path(plots_dir, "variants_by_sample.png"), min(40, 5 + 0.6 * n_v), fit_v$height)
+  print(p_vm); save_plot(p_vm, file.path(plots_dir, "variants_by_sample.png"), min(40, 6 + 0.6 * n_v), fit_v$height)
 }
 if (exists("var_summary")) dt_full(var_summary, caption = "Variants across the cohort: alleles carrying each in their consensus or as a minority, samples, and median read support", digits = 3)
 ```

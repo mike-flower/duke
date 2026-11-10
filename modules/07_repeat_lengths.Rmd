@@ -88,7 +88,9 @@ meta[, sample_label := factor(sample_label, levels = sample_label)]
 # heatmap writes it unwrapped down the column, and is made taller to fit the longest name.
 meta[, plot_label := factor(wrap_stem(as.character(sample_label), 30), levels = wrap_stem(levels(sample_label), 30))]
 meta[, hist_label := factor(wrap_stem(as.character(sample_label), 90), levels = wrap_stem(levels(sample_label), 90))]
-hm_h <- max(7, 6.3 + 0.055 * max(nchar(as.character(meta$sample_label))))
+# the heatmap's height: the plot, plus the sample names down each column and the group names
+# written upwards above each panel
+hm_h <- max(7, 5.8 + 0.055 * max(nchar(as.character(meta$sample_label))) + heatmap_strip_in(unique(meta$group_label)))
 plot_ranges <- if (length(params$plot_ranges)) params$plot_ranges else if (have_m6) head(sort(unique(range_table$range_name[range_table$measure == primary])), 2) else character(0)
 group_ranges <- if (have_m6 && isTRUE(params$plot_every_range)) sort(unique(range_table$range_name[range_table$measure == primary])) else plot_ranges
 acc_path <- file.path(params$dir_out, "02_alignment", "alignment.xlsx")
@@ -123,7 +125,7 @@ unit_version <- function(rd, md, u) switch(u, combined = list(rd = rd, md = md, 
 
 # Cohort heatmaps
 
-Each column is one sample and each row one repeat length; the colour is the share of that sample's reads (or molecules) at that length, on a log scale from 0.01%, so a minor allele and a thin expansion tail are as visible as the main peak; white means no reads. The rarest 0.1% of lengths at the top are not drawn, so the alleles fill the plot. Panels are settings groups, and samples within a group are in time order, labelled by file name and time. A stable sample is a narrow band; somatic expansion shows as the band spreading upward over time.
+Each column is one sample and each row one repeat length; the colour is the share of that sample's reads (or molecules) at that length, on a log scale from 0.01%, so a minor allele and a thin expansion tail are as visible as the main peak; white means no reads. The rarest 0.1% of lengths at the top are not drawn, so the alleles fill the plot. Panels are settings groups (each headed by the group name, written upwards), and samples within a group are in time order, labelled by file name and time. A stable sample is a narrow band; somatic expansion shows as the band spreading upward over time.
 
 ```{r heatmaps, results='asis', fig.height=hm_h}
 .t <- proc.time()["elapsed"]

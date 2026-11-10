@@ -19,7 +19,9 @@ wrap_label <- function(x, width = 24) {
 }
 
 # Heatmap: one column per sample, one row per length bin, fill = share of the
-# sample's reads (or molecules). Samples are grouped into panels by group.
+# sample's reads (or molecules). Samples are grouped into panels by group, each headed by
+# its name written upwards on one line, as a group of a few samples gives too narrow a
+# panel for the name written across (see heatmap_strip_in() for the height it needs).
 # Lengths above the cohort's 99.9th percentile (rare outliers) are not drawn, so the
 # alleles fill the panel; the colour is on a log scale from 0.01%, so a minor allele
 # or a thin expansion tail is as visible as the main peak, and lengths with no reads
@@ -34,15 +36,18 @@ length_heatmap <- function(d, title, binwidth = 1, ylab = "Repeat length", unit 
     ggplot2::geom_tile() +
     ggplot2::scale_fill_viridis_c(option = "plasma", labels = scales::label_percent(), name = "Share\n(log scale)",
                                   trans = "log10", limits = c(1e-4, max(h$prop)), oob = scales::squish) +
-    ggplot2::facet_grid(~ group_label, scales = "free_x", space = "free_x", labeller = ggplot2::as_labeller(wrap_label)) +
+    ggplot2::facet_grid(~ group_label, scales = "free_x", space = "free_x", labeller = ggplot2::as_labeller(function(x) if (exists("display_group")) display_group(x) else x)) +
     ggplot2::scale_y_continuous(expand = c(0, 0), breaks = scales::pretty_breaks(10)) +
     ggplot2::labs(x = NULL, y = ylab, title = title,
                   subtitle = sprintf("Lengths above %s (the top 0.1%%, %s %s) not drawn", round(ymax), format(n_out, big.mark = ","), unit)) +
     ggplot2::theme_bw() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7),
-                   panel.spacing = grid::unit(2, "pt"), strip.text = ggplot2::element_text(size = 7),
+                   panel.spacing = grid::unit(2, "pt"), strip.text.x = ggplot2::element_text(size = 6, angle = 90, hjust = 0, margin = ggplot2::margin(3, 1, 3, 1)),
                    panel.grid = ggplot2::element_blank())
 }
+
+# Height (inches) the heatmap's group headings take, written upwards at 6 pt
+heatmap_strip_in <- function(groups) 0.15 + max(nchar(if (exists("display_group")) display_group(groups) else as.character(groups)), 1) * 6 * 0.5 / 72
 
 # Length distribution of reads and molecules drawn in separate rows, each on its own
 # y-axis: bars for the share of the unit at each length, and a line for a kernel

@@ -337,8 +337,10 @@ wrap_stem <- function(x, width = 30) {
   }, character(1), USE.NAMES = FALSE)
 }
 
-# Each sample's label for figures, named by file stem: lab <- sample_labels(stems); lab[stem]
-sample_labels <- function(x, width = 30) { u <- unique(as.character(x)); stats::setNames(wrap_stem(u, width), u) }
+# Each sample's label for figures, named by file stem: lab <- sample_labels(stems); lab[stem].
+# 45 characters a line suits the figures with one row per sample for the whole run (Modules 1,
+# 3 and 5): a PacBio-style name takes two lines, so a run of 150 samples keeps a 7 pt font
+sample_labels <- function(x, width = 45) { u <- unique(as.character(x)); stats::setNames(wrap_stem(u, width), u) }
 
 # Height (inches) and label font size (pt) for a figure with one row per sample: each row
 # is at least `per_row` inches and tall enough for its label's lines; when that would make
