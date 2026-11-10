@@ -92,11 +92,12 @@ dist_rows <- function(d, title = NULL, xlab = "Repeat length", binwidth = 1, bw 
 # teal line on the same row when there are molecules, every read (up to dots_max per
 # sample, drawn at random) as a dot in a band along the bottom of the ridge, and the modal length
 # as a red dashed line with its value. `rd` and `md` have columns label and length;
-# label is a factor whose first level is drawn at the top.
+# label is a factor whose first level is drawn at the top (a label may run over several
+# lines; label_size sets its font size, see label_rows()).
 # main_unit = "Molecules" draws molecules alone in place of reads (rd then holds molecules, md is NULL).
 # dots_unit: with both reads and molecules, whether the dots are the molecules (default) or the reads.
 ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length", xlim = NULL, dots_max = 2000L, subtitle = NULL,
-                            main_unit = "Reads", dots_unit = "Molecules") {
+                            main_unit = "Reads", dots_unit = "Molecules", label_size = NULL) {
   mu <- if (main_unit == "Molecules") "molecules" else "reads"
   rd <- data.table::as.data.table(rd)[is.finite(length)]
   if (!nrow(rd)) return(NULL)
@@ -170,7 +171,8 @@ ridge_dots_plot <- function(rd, md = NULL, title = NULL, xlab = "Repeat length",
                                                    if (n_most > dots_max) paste("up to", format(dots_max, big.mark = ","), "random") else "all",
                                                    if (du == "molecules") "molecules (UMI-collapsed)" else "reads", mu,
                                                    if (!is.null(mmodal) && nrow(mmodal)) ", teal = the molecules'" else "")) +
-    ggplot2::theme_bw() + ggplot2::theme(legend.position = "top", panel.grid.minor = ggplot2::element_blank())
+    ggplot2::theme_bw() + ggplot2::theme(legend.position = "top", panel.grid.minor = ggplot2::element_blank(),
+                                         axis.text.y = ggplot2::element_text(size = label_size, lineheight = 0.9))
 }
 
 # Histograms of several samples: one row per sample, reads and (with UMIs) molecules

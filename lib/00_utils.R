@@ -313,29 +313,43 @@ save_plot <- function(p, path, width = 10, height = 6, dpi = NULL) {
   invisible(path)
 }
 
-# Shorter sample labels for plot facets: drop the prefix every name shares (cut back
-# to the last '.', '_' or '-' so a label never starts mid-word), e.g.
-# "m84277_..._s1.hifi_reads.bc2083.skera.demux.kxF01--kxR13" -> "kxF01--kxR13"
-short_labels <- function(x) {
-  u0 <- unique(as.character(x))
-  if (length(u0) < 2) return(setNames(u0, u0))
-  # Dot-separated parts that every name shares in the same place (e.g. "hifi_reads",
-  # "demux" in PacBio file names) are dropped first, then any common start
-  u <- u0
-  parts <- strsplit(u, ".", fixed = TRUE)
-  if (length(unique(lengths(parts))) == 1 && lengths(parts)[1] > 1) {
-    m <- do.call(rbind, parts)
-    keep <- apply(m, 2, function(col) length(unique(col)) > 1)
-    if (any(keep)) { u2 <- apply(m[, keep, drop = FALSE], 1, paste, collapse = "."); if (!anyDuplicated(u2)) u <- u2 }
-  }
-  ch <- strsplit(u, "")
-  n <- min(lengths(ch)); k <- 0
-  while (k < n && length(unique(vapply(ch, `[`, "", k + 1))) == 1) k <- k + 1
-  pre <- substr(u[1], 1, k)
-  cut <- max(c(0, gregexpr("[._-]", pre)[[1]]))
-  out <- substring(u, cut + 1)
-  if (any(!nzchar(out)) || anyDuplicated(out)) out <- u
-  setNames(out, u0)
+# Sample labels in figures: the full file stem, wrapped onto as many lines as it needs so a
+# long name fits beside a row or in a panel strip. Lines break after ".", "_", "-" or a space
+# (not inside a number such as 0.01uM) when one falls in the second half of the line, and
+# are cut at `width` characters otherwise. Only line breaks are added, so every sample keeps
+# a label as unique as its file stem, and the label is the same whichever samples are in
+# the run (the short labels of v3.3.17 and earlier were not, and fell back to an index).
+wrap_stem <- function(x, width = 30) {
+  vapply(as.character(x), function(s) {
+    if (is.na(s)) return(NA_character_)
+    lines <- character(0)
+    while (nchar(s) > width) {
+      ch <- strsplit(substr(s, 1, width + 1), "")[[1]]
+      ok <- which(ch[seq_len(width)] %in% c(".", "_", "-", " "))
+      # a "." between two digits is part of a number
+      ok <- ok[!(ch[ok] == "." & ok > 1 & grepl("[0-9]", ch[pmax(ok - 1, 1)]) & grepl("[0-9]", ch[pmin(ok + 1, length(ch))]))]
+      # break after the last separator of a run (e.g. after "--", not between the dashes)
+      ok <- ok[!(ok < length(ch) & ch[pmin(ok + 1, length(ch))] %in% c(".", "_", "-", " "))]
+      cut <- if (length(ok) && max(ok) >= width / 2) max(ok) else width
+      lines <- c(lines, substr(s, 1, cut)); s <- substring(s, cut + 1)
+    }
+    paste(c(lines, s), collapse = "\n")
+  }, character(1), USE.NAMES = FALSE)
+}
+
+# Each sample's label for figures, named by file stem: lab <- sample_labels(stems); lab[stem]
+sample_labels <- function(x, width = 30) { u <- unique(as.character(x)); stats::setNames(wrap_stem(u, width), u) }
+
+# Height (inches) and label font size (pt) for a figure with one row per sample: each row
+# is at least `per_row` inches and tall enough for its label's lines; when that would make
+# the figure taller than `hi`, the font is made smaller (down to `min_size`) before the
+# height is capped. `extra` is the height of everything but the rows (title, axis, legend).
+label_rows <- function(lab, extra = 2, per_row = 0.14, size = 7, hi = 45, min_size = 4) {
+  n <- length(unique(lab)); if (!n) return(list(height = extra + per_row, size = size))
+  nl <- max(1, lengths(strsplit(as.character(lab), "\n", fixed = TRUE)))
+  need <- function(sz) extra + n * max(per_row, nl * sz / 72 * 1.25)
+  while (need(size) > hi && size > min_size) size <- size - 0.5
+  list(height = min(need(size), hi), size = size)
 }
 
 # PacBio read quality (rq, predicted accuracy) as a Phred-scaled QV, capped at 60

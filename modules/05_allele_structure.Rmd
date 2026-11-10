@@ -159,8 +159,8 @@ timings["Clustering"] <- proc.time()["elapsed"] - .t
 
 `r if (params$cluster) paste0("## Clusters in every sample\n\n**How to read this.** One row per sample. Each cluster is a horizontal line from the 10th to the 90th percentile of its " , if (exists("cluster_unit") && cluster_unit == "molecules") "molecules'" else "reads'", " lengths, with a point at its modal length; the size of the point is the cluster's share of the sample's ", if (exists("cluster_unit") && cluster_unit == "molecules") "molecules" else "reads", ", and the colour its order by length within the sample (1 = shortest), so the same allele has the same colour in every sample (the cluster numbers in the table count from the cluster with most reads, which can differ between samples). Clusters with the same length in every sample are the same allele across the cohort; a cluster that appears in only some samples, or whose length moves between samples, is where to look.") else ""`
 
-```{r cluster_overview, eval=params$cluster, fig.height=min(30, max(4, 2 + 0.16 * length(samples)))}
-lab_c <- short_labels(cluster_summary$file_stem)
+```{r cluster_overview, eval=params$cluster, fig.height=max(4, label_rows(sample_labels(samples), 2, 0.16, hi = 45)$height)}
+lab_c <- sample_labels(cluster_summary$file_stem); fit_c <- label_rows(lab_c, 2, 0.16, hi = 45)
 co <- copy(cluster_summary)[, sample := factor(lab_c[file_stem], levels = rev(unique(lab_c[sort(unique(file_stem))])))]
 # Coloured by length order within the sample (1 = shortest), which means the same allele
 # across samples, unlike the cluster number (1 = most reads), which can swap between samples
@@ -172,19 +172,19 @@ p_co <- ggplot(co, aes(y = sample, colour = order)) +
   scale_colour_brewer(palette = "Set1", name = "Cluster, by length\n(1 = shortest)") +
   labs(x = paste(primary, "length (repeat units)"), y = NULL, title = "Clusters in every sample",
        subtitle = sprintf("Point = modal length; line = 10th to 90th percentile of the cluster's %s", cluster_unit)) +
-  theme_bw() + theme(axis.text.y = element_text(size = if (length(samples) > 60) 5 else 8))
-print(p_co); save_plot(p_co, file.path(plots_dir, "clusters_overview.png"), 10, min(45, max(4, 2 + 0.16 * length(samples))))
+  theme_bw() + theme(axis.text.y = element_text(size = fit_c$size, lineheight = 0.9))
+print(p_co); save_plot(p_co, file.path(plots_dir, "clusters_overview.png"), 10, max(4, fit_c$height))
 ```
 
 `r if (params$cluster) "## Allele shares in every sample" else ""`
 
 `r if (params$cluster) "How each sample's reads (and, when clustering on molecules, its molecules) split between its alleles: allele 1 (red, the shorter of the two largest clusters, coloured as in the other cluster figures), allele 2 (blue) and any extra clusters (grey). A sample should give one cluster per allele it carries (two for a heterozygous sample, as the subtitle counts); grey usually means an allele with a wide length distribution (often an expanded one) or a mixture of cells or samples. A share far from 50% is allelic imbalance; when the read share of the expanded allele is lower than its molecule share, the longer allele amplified or sequenced less well, which counting molecules corrects." else ""`
 
-```{r cluster_count, eval=params$cluster, fig.height=min(30, max(4, 2.2 + 0.18 * length(samples)))}
+```{r cluster_count, eval=params$cluster, fig.height=max(4, label_rows(sample_labels(samples), 2.2, 0.18, hi = 45)$height)}
 # Share of each sample's reads (and, with UMIs, molecules) in allele 1, allele 2 and any
 # extra alleles, so an unbalanced or extra allele stands out sample by sample
 nclu <- cluster_summary[, .N, by = file_stem]
-lab_s <- short_labels(cluster_summary$file_stem)
+lab_s <- sample_labels(cluster_summary$file_stem); fit_s <- label_rows(lab_s, 2.2, 0.18, hi = 45)
 sh_units <- c(reads = "reads", if (cluster_unit == "molecules") c(molecules = "molecules"))
 sh <- rbindlist(lapply(names(sh_units), function(u) cluster_summary[, .(file_stem, allele, n = get(u), unit = u)]))
 sh[, share := n / sum(n), by = .(file_stem, unit)]
@@ -201,9 +201,9 @@ p_cc <- ggplot(sh, aes(x = share, y = sample, fill = allele_lab)) + geom_col(wid
   labs(x = NULL, y = NULL, title = paste0("How each sample's ", if (length(sh_units) > 1) "reads and molecules split" else "reads split", " between its alleles"),
        subtitle = paste0("Allele 1 = the shorter of the two largest clusters.\n",
                          paste(sprintf("%d sample%s with %d cluster%s", as.integer(table(nclu$N)), ifelse(as.integer(table(nclu$N)) == 1, "", "s"), as.integer(names(table(nclu$N))), ifelse(names(table(nclu$N)) == "1", "", "s")), collapse = "; "))) +
-  theme_bw() + theme(legend.position = "bottom", panel.spacing = unit(1.5, "lines"), axis.text.y = element_text(size = if (length(samples) > 60) 5 else 8),
+  theme_bw() + theme(legend.position = "bottom", panel.spacing = unit(1.5, "lines"), axis.text.y = element_text(size = fit_s$size, lineheight = 0.9),
                      plot.title.position = "plot")
-print(p_cc); save_plot(p_cc, plot_path(plots_dir, "allele_shares"), 4 + 3 * length(sh_units), min(45, max(4, 2.2 + 0.18 * length(samples))))
+print(p_cc); save_plot(p_cc, plot_path(plots_dir, "allele_shares"), 4 + 3 * length(sh_units), max(4, fit_s$height))
 ```
 
 `r if (params$cluster) paste0("## One sample's clusters\n\nThe lengths that were clustered in one sample (", if (cluster_unit == "molecules") "one per UMI molecule, so PCR-shortened reads do not smear the clusters" else "one per read", "), one row per cluster on a shared length axis, so each cluster's length distribution can be seen even where clusters overlap. In grey behind each row are all the sample's lengths, so each row shows which part of the distribution its cluster took and where the split between clusters fell. Each row gives the cluster's allele number (1 and 2 are the two largest clusters, 1 the shorter; 3 upwards are the rest), modal length and share of ", cluster_unit, ". Where the sample's reads were also split by flank haplotype, the row says which: haplotypes are numbered separately within each length cluster, so H2 in one row is not the same sequence as H2 in another. Two clusters with the same modal length and different haplotypes are reads of the same length whose flanks differ; the allele table (*Alleles in every sample*) says whose flanks each extra cluster carries. Every sample is in \u0060plots/clusters/clusters_{sample}.png\u0060.") else ""`
@@ -443,23 +443,23 @@ dt_full(cons[, intersect(show, names(cons)), with = FALSE], caption = "Alleles p
 ## Variants across the cohort
 ```
 
-`r if (params$cluster && params$call_variants && exists("support_all") && nrow(support_all)) paste0("**How to read this.** One row per sample, one column per variant (reference position, reference > alternative bases; a long insertion or deletion is shown by its first bases and its length), one panel per allele. The colour is the variant's read support in that allele: the share of the allele's reads carrying it. Every variant found in either allele of a sample is measured in both, so a tile with a dot is in that allele's consensus, a light tile without a dot is carried by a minority of its reads, and a dark tile is an allele that does not carry it (support near 0%). A grey tile is a variant whose support could not be counted, because no read contained it or the reference with the same surrounding bases (or every read matched both); that usually means the call sits in a misaligned or error-prone stretch, and such calls are marked not confirmed. Each sample's label ends with the ", primary, " length of its alleles 1 and 2 (allele 1 is always the shorter), so a variant bright in the allele 2 panel is on the longer allele. A heterozygous flank SNP shows as bright in one allele's panel and dark in the other, in every sample of a line; a variant at intermediate support in one sample only is worth checking in the BAM.") else if (params$cluster && params$call_variants) "No allele differs from the reference within the flank sequence covered, and no minority variant reached the threshold, so the VCF holds only the repeat record." else ""`
+`r if (params$cluster && params$call_variants && exists("support_all") && nrow(support_all)) paste0("**How to read this.** One row per sample, one column per variant (reference position, reference > alternative bases; a long insertion or deletion is shown by its first bases and its length), one panel per allele. The colour is the variant's read support in that allele: the share of the allele's reads carrying it. Every variant found in either allele of a sample is measured in both, so a tile with a dot is in that allele's consensus, a light tile without a dot is carried by a minority of its reads, and a dark tile is an allele that does not carry it (support near 0%). A grey tile is a variant whose support could not be counted, because no read contained it or the reference with the same surrounding bases (or every read matched both); that usually means the call sits in a misaligned or error-prone stretch, and such calls are marked not confirmed. Each sample is labelled with its file name and, below it, the ", primary, " length of its alleles 1 and 2 (allele 1 is always the shorter), so a variant bright in the allele 2 panel is on the longer allele. A heterozygous flank SNP shows as bright in one allele's panel and dark in the other, in every sample of a line; a variant at intermediate support in one sample only is worth checking in the BAM.") else if (params$cluster && params$call_variants) "No allele differs from the reference within the flank sequence covered, and no minority variant reached the threshold, so the VCF holds only the repeat record." else ""`
 
-```{r variant_map, eval=params$cluster && params$call_variants && exists("support_all") && nrow(support_all) > 0, fig.width=10, fig.height=if (exists("support_all")) min(30, 3 + 0.2 * uniqueN(support_all$file_stem)) else 4}
-lab_v <- short_labels(cons$file_stem)
+```{r variant_map, eval=params$cluster && params$call_variants && exists("support_all") && nrow(support_all) > 0, fig.width=10, fig.height=if (exists("support_all")) label_rows(paste0(sample_labels(unique(support_all$file_stem)), "\n[x]"), 3, 0.2, hi = 40)$height else 4}
+lab_v <- sample_labels(cons$file_stem)
 # Long insertions and deletions are labelled by their first bases and length
 short_allele <- function(a) ifelse(nchar(a) > 6, sprintf("%s\u2026 (%d bp)", substr(a, 1, 4), nchar(a)), a)
 # Each sample is labelled with the primary tract length of its alleles 1 and 2, so every
 # variant can be read as being on the shorter or the longer allele
 pm <- paste0("modal_", primary)
 len_ab <- if (pm %in% names(cons)) cons[allele %in% 1:2, .(txt = paste(get(pm), collapse = " / ")), by = file_stem] else data.table(file_stem = character(0), txt = character(0))
-lab_v2 <- stats::setNames(paste0(lab_v, ifelse(is.na(len_ab$txt[match(names(lab_v), len_ab$file_stem)]), "", paste0("  [", primary, " ", len_ab$txt[match(names(lab_v), len_ab$file_stem)], "]"))), names(lab_v))
+lab_v2 <- stats::setNames(paste0(lab_v, ifelse(is.na(len_ab$txt[match(names(lab_v), len_ab$file_stem)]), "", paste0("\n[", primary, " ", len_ab$txt[match(names(lab_v), len_ab$file_stem)], "]"))), names(lab_v))
 vm <- copy(support_all)[allele %in% 1:2][, `:=`(sample = factor(lab_v2[file_stem], levels = rev(unique(lab_v2[sort(unique(cons$file_stem))]))),
                                              vlab = sprintf("%d %s>%s", pos, short_allele(ref), short_allele(alt)),
                                              allele_lab = ifelse(allele == 1, sprintf("Allele 1 (shorter %s)", primary), sprintf("Allele 2 (longer %s)", primary)))]
 vm[, vlab := factor(vlab, levels = unique(vm[order(pos)]$vlab))]
 if (nrow(vm)) {
-  n_s <- uniqueN(vm$sample); n_v <- uniqueN(vm$vlab)
+  n_s <- uniqueN(vm$sample); n_v <- uniqueN(vm$vlab); fit_v <- label_rows(levels(droplevels(vm$sample)), 3, 0.2, hi = 40)
   p_vm <- ggplot(vm, aes(vlab, sample, fill = support)) + geom_tile(colour = "white") +
     geom_point(data = vm[in_consensus == TRUE], size = 0.8, colour = "white") +
     facet_wrap(~ allele_lab, ncol = 2) +
@@ -467,8 +467,8 @@ if (nrow(vm)) {
     labs(x = "Variant (position ref>alt)", y = NULL, title = "Variants in alleles 1 and 2 of every sample",
          subtitle = "Colour = share of the allele's reads with the variant; dot = in its consensus; grey = not countable") +
     theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
-                       axis.text.y = element_text(size = if (n_s > 60) 5 else 7), panel.grid = element_blank())
-  print(p_vm); save_plot(p_vm, file.path(plots_dir, "variants_by_sample.png"), min(40, 5 + 0.6 * n_v), min(40, 3 + 0.2 * n_s))
+                       axis.text.y = element_text(size = fit_v$size, lineheight = 0.9), panel.grid = element_blank())
+  print(p_vm); save_plot(p_vm, file.path(plots_dir, "variants_by_sample.png"), min(40, 5 + 0.6 * n_v), fit_v$height)
 }
 if (exists("var_summary")) dt_full(var_summary, caption = "Variants across the cohort: alleles carrying each in their consensus or as a minority, samples, and median read support", digits = 3)
 ```

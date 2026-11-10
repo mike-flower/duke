@@ -34,8 +34,6 @@ write_run_summary <- function(p) {
   if (!length(stems)) return(invisible(NULL))
 
   s <- data.table(file_stem = stems)
-  lab <- short_labels(stems)
-  s[, short_label := unname(lab[file_stem])]
   if (!is.null(im)) s <- unique(im[, .(file_stem, group, time, is_control)], by = "file_stem")[s, on = "file_stem"]
   if (!is.null(stage)) s <- stage[, .(file_stem, reads_imported = imported, reads_after_qc = final)][s, on = "file_stem"]
   if (!is.null(qc)) s <- qc[, intersect(c("file_stem", "median_length", "median_np", "median_qv"), names(qc)), with = FALSE][s, on = "file_stem"]
@@ -67,7 +65,7 @@ write_run_summary <- function(p) {
     s[is.na(other_clusters) & file_stem %in% al$file_stem, other_clusters := 0L]
   }
   # Columns in pipeline order, so the table reads left to right as the run went
-  ord <- c("file_stem", "short_label", "group", "time", "is_control", "reads_imported", "reads_after_qc",
+  ord <- c("file_stem", "group", "time", "is_control", "reads_imported", "reads_after_qc",
            "median_read_length_bp", "median_np", "median_qv", "reads_aligned",
            grep("^reads_with_", names(s), value = TRUE), grep("_detection_rate$", names(s), value = TRUE),
            "reads_with_umi", "umi_molecules", "molecules_kept", "reads_in_kept_molecules", "share_of_umi_reads_in_kept_molecules", "median_reads_per_kept_molecule",
@@ -96,8 +94,7 @@ write_run_summary <- function(p) {
     if (!is.null(rt) && "range_text" %in% names(rt))
       hl <- unique(rt[measure == primary, .(file_stem, analysis_range_name = range_name, range = sub(paste0("^", primary, " "), "", range_text))],
                    by = c("file_stem", "analysis_range_name"))[hl, on = .(file_stem, analysis_range_name)]
-    hl[, short_label := unname(lab[file_stem])]
-    setcolorder(hl, c("file_stem", "short_label", intersect(c("group", "time", "is_control", "unit", "measure", "analysis_range_name", "range", "setpoint_type"), names(hl))))
+    setcolorder(hl, c("file_stem", intersect(c("group", "time", "is_control", "unit", "measure", "analysis_range_name", "range", "setpoint_type"), names(hl))))
     # reads first, as in every figure
     hl[, unit_order := match(unit, c("reads", "molecules"))]
     setorder(hl, unit_order, analysis_range_name, group, time, file_stem, na.last = TRUE)
@@ -125,15 +122,14 @@ write_run_summary <- function(p) {
              "The same metrics as plain text, for R, Python or Prism",
              "Length distribution figures for every group, range and sample (plots/sample_card/ = one page per sample)",
              "Every figure in a report is saved as a PNG under that module's plots/ folder"))
-  cols <- data.table(column = c("file_stem", "short_label", "group, time, is_control", "reads_imported, reads_after_qc",
+  cols <- data.table(column = c("file_stem", "group, time, is_control", "reads_imported, reads_after_qc",
                                 "median_read_length_bp, median_np, median_qv", "reads_aligned",
                                 "reads_with_<tract>, <tract>_detection_rate", "reads_with_umi, umi_molecules, molecules_kept",
                                 "reads_in_kept_molecules, share_of_umi_reads_in_kept_molecules, median_reads_per_kept_molecule",
                                 sprintf("allele1_%s, allele2_%s", primary, primary), "allele1_read_share, allele2_read_share",
                                 "allele1_molecule_share, allele2_molecule_share",
                                 "allele1_notation, allele2_notation", "other_clusters"),
-                     meaning = c("The sample's file name without extension: its identifier in every table, and in the plot file names",
-                                 "Short label used in figures, where the full name will not fit: the parts of the file name that differ between this run's samples (always unique within the run, but it depends on which samples are in the run, so use file_stem to match samples between runs)",
+                     meaning = c("The sample's file name without extension: its identifier in every table, figure and plot file name",
                                  "From the settings file", "Reads read in, and left after the import filters (Module 1)",
                                  "Median read length, pass count and read quality (QV; PacBio only)",
                                  "Reads with both flanks aligned in the right order (Module 2)",
@@ -232,12 +228,11 @@ write_run_index <- function(p, summary = NULL) {
   grp_name <- stats::setNames(display_group(groups), safe_path(groups))
   gname <- function(g) ifelse(is.na(g), NA_character_, ifelse(g %in% names(grp_name), grp_name[g], g))
   # What the search box matches: the file path with its separators as spaces, the unit in
-  # words, the module, and the sample's short label and group as given
-  stem_short <- if (!is.null(s) && "short_label" %in% names(s)) stats::setNames(as.character(s$short_label), s$file_stem) else character(0)
+  # words, the module, and the sample's file name and group as given
   stem_group <- if (!is.null(s) && "group" %in% names(s)) stats::setNames(display_group(s$group), s$file_stem) else character(0)
   fig[, key := tolower(paste(path, gsub("[_/.-]+", " ", sub("\\.png$", "", path)), paste0("m", module),
                              ifelse(is.na(unit), "", unit_lab[unit]),
-                             ifelse(is.na(sample), "", paste(stem_short[sample], stem_group[sample])),
+                             ifelse(is.na(sample), "", paste(sample, stem_group[sample])),
                              ifelse(is.na(group), "", gname(group))))]
   fig[is.na(key), key := tolower(path)]
   link <- function(path, unit, key) sprintf('<a class="v %s" href="%s" title="%s" data-k="%s">view</a>',
@@ -358,7 +353,7 @@ write_run_index <- function(p, summary = NULL) {
     sp <- sp[order(so, type_ord(type), sb, ord_unit(unit))]
     rl <- vapply(seq_len(nrow(sp)), function(i) {
       j <- sp$so[i]
-      sprintf('<b title="%s">%s</b><br><small>%s%s</small>', esc(s$short_label[j] %||% ""), esc(sp$sample[i]), esc(display_group(s$group[j] %||% "")),
+      sprintf('<b style="word-break:break-all">%s</b><br><small>%s%s</small>', esc(sp$sample[i]), esc(display_group(s$group[j] %||% "")),
               if (!is.na(s$time[j] %||% NA)) paste0(", t = ", esc(as.character(s$time[j]))) else "")
     }, "")
     h <- c(h, '<section class="fs" id="sec-samples"><h2 id="samples">Samples</h2><p class="note">One row per sample (with its group and time); one column per per-sample figure, headed by the plot type (hover for what it shows), then the measure, then the unit. File names follow the same order: <code>{plot type}_{sample}_{measure}_{unit}.png</code>.</p>',

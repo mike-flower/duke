@@ -83,13 +83,12 @@ meta[, group_label := ifelse(is.na(group), "ungrouped", group)]
 setorder(meta, group_label, time, file_stem, na.last = TRUE)
 meta[, sample_label := make.unique(ifelse(is.na(time), file_stem, paste0(file_stem, " (t=", time, ")")))]
 meta[, sample_label := factor(sample_label, levels = sample_label)]
-meta[, sample_index := seq_len(.N)]
-# Sample labels: the part of the file name that differs between samples (e.g. kxF01--kxR13) when
-# that is short, otherwise the sample's index in this report (mapped to its file in repeat_lengths.xlsx)
-sl <- short_labels(meta$file_stem)[meta$file_stem]
-base_lab <- if (max(nchar(sl)) <= 20) sl else as.character(meta$sample_index)
-meta[, short_label := make.unique(ifelse(is.na(time), base_lab, paste0(base_lab, " (t=", time, ")")))]
-meta[, short_label := factor(short_label, levels = short_label)]
+# Sample labels in figures: the file name (and time) in full. Beside a ridge it is wrapped
+# onto lines of up to 30 characters; panel strips of the histograms are wider, so 90; the
+# heatmap writes it unwrapped down the column, and is made taller to fit the longest name.
+meta[, plot_label := factor(wrap_stem(as.character(sample_label), 30), levels = wrap_stem(levels(sample_label), 30))]
+meta[, hist_label := factor(wrap_stem(as.character(sample_label), 90), levels = wrap_stem(levels(sample_label), 90))]
+hm_h <- max(7, 6.3 + 0.055 * max(nchar(as.character(meta$sample_label))))
 plot_ranges <- if (length(params$plot_ranges)) params$plot_ranges else if (have_m6) head(sort(unique(range_table$range_name[range_table$measure == primary])), 2) else character(0)
 group_ranges <- if (have_m6 && isTRUE(params$plot_every_range)) sort(unique(range_table$range_name[range_table$measure == primary])) else plot_ranges
 acc_path <- file.path(params$dir_out, "02_alignment", "alignment.xlsx")
@@ -124,17 +123,17 @@ unit_version <- function(rd, md, u) switch(u, combined = list(rd = rd, md = md, 
 
 # Cohort heatmaps
 
-Each column is one sample and each row one repeat length; the colour is the share of that sample's reads (or molecules) at that length, on a log scale from 0.01%, so a minor allele and a thin expansion tail are as visible as the main peak; white means no reads. The rarest 0.1% of lengths at the top are not drawn, so the alleles fill the plot. Panels are settings groups, and samples within a group are in time order, labelled by the part of the file name that differs between samples (or by an index, mapped to files in `repeat_lengths.xlsx`) and time. A stable sample is a narrow band; somatic expansion shows as the band spreading upward over time.
+Each column is one sample and each row one repeat length; the colour is the share of that sample's reads (or molecules) at that length, on a log scale from 0.01%, so a minor allele and a thin expansion tail are as visible as the main peak; white means no reads. The rarest 0.1% of lengths at the top are not drawn, so the alleles fill the plot. Panels are settings groups, and samples within a group are in time order, labelled by file name and time. A stable sample is a narrow band; somatic expansion shows as the band spreading upward over time.
 
-```{r heatmaps, results='asis', fig.height=7}
+```{r heatmaps, results='asis', fig.height=hm_h}
 .t <- proc.time()["elapsed"]
 hm_w <- min(45, max(9, 3 + 0.15 * length(samples)))
 for (u in plot_units_for(params, have_mol, can_combine = FALSE)) for (m in measures$measure) {
   src <- if (u == "reads") lengths[measure == m, .(file_stem, length)] else mol[measure == m, .(file_stem, length)]
   if (!nrow(src)) next
-  d <- meta[, .(file_stem, sample_label = short_label, group_label)][src, on = "file_stem"]
+  d <- meta[, .(file_stem, sample_label, group_label)][src, on = "file_stem"]
   p <- length_heatmap(d, sprintf("%s length, %s", m, u), params$repeat_histogram_binwidth, paste(m, "length"), u)
-  save_plot(p, plot_path(plots_dir, "heatmap", m, unit = u), hm_w, 7)
+  save_plot(p, plot_path(plots_dir, "heatmap", m, unit = u), hm_w, hm_h)
   if (u == "reads" || m == primary) { cat(sprintf("\n\n## %s, %s\n\n", m, u)); print(p) }
 }
 timings["Heatmaps"] <- proc.time()["elapsed"] - .t
@@ -166,7 +165,7 @@ folder_data <- function(fs, rg) {
     if (!is.na(rg) && is.null(rr)) return(NULL)
     data.table(file_stem = s, length = range_vals(ml_s[[s]], "molecule_id", primary, rr))
   })) else NULL
-  lab <- meta[file_stem %in% fs, .(file_stem, label = droplevels(short_label))]
+  lab <- meta[file_stem %in% fs, .(file_stem, label = droplevels(plot_label), hlabel = droplevels(hist_label))]
   # a sample with nothing in the range gives one NA row (data.table recycles the sample name); drop it
   rd <- rd[is.finite(length)]; if (!is.null(md)) md <- md[is.finite(length)]
   list(rd = lab[rd, on = "file_stem"], md = if (!is.null(md) && nrow(md)) lab[md, on = "file_stem"] else NULL)
@@ -178,15 +177,18 @@ done <- apply_fn(seq_len(nrow(jobs)), function(i) {
   fd <- folder_data(meta[group_label == g, file_stem], rg)
   if (!nrow(fd$rd)) return(NULL)
   n <- uniqueN(fd$rd$file_stem); xl <- folder_xlim(fd$rd$length)
+  fit <- label_rows(levels(droplevels(fd$rd$label)), 1.8, 0.5, size = 8, hi = 45)
+  # the histograms are labelled in their panel strips, which hold the full name on a line
+  hl <- function(x) if (is.null(x)) NULL else x[, .(label = hlabel, length)]
   for (u in pu) {
     v <- unit_version(fd$rd, fd$md, u)
     if (is.null(v$rd) || !nrow(v$rd)) next
     ttl <- sprintf("%s: %s%s, %s", display_group(g), primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg, " (", range_row(fd$rd$file_stem[1], primary, rg)$range_text, ")"), unit_title[[u]])
     if (want_plot("group_density", params))
-      save_plot(ridge_dots_plot(v$rd, v$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max, main_unit = v$main, dots_unit = if (identical(params$plot_dots_unit, "reads")) "Reads" else "Molecules"),
-                plot_path(plots_dir, "group_density", g, primary, f, unit = u), 11, min(45, 1.8 + 0.5 * n))
+      save_plot(ridge_dots_plot(v$rd, v$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max, main_unit = v$main, dots_unit = if (identical(params$plot_dots_unit, "reads")) "Reads" else "Molecules", label_size = fit$size),
+                plot_path(plots_dir, "group_density", g, primary, f, unit = u), 11, fit$height)
     if (want_plot("group_histogram", params))
-      save_plot(hist_rows_plot(v$rd, v$md, ttl, paste(primary, "length (repeat units)"), xl, params$repeat_histogram_binwidth, main_unit = v$main),
+      save_plot(hist_rows_plot(hl(v$rd), hl(v$md), ttl, paste(primary, "length (repeat units)"), xl, params$repeat_histogram_binwidth, main_unit = v$main),
                 plot_path(plots_dir, "group_histogram", g, primary, f, unit = u), if (is.null(v$md)) 9 else 13, min(45, 1.4 + 0.7 * n))
   }
   TRUE
@@ -216,15 +218,15 @@ invisible(apply_fn(meta$file_stem, function(s) {
     for (u in pu) {
       v <- unit_version(fd$rd, fd$md, u)
       if (is.null(v$rd) || !nrow(v$rd)) next
-      # the short sample label: the full file name does not fit the width of these figures
-      ttl <- sprintf("%s: %s%s, %s", short_labels(meta$file_stem)[[s]], primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg), unit_title[[u]])
+      # the file name on its own line(s), above what the figure shows
+      ttl <- sprintf("%s\n%s%s, %s", wrap_stem(s, 90), primary, if (is.na(rg)) ", all lengths" else paste0(", ", rg), unit_title[[u]])
       if (want_plot("sample_density", params))
         save_plot(ridge_dots_plot(v$rd, v$md, ttl, paste(primary, "length (repeat units)"), xl, params$plot_dots_max, main_unit = v$main, dots_unit = if (identical(params$plot_dots_unit, "reads")) "Reads" else "Molecules"),
-                  plot_path(plots_dir, "sample_density", s, primary, f, unit = u), 10, 3)
+                  plot_path(plots_dir, "sample_density", s, primary, f, unit = u), 10, 3.3)
       d <- rbind(v$rd[, .(length, unit = v$main)], if (!is.null(v$md)) v$md[, .(length, unit = "Molecules")])
       if (want_plot("sample_histogram", params))
         save_plot(dist_rows(d, ttl, paste(primary, "length (repeat units)"), params$repeat_histogram_binwidth, xlim = xl),
-                  plot_path(plots_dir, "sample_histogram", s, primary, f, unit = u), 10, if (is.null(v$md)) 3.5 else 5.5)
+                  plot_path(plots_dir, "sample_histogram", s, primary, f, unit = u), 10, if (is.null(v$md)) 3.8 else 5.8)
     }
   }
   TRUE
@@ -358,7 +360,7 @@ timings["Sample cards"] <- proc.time()["elapsed"] - .t
 module7_output <- list(sample_order = meta, hash = params$module_hash)
 output_path <- file.path(params$dir_out, "module_data", "07_repeat_lengths.RData")
 save(module7_output, file = output_path, compression_level = 1)   # level 1: several times faster to write than the default, files slightly larger
-write_excel_function(list(sample_order = meta[, .(sample_index, short_label = as.character(short_label), file_stem, group, time)]), xlsx_path)
+write_excel_function(list(sample_order = meta[, .(file_stem, group, time)]), xlsx_path)
 ```
 
 ---

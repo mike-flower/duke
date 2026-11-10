@@ -374,12 +374,13 @@ print(p_trim); save_plot(p_trim, file.path(plots_dir, "adapter_trimming.png"), 6
 
 # Reads per sample
 
-One row per sample, labelled, ordered from fewest to most reads, on a log scale: the blue point is the reads left after this module's filters, and where a filter removed reads a grey ring marks the number imported, joined by a line. The dashed line is the median of all samples. Samples at the bottom are the ones most likely to give noisy repeat-length distributions; the table below gives the count after every step.
+One row per sample, labelled with its file name, ordered from fewest to most reads, on a log scale: the blue point is the reads left after this module's filters, and where a filter removed reads a grey ring marks the number imported, joined by a line. The dashed line is the median of all samples. Samples at the bottom are the ones most likely to give noisy repeat-length distributions; the table below gives the count after every step.
 
-```{r read_counts, fig.height=min(40, 2 + 0.14 * length(seq))}
+```{r read_counts, fig.height=label_rows(sample_labels(names(seq)), 2, 0.14, hi = 40)$height}
 stage_counts$final <- vapply(seq[stage_counts$file_stem], length, integer(1))
 rc <- as.data.table(stage_counts)[order(final)]
-rc[, label := factor(short_labels(file_stem)[file_stem], levels = unique(short_labels(file_stem)[file_stem]))]
+lab_rc <- sample_labels(rc$file_stem); fit_rc <- label_rows(lab_rc, 2, 0.14, hi = 40)
+rc[, label := factor(lab_rc[file_stem], levels = unique(lab_rc[file_stem]))]
 lost <- rc[imported > final]
 p_counts <- ggplot(rc, aes(y = label)) +
   geom_vline(xintercept = median(rc$final), linetype = "dashed", colour = "grey30") +
@@ -390,8 +391,8 @@ p_counts <- ggplot(rc, aes(y = label)) +
   labs(x = "Reads (log scale)", y = NULL, title = "Reads per sample after import and QC",
        subtitle = sprintf("%d samples; %s reads in total; dashed line = median, %s%s", nrow(rc), comma(sum(rc$final)), comma(median(rc$final)),
                           if (nrow(lost)) "; grey ring = reads imported, before the filters" else "")) +
-  theme_bw() + theme(axis.text.y = element_text(size = if (nrow(rc) > 80) 5 else 7), panel.grid.minor = element_blank())
-print(p_counts); save_plot(p_counts, file.path(plots_dir, "reads_per_sample.png"), 8, min(40, 2 + 0.14 * nrow(rc)))
+  theme_bw() + theme(axis.text.y = element_text(size = fit_rc$size, lineheight = 0.9), panel.grid.minor = element_blank())
+print(p_counts); save_plot(p_counts, file.path(plots_dir, "reads_per_sample.png"), 8, fit_rc$height)
 ```
 
 ```{r stage_table}

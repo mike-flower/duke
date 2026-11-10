@@ -541,7 +541,6 @@ for (pr in pairs) for (rg in sort(unique(pair_bins$analysis_range_name))) {
 # panel per sample. Reads and molecules cannot share one histogram, so "combined" gives both.
 map_units <- intersect(plot_units_for(params, have_mol, can_combine = FALSE), names(wide))
 want_run <- want_plot("pair_map", params); want_grp <- want_plot("pair_map_group", params)
-lab_m <- short_labels(meta$file_stem)
 for (pr in pairs) {
   A <- pr[1]; B <- pr[2]; ab <- paste0(A, "_vs_", B); shown <- FALSE
   for (u in if (want_run || want_grp) map_units else character(0)) {
@@ -575,8 +574,9 @@ for (pr in pairs) {
       dg <- d[group_label == g]
       ts <- dg[, .N, by = .(file_stem, time, a, b)][, share := N / sum(N), by = file_stem]
       ord <- unique(ts[order(time, file_stem), file_stem])
-      ts[, sample := factor(paste0(lab_m[file_stem], ifelse(is.na(time), "", paste0(" (t=", time, ")"))),
-                            levels = unique(paste0(lab_m[ord], ifelse(is.na(ts$time[match(ord, ts$file_stem)]), "", paste0(" (t=", ts$time[match(ord, ts$file_stem)], ")")))))]
+      # each panel is headed by the sample's file name (and time), wrapped to the panel's width
+      st_lab <- function(fs, tm) wrap_stem(paste0(fs, ifelse(is.na(tm), "", paste0(" (t=", tm, ")"))), 40)
+      ts[, sample := factor(st_lab(file_stem, time), levels = unique(st_lab(ord, ts$time[match(ord, ts$file_stem)])))]
       ns <- uniqueN(ts$sample); nc <- min(4, ns)
       p <- ggplot(ts, aes(a, b, fill = share)) + geom_tile() + scale_share + facet_wrap(~ sample, ncol = nc) +
         coord_cartesian(xlim = xl, ylim = yl) + scale_x_continuous(breaks = function(l) pretty(l, n = 10)) + scale_y_continuous(breaks = function(l) pretty(l, n = 10)) +
@@ -584,7 +584,8 @@ for (pr in pairs) {
              title = sprintf("%s: %s against %s, every %s", display_group(g), B, A, if (u == "reads") "read" else "molecule"),
              subtitle = sprintf("One panel per sample, in time order; colour = share of the sample's %s at each pair of lengths (log scale)", what)) +
         theme_bw() + theme(strip.text = element_text(size = 7), panel.grid.minor = element_blank())
-      save_plot(p, plot_path(plots_dir, "pair_map_group", g, ab, unit = u), max(9, 2.5 + 2.8 * nc), 2 + 2.6 * ceiling(ns / nc))
+      nl <- max(lengths(strsplit(levels(ts$sample), "\n", fixed = TRUE)))
+      save_plot(p, plot_path(plots_dir, "pair_map_group", g, ab, unit = u), max(9, 2.5 + 2.8 * nc), 2 + (2.6 + 0.13 * (nl - 1)) * ceiling(ns / nc))
     }
   }
 }
